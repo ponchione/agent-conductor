@@ -1,0 +1,21 @@
+
+log_level: info
+database: conductor.db
+scanner:
+  interval_seconds: 5
+  inbox_path: ./inbox
+workers:
+  count: 1
+repositories:
+  backend:
+    path: /tmp/conductor-test-repo
+    opencode_agent_executor: executor
+    opencode_agent_workorder: work-order
+safety:
+  max_depth: 5
+  max_files_changed: 50
+  max_workflow_duration_minutes: 60
+git:
+  branch_prefix: feature/test
+  commit_author_name: Bot
+  commit_author_email: bot@test.com

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/KickBrass/kickbrass-conductor/internal/config"
+	"github.com/ponchione/agent-conductor/internal/config"
 )
 
 type OpenCodeRunner struct {
@@ -106,7 +106,7 @@ func (r *OpenCodeRunner) Run(ctx context.Context, runCfg RunConfig) (*RunResult,
 			exitCode = -1 // Custom code for Timeout
 			slog.Error("Task timed out", "duration", duration)
 			// Append timeout note to stderr log
-			_, _ = stderrFile.WriteString("\n\n[ORCHESTRATOR] Task Timed Out\n")
+			_, _ = stderrFile.WriteString("\n\n[CONDUCTOR] Task Timed Out\n")
 		} else {
 			// Other errors (e.g. binary not found)
 			exitCode = 127
