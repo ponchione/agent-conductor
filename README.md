@@ -95,22 +95,6 @@ events       — Full audit log of all state transitions
 └── archive/                 # Completed workflows and artifacts
 ```
 
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/conductor.git
-cd conductor
-
-# Build
-go build -o bin/conductor ./cmd/conductor
-
-# Initialize workspace
-./bin/conductor init --path ~/agent-workspace
-
-# Copy and edit configuration
-cp config.example.yaml ~/agent-workspace/config.yaml
-```
 
 ## Configuration
 
