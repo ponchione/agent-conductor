@@ -1,4 +1,4 @@
-# Agent Orchestration System
+# Agent Orchestration System (WORK IN PROGRESS)
 
 A Go-based orchestration layer for coordinating AI coding agents across multiple repositories with built-in safety controls, human oversight gates, and automatic workflow management.
 
@@ -8,7 +8,7 @@ Modern AI coding agents (Claude, GPT, etc.) can implement features, fix bugs, an
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         ORCHESTRATOR                            │
+│                         CONDUCTOR                               │
 │                                                                 │
 │   ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐  │
 │   │ Scanner │────▶│  Queue  │────▶│ Worker  │────▶│   Git   │  │
@@ -82,8 +82,8 @@ events       — Full audit log of all state transitions
 
 ```
 ~/agent-workspace/
-├── orchestrator.db          # SQLite database
-├── config.yaml              # Orchestrator configuration
+├── conductor.db          # SQLite database
+├── config.yaml              # conductor configuration
 ├── inbox/                   # Centralized work intake
 │   ├── frontend/
 │   │   ├── orders/          # Work orders for frontend
@@ -99,14 +99,14 @@ events       — Full audit log of all state transitions
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/orchestrator.git
-cd orchestrator
+git clone https://github.com/yourusername/conductor.git
+cd conductor
 
 # Build
-go build -o bin/orchestrator ./cmd/orchestrator
+go build -o bin/conductor ./cmd/conductor
 
 # Initialize workspace
-./bin/orchestrator init --path ~/agent-workspace
+./bin/conductor init --path ~/agent-workspace
 
 # Copy and edit configuration
 cp config.example.yaml ~/agent-workspace/config.yaml
@@ -147,14 +147,14 @@ gates:
 
 ## Usage
 
-### Start the Orchestrator
+### Start the conductor
 
 ```bash
 # Start in foreground
-orchestrator start
+conductor start
 
 # Or run as daemon
-orchestrator start --daemon
+conductor start --daemon
 ```
 
 ### Create a Work Order
@@ -165,7 +165,7 @@ Drop a work order into the inbox:
 cp my-work-order.md ~/agent-workspace/inbox/backend/orders/
 ```
 
-The orchestrator will automatically:
+The conductor will automatically:
 1. Detect the new file
 2. Create a workflow with isolated git branch
 3. Dispatch to an available worker
@@ -175,13 +175,13 @@ The orchestrator will automatically:
 
 ```bash
 # List active workflows
-orchestrator workflows list
+conductor workflows list
 
 # Show workflow details
-orchestrator workflows show wf-abc123
+conductor workflows show wf-abc123
 
 # View logs
-orchestrator logs --workflow wf-abc123 --follow
+conductor logs --workflow wf-abc123 --follow
 ```
 
 ### Handle Gates
@@ -190,26 +190,26 @@ When a workflow pauses for human review:
 
 ```bash
 # View what's waiting
-orchestrator status
+conductor status
 
 # Approve and continue
-orchestrator approve wf-abc123
+conductor approve wf-abc123
 
 # Reject and cancel
-orchestrator reject wf-abc123 --message "Scope too broad"
+conductor reject wf-abc123 --message "Scope too broad"
 ```
 
 ### Manual Operations
 
 ```bash
 # Pause a running workflow
-orchestrator workflows pause wf-abc123
+conductor workflows pause wf-abc123
 
 # Resume a paused workflow
-orchestrator workflows resume wf-abc123
+conductor workflows resume wf-abc123
 
 # Trigger a single agent run (for testing)
-orchestrator run --repo backend --agent executor --file /path/to/workorder.md
+conductor run --repo backend --agent executor --file /path/to/workorder.md
 ```
 
 ## Agent Protocol
@@ -317,8 +317,8 @@ go test ./...
 ### Project Structure
 
 ```
-orchestrator/
-├── cmd/orchestrator/     # CLI entry point
+conductor/
+├── cmd/conductor/     # CLI entry point
 ├── internal/
 │   ├── config/           # Configuration loading
 │   ├── database/         # SQLite operations
