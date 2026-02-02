@@ -25,7 +25,7 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, opts)))
 
 	// 1. Setup Environment
-	repoPath := "/tmp/orchestrator-refactor-test"
+	repoPath := "/tmp/conductor-refactor-test"
 	setupTestRepo(repoPath)
 
 	configFile := "config.yaml"
@@ -33,7 +33,7 @@ func main() {
 	cfg, _ := config.Load(configFile)
 
 	// 2. Initialize DB (New sqlc version)
-	os.Remove("orchestrator.db")
+	os.Remove("conductor.db")
 	db, err := database.NewDB(cfg.Database) // Renamed constructor
 	if err != nil {
 		panic(err)
@@ -46,11 +46,18 @@ func main() {
 	q := queue.New(cfg, db)
 
 	// 4. Run Verification
-	verifyRefactor(scan, q, db, cfg, repoPath)
+	verifyRefactor(scan, q, db, cfg, repoPath, gitMgr)
 }
 
-func verifyRefactor(s *scanner.Scanner, q *queue.Queue, db *database.DB, cfg *config.Config, repoPath string) {
-	slog.Info("--- Starting SQLC Refactor Verification ---")
+func verifyRefactor(
+	s *scanner.Scanner,
+	q *queue.Queue,
+	db *database.DB,
+	cfg *config.Config,
+	repoPath string,
+	gitMgr *git.GitManager,
+) {
+	slog.Info("--- Starting Refactor Verification (SQLC + Go-Git) ---")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -68,47 +75,40 @@ func verifyRefactor(s *scanner.Scanner, q *queue.Queue, db *database.DB, cfg *co
 	// 3. Wait for processing
 	time.Sleep(2 * time.Second)
 
-	// 4. Check DB for Workflow (using sqlc generated methods)
-	// We don't have a "ListWorkflows" query yet, so we query the queue for the task
-	// and trace it back.
-
+	// 4. Claim Task
 	slog.Info("Attempting to claim task...")
 	task, err := q.ClaimNextTask("worker-test")
 	if err != nil {
 		slog.Error("Claim failed", "error", err)
 		return
 	}
+	slog.Info("Task Claimed", "id", task.ID)
 
-	slog.Info("Task Claimed via SQLC",
-		"task_id", task.ID,
-		"workflow_id", task.WorkflowID,
-		"state", task.State,
-	)
-
-	// 5. Verify Workflow Details
-	wf, err := db.GetWorkflow(ctx, task.WorkflowID)
+	// 5. Verify Git Branch (using go-git to verify itself!)
+	currentBranch, err := gitMgr.GetCurrentBranch(repoPath)
 	if err != nil {
-		slog.Error("Failed to fetch workflow", "error", err)
+		slog.Error("Failed to get branch", "error", err)
 		return
 	}
+	slog.Info("Git Branch Checked", "branch", currentBranch)
 
-	slog.Info("Workflow Verified",
-		"id", wf.ID,
-		"branch", wf.GitBranch,
-		"original_file", wf.OriginalFile,
-	)
+	// 6. Test Git Commit (using go-git)
+	slog.Info("Testing Go-Git Commit...")
+	newFile := filepath.Join(repoPath, "go-git-test.txt")
+	os.WriteFile(newFile, []byte("Created by go-git"), 0644)
 
-	// 6. Verify Events
-	// ListEvents returns []Event, error
-	events, err := db.ListEvents(ctx, sqlNullString(wf.ID))
+	changed, err := gitMgr.GetChangedFiles(repoPath)
 	if err != nil {
-		slog.Error("Failed to list events", "error", err)
-	} else {
-		slog.Info("Events Found", "count", len(events))
-		for _, e := range events {
-			slog.Info("Event", "type", e.EventType)
-		}
+		slog.Error("Failed to get changed files", "error", err)
+		return
 	}
+	slog.Info("Changed Files Detected", "files", changed)
+
+	if err := gitMgr.Commit(repoPath, "Commit via go-git"); err != nil {
+		slog.Error("Commit failed", "error", err)
+		return
+	}
+	slog.Info("Commit Successful")
 
 	slog.Info("--- Verification Complete ---")
 }
@@ -144,7 +144,7 @@ func execCmd(dir, name string, args ...string) {
 func createConfig(path, repoPath string) {
 	content := fmt.Sprintf(`
 log_level: info
-database: orchestrator.db
+database: conductor.db
 scanner:
   interval_seconds: 5
   inbox_path: ./inbox

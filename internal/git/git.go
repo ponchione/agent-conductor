@@ -1,117 +1,204 @@
 package git
 
 import (
-	"bytes"
 	"fmt"
-	"os/exec"
-	"strings"
+	"time"
 
-	"github.com/ponchione/agent-conductor/internal/config"
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	gitconfig "github.com/ponchione/agent-conductor/internal/config"
 )
 
 type GitManager struct {
-	cfg *config.Config
+	cfg *gitconfig.Config
 }
 
-func New(cfg *config.Config) *GitManager {
+func New(cfg *gitconfig.Config) *GitManager {
 	return &GitManager{cfg: cfg}
 }
 
-// runGit executes a git command in the given directory
-func (g *GitManager) runGit(repoPath string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = repoPath
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		return "", fmt.Errorf("git %s failed: %w\nstderr: %s", args[0], err, stderr.String())
-	}
-
-	return strings.TrimSpace(stdout.String()), nil
-}
-
-// CreateBranch fetches latest base and creates a new branch
+// CreateBranch fetches the latest base and creates a new branch
 func (g *GitManager) CreateBranch(repoPath, branchName, baseBranch string) error {
-	_, _ = g.runGit(repoPath, "fetch", "origin", baseBranch)
-
-	startPoint := "origin/" + baseBranch
-	if _, err := g.runGit(repoPath, "rev-parse", "--verify", startPoint); err != nil {
-		startPoint = baseBranch
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to open repo: %w", err)
 	}
 
-	_, err := g.runGit(repoPath, "checkout", "-b", branchName, startPoint)
-	return err
-}
+	// Fetch latest to ensure we have the base
+	err = r.Fetch(&git.FetchOptions{
+		RemoteName: "origin",
+	})
+	if err != nil && err != git.NoErrAlreadyUpToDate && err != git.ErrRemoteNotFound {
 
-func (g *GitManager) Checkout(repoPath, branchName string) error {
-	_, err := g.runGit(repoPath, "checkout", branchName)
-	return err
-}
+	}
 
-func (g *GitManager) Commit(repoPath, message string) error {
+	// Resolve the Hash of the base branch
+	var hash *plumbing.Hash
 
-	//if g.cfg.Git.CommitAuthorName != "" {
-	//	g.runGit(repoPath, "config", "user.name", g.cfg.Git.CommitAuthorName)
-	//	g.runGit(repoPath, "config", "user.email", g.cfg.Git.CommitAuthorEmail)
-	//}
+	// Try remote reference
+	refName := plumbing.NewRemoteReferenceName("origin", baseBranch)
+	ref, err := r.Reference(refName, true)
+	if err == nil {
+		h := ref.Hash()
+		hash = &h
+	} else {
+		// Fallback to local head
+		refName = plumbing.NewBranchReferenceName(baseBranch)
+		ref, err = r.Reference(refName, true)
+		if err != nil {
+			return fmt.Errorf("base branch %s not found: %w", baseBranch, err)
+		}
+		h := ref.Hash()
+		hash = &h
+	}
 
-	_, err := g.runGit(repoPath, "add", ".")
+	// Create the new branch reference
+	w, err := r.Worktree()
 	if err != nil {
 		return err
 	}
 
-	_, err = g.runGit(repoPath, "commit", "-m", message)
+	newBranchRef := plumbing.NewBranchReferenceName(branchName)
+	// Check if exists
+	if _, err := r.Reference(newBranchRef, true); err == nil {
+		// Already exists - just checkout? Or error?
+	} else {
+		// Create it pointing to the hash
+		newRef := plumbing.NewHashReference(newBranchRef, *hash)
+		if err := r.Storer.SetReference(newRef); err != nil {
+			return fmt.Errorf("failed to create branch ref: %w", err)
+		}
+	}
+
+	//  Checkout
+	return w.Checkout(&git.CheckoutOptions{
+		Branch: newBranchRef,
+		Create: false,
+		Force:  false,
+	})
+}
+
+func (g *GitManager) Checkout(repoPath, branchName string) error {
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return err
+	}
+
+	w, err := r.Worktree()
+	if err != nil {
+		return err
+	}
+
+	return w.Checkout(&git.CheckoutOptions{
+		Branch: plumbing.NewBranchReferenceName(branchName),
+	})
+}
+
+func (g *GitManager) Commit(repoPath, message string) error {
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return err
+	}
+
+	w, err := r.Worktree()
+	if err != nil {
+		return err
+	}
+
+	if _, err := w.Add("."); err != nil {
+		return err
+	}
+
+	// Author info
+	author := &object.Signature{
+		Name:  g.cfg.Git.CommitAuthorName,
+		Email: g.cfg.Git.CommitAuthorEmail,
+		When:  time.Now(),
+	}
+
+	_, err = w.Commit(message, &git.CommitOptions{
+		Author: author,
+	})
 	return err
 }
 
 func (g *GitManager) GetChangedFiles(repoPath string) ([]string, error) {
-	output, err := g.runGit(repoPath, "diff", "--name-only")
+	r, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return nil, err
 	}
 
-	staged, err := g.runGit(repoPath, "diff", "--name-only", "--cached")
+	w, err := r.Worktree()
 	if err != nil {
 		return nil, err
 	}
 
-	files := make(map[string]struct{})
-	if output != "" {
-		for _, f := range strings.Split(output, "\n") {
-			files[f] = struct{}{}
-		}
+	status, err := w.Status()
+	if err != nil {
+		return nil, err
 	}
-	if staged != "" {
-		for _, f := range strings.Split(staged, "\n") {
-			files[f] = struct{}{}
+
+	var changed []string
+	for file, fileStatus := range status {
+		if fileStatus.Worktree != git.Unmodified || fileStatus.Staging != git.Unmodified {
+			changed = append(changed, file)
 		}
 	}
 
-	result := make([]string, 0, len(files))
-	for f := range files {
-		result = append(result, f)
-	}
-	return result, nil
+	return changed, nil
 }
 
 func (g *GitManager) HasUncommittedChanges(repoPath string) (bool, error) {
-	output, err := g.runGit(repoPath, "status", "--porcelain")
+	r, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return false, err
 	}
-	return output != "", nil
+	w, err := r.Worktree()
+	if err != nil {
+		return false, err
+	}
+	status, err := w.Status()
+	if err != nil {
+		return false, err
+	}
+	return !status.IsClean(), nil
 }
 
 func (g *GitManager) Push(repoPath, branchName string) error {
-	_, err := g.runGit(repoPath, "push", "-u", "origin", branchName)
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return err
+	}
+
+	err = r.Push(&git.PushOptions{
+		RemoteName: "origin",
+		RefSpecs: []config.RefSpec{
+			config.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", branchName, branchName)),
+		},
+	})
+
+	if err == git.NoErrAlreadyUpToDate {
+		return nil
+	}
 	return err
 }
 
 // GetCurrentBranch returns the name of the currently checked out branch
 func (g *GitManager) GetCurrentBranch(repoPath string) (string, error) {
-	return g.runGit(repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return "", err
+	}
+
+	head, err := r.Head()
+	if err != nil {
+		return "", err
+	}
+
+	if head.Name().IsBranch() {
+		return head.Name().Short(), nil
+	}
+	return "", fmt.Errorf("detached head")
 }

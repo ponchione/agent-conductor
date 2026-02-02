@@ -1,6 +1,6 @@
 
 log_level: info
-database: orchestrator.db
+database: conductor.db
 scanner:
   interval_seconds: 5
   inbox_path: ./inbox
@@ -8,7 +8,7 @@ workers:
   count: 1
 repositories:
   backend:
-    path: /tmp/orchestrator-refactor-test
+    path: /tmp/conductor-refactor-test
     opencode_agent_executor: executor
     opencode_agent_workorder: work-order
 safety:
