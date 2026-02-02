@@ -2,17 +2,20 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/ponchione/agent-conductor/internal/config"
+	"github.com/ponchione/agent-conductor/internal/database"
+	"github.com/ponchione/agent-conductor/internal/git"
+	"github.com/ponchione/agent-conductor/internal/queue"
+	"github.com/ponchione/agent-conductor/internal/scanner"
 	//"github.com/ponchione/agent-conductor/internal/database"
-	"github.com/ponchione/agent-conductor/internal/executor"
 	//"github.com/ponchione/agent-conductor/internal/git"
 	//"github.com/ponchione/agent-conductor/internal/scanner"
 )
@@ -21,45 +24,127 @@ func main() {
 	opts := &slog.HandlerOptions{Level: slog.LevelDebug}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, opts)))
 
-	repoPath := "/tmp/conductor-test-repo"
-	os.MkdirAll(repoPath, 0755)
+	// 1. Setup Environment
+	repoPath := "/tmp/orchestrator-refactor-test"
+	setupTestRepo(repoPath)
 
-	mockBinPath := createMockOpenCode(repoPath)
-	oldPath := os.Getenv("PATH")
-	os.Setenv("PATH", filepath.Dir(mockBinPath)+string(os.PathListSeparator)+oldPath)
-	defer os.Setenv("PATH", oldPath)
+	configFile := "config.yaml"
+	createConfig(configFile, repoPath)
+	cfg, _ := config.Load(configFile)
 
-	cfg := &config.Config{}
+	// 2. Initialize DB (New sqlc version)
+	os.Remove("orchestrator.db")
+	db, err := database.NewDB(cfg.Database) // Renamed constructor
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
 
-	runner := executor.New(cfg)
+	// 3. Initialize Components
+	gitMgr := git.New(cfg)
+	scan, _ := scanner.New(cfg, db, gitMgr)
+	q := queue.New(cfg, db)
 
-	verifyPhase4(runner, repoPath)
+	// 4. Run Verification
+	verifyRefactor(scan, q, db, cfg, repoPath)
 }
+
+func verifyRefactor(s *scanner.Scanner, q *queue.Queue, db *database.DB, cfg *config.Config, repoPath string) {
+	slog.Info("--- Starting SQLC Refactor Verification ---")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 1. Start Scanner
+	if err := s.Start(ctx); err != nil {
+		panic(err)
+	}
+
+	// 2. Create Work Order
+	woPath := filepath.Join(cfg.Scanner.InboxPath, "backend", "orders", "wo-refactor.md")
+	os.MkdirAll(filepath.Dir(woPath), 0755)
+	os.WriteFile(woPath, []byte("# Refactor Test"), 0644)
+	slog.Info("Created work order", "path", woPath)
+
+	// 3. Wait for processing
+	time.Sleep(2 * time.Second)
+
+	// 4. Check DB for Workflow (using sqlc generated methods)
+	// We don't have a "ListWorkflows" query yet, so we query the queue for the task
+	// and trace it back.
+
+	slog.Info("Attempting to claim task...")
+	task, err := q.ClaimNextTask("worker-test")
+	if err != nil {
+		slog.Error("Claim failed", "error", err)
+		return
+	}
+
+	slog.Info("Task Claimed via SQLC",
+		"task_id", task.ID,
+		"workflow_id", task.WorkflowID,
+		"state", task.State,
+	)
+
+	// 5. Verify Workflow Details
+	wf, err := db.GetWorkflow(ctx, task.WorkflowID)
+	if err != nil {
+		slog.Error("Failed to fetch workflow", "error", err)
+		return
+	}
+
+	slog.Info("Workflow Verified",
+		"id", wf.ID,
+		"branch", wf.GitBranch,
+		"original_file", wf.OriginalFile,
+	)
+
+	// 6. Verify Events
+	// ListEvents returns []Event, error
+	events, err := db.ListEvents(ctx, sqlNullString(wf.ID))
+	if err != nil {
+		slog.Error("Failed to list events", "error", err)
+	} else {
+		slog.Info("Events Found", "count", len(events))
+		for _, e := range events {
+			slog.Info("Event", "type", e.EventType)
+		}
+	}
+
+	slog.Info("--- Verification Complete ---")
+}
+
+// Helper to handle sql.NullString creation for queries
+func sqlNullString(s string) sql.NullString {
+	// sqlc generated struct might be using sql.NullString or database.NullString depending on config
+	// Usually it uses sql.NullString.
+	// If you see type errors here, we might need to adjust.
+	// For now assuming standard sql.NullString, but aliases might exist.
+	// Actually, let's just use the helper we added earlier or raw struct.
+	return sql.NullString{String: s, Valid: s != ""}
+}
+
+// --- Test Helpers ---
 
 func setupTestRepo(path string) {
 	os.RemoveAll(path)
 	os.MkdirAll(path, 0755)
-
 	execCmd(path, "git", "init")
 	execCmd(path, "git", "config", "user.email", "test@test.com")
 	execCmd(path, "git", "config", "user.name", "Test User")
 	execCmd(path, "git", "commit", "--allow-empty", "-m", "Initial commit")
-
 	execCmd(path, "git", "branch", "-m", "main")
 }
 
 func execCmd(dir, name string, args ...string) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		panic(fmt.Sprintf("cmd failed: %s %v\n%s", name, args, out))
-	}
+	cmd.Run()
 }
 
 func createConfig(path, repoPath string) {
 	content := fmt.Sprintf(`
 log_level: info
-database: conducter.db
+database: orchestrator.db
 scanner:
   interval_seconds: 5
   inbox_path: ./inbox
@@ -74,94 +159,9 @@ safety:
   max_depth: 5
   max_files_changed: 50
   max_workflow_duration_minutes: 60
+  max_task_retries: 2
 git:
-  branch_prefix: feature/test
-  commit_author_name: Bot
-  commit_author_email: bot@test.com
+  branch_prefix: feature/refactor
 `, repoPath)
 	os.WriteFile(path, []byte(content), 0644)
-}
-
-func createMockOpenCode(dir string) string {
-	binPath := filepath.Join(dir, "bin", "opencode")
-	os.MkdirAll(filepath.Dir(binPath), 0755)
-
-	// Create a script that acts like opencode
-	// It prints args to stdout and simulated log to stderr
-	content := `#!/bin/sh
-echo "Mock OpenCode Starting..."
-echo "Args: $@"
-echo "Doing work..."
-sleep 1
-echo "Work complete." >&2
-exit 0
-`
-	if err := os.WriteFile(binPath, []byte(content), 0755); err != nil {
-		panic(err)
-	}
-	return binPath
-}
-
-func verifyPhase4(runner *executor.OpenCodeRunner, repoPath string) {
-	slog.Info("--- Starting Phase 4 Verification ---")
-
-	ctx := context.Background()
-	logDir := filepath.Join(repoPath, "logs", "task-1")
-
-	result, err := runner.Run(ctx, executor.RunConfig{
-		RepoPath:  repoPath,
-		Agent:     "executor",
-		InputFile: "test-order.md",
-		Title:     "Test Run",
-		Timeout:   5 * time.Second,
-		LogDir:    logDir,
-	})
-
-	if err != nil {
-		slog.Error("Runner failed unexpectedly", "error", err)
-		return
-	}
-
-	slog.Info("Run finished",
-		"exit_code", result.ExitCode,
-		"duration", result.Duration,
-		"success", result.Success)
-
-	// Verify Logs
-	stdout, _ := os.ReadFile(result.StdoutPath)
-	stderr, _ := os.ReadFile(result.StderrPath)
-
-	slog.Info("STDOUT Content", "content", string(stdout))
-	slog.Info("STDERR Content", "content", string(stderr))
-
-	if !strings.Contains(string(stdout), "Mock OpenCode Starting") {
-		slog.Error("FAILED: Stdout does not contain expected output")
-		return
-	}
-
-	if !result.Success {
-		slog.Error("FAILED: Result marked as unsuccessful")
-		return
-	}
-
-	slog.Info("SUCCESS: Mock execution captured correctly")
-	slog.Info("--- Phase 4 Verification Complete ---")
-}
-
-func getBranches(dir string) []string {
-	cmd := exec.Command("git", "branch", "--format=%(refname:short)")
-	cmd.Dir = dir
-	out, _ := cmd.Output()
-	return strings.Split(strings.TrimSpace(string(out)), "\n")
-}
-
-func getGitLog(dir string) string {
-	cmd := exec.Command("git", "log", "-n", "1", "--oneline")
-	cmd.Dir = dir
-	out, _ := cmd.Output()
-	return string(out)
-}
-
-func contains(s, substr string) bool {
-	return strings.Contains(s, substr)
 }

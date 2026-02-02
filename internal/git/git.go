@@ -36,12 +36,8 @@ func (g *GitManager) runGit(repoPath string, args ...string) (string, error) {
 
 // CreateBranch fetches latest base and creates a new branch
 func (g *GitManager) CreateBranch(repoPath, branchName, baseBranch string) error {
-	// 1. Fetch latest to ensure we have the base
-	// We ignore errors here in case we are offline or in a local-only repo for testing
 	_, _ = g.runGit(repoPath, "fetch", "origin", baseBranch)
 
-	// 2. Create and checkout
-	// Try creating from origin/base first, fallback to local base
 	startPoint := "origin/" + baseBranch
 	if _, err := g.runGit(repoPath, "rev-parse", "--verify", startPoint); err != nil {
 		startPoint = baseBranch
@@ -57,11 +53,11 @@ func (g *GitManager) Checkout(repoPath, branchName string) error {
 }
 
 func (g *GitManager) Commit(repoPath, message string) error {
-	// Configure user for this commit if not set globally
-	if g.cfg.Git.CommitAuthorName != "" {
-		g.runGit(repoPath, "config", "user.name", g.cfg.Git.CommitAuthorName)
-		g.runGit(repoPath, "config", "user.email", g.cfg.Git.CommitAuthorEmail)
-	}
+
+	//if g.cfg.Git.CommitAuthorName != "" {
+	//	g.runGit(repoPath, "config", "user.name", g.cfg.Git.CommitAuthorName)
+	//	g.runGit(repoPath, "config", "user.email", g.cfg.Git.CommitAuthorEmail)
+	//}
 
 	_, err := g.runGit(repoPath, "add", ".")
 	if err != nil {
@@ -73,18 +69,11 @@ func (g *GitManager) Commit(repoPath, message string) error {
 }
 
 func (g *GitManager) GetChangedFiles(repoPath string) ([]string, error) {
-	// Get files changed in the working directory relative to HEAD
-	// We check both staged and unstaged changes?
-	// Usually agents modify files. We want to see what's different from the previous commit.
-	// If we just ran the agent, the changes are unstaged/uncommitted.
-
-	// diff --name-only returns unstaged changes
 	output, err := g.runGit(repoPath, "diff", "--name-only")
 	if err != nil {
 		return nil, err
 	}
 
-	// Also check staged changes just in case
 	staged, err := g.runGit(repoPath, "diff", "--name-only", "--cached")
 	if err != nil {
 		return nil, err
@@ -110,7 +99,6 @@ func (g *GitManager) GetChangedFiles(repoPath string) ([]string, error) {
 }
 
 func (g *GitManager) HasUncommittedChanges(repoPath string) (bool, error) {
-	// check for changes
 	output, err := g.runGit(repoPath, "status", "--porcelain")
 	if err != nil {
 		return false, err

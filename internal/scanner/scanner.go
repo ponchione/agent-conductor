@@ -134,52 +134,51 @@ func (s *Scanner) processFile(path string) error {
 func (s *Scanner) handleWorkOrder(repo, path string) error {
 	slog.Info("Processing new work order", "repo", repo, "file", filepath.Base(path))
 
-	//Create Workflow
-	branchName := fmt.Sprintf("%s-%s", s.cfg.Git.BranchPrefix, uuid.New().String()[:8])
-	wf := &database.Workflow{
-		ID:              uuid.New().String(),
-		OriginalIntent:  "Work Order: " + filepath.Base(path),
-		OriginalFile:    path,
-		CurrentState:    "pending",
-		TargetRepo:      repo,
-		GitBranch:       branchName,
-		MaxDepth:        s.cfg.Safety.MaxDepth,
-		MaxFilesChanged: s.cfg.Safety.MaxFilesChanged,
-		MaxDurationMins: s.cfg.Safety.MaxWorkflowDurationMinutes,
-	}
+	// Create IDs ahead of time
+	wfID := uuid.New().String()
+	taskID := uuid.New().String()
+	branchName := fmt.Sprintf("%s-%s", s.cfg.Git.BranchPrefix, wfID[:8])
 
-	// Git Operation: Create Branch
 	repoConfig, ok := s.cfg.Repos[repo]
 	if ok {
 		slog.Info("Creating git branch", "repo", repo, "branch", branchName)
 		if err := s.git.CreateBranch(repoConfig.Path, branchName, "main"); err != nil {
 			slog.Error("Failed to create git branch", "error", err)
-
 			return fmt.Errorf("git create branch failed: %w", err)
 		}
 	}
 
-	if err := s.db.CreateWorkflow(wf); err != nil {
+	err := s.db.CreateWorkflow(context.Background(), database.CreateWorkflowParams{
+		ID:              wfID,
+		OriginalIntent:  "Work Order: " + filepath.Base(path),
+		OriginalFile:    path,
+		CurrentState:    "pending",
+		TargetRepo:      repo,
+		GitBranch:       branchName,
+		MaxDepth:        int64(s.cfg.Safety.MaxDepth),
+		MaxFilesChanged: int64(s.cfg.Safety.MaxFilesChanged),
+		MaxDurationMins: int64(s.cfg.Safety.MaxWorkflowDurationMinutes),
+	})
+	if err != nil {
 		return fmt.Errorf("create workflow: %w", err)
 	}
 
-	task := &database.Task{
-		ID:            uuid.New().String(),
-		WorkflowID:    wf.ID,
+	err = s.db.CreateTask(context.Background(), database.CreateTaskParams{
+		ID:            taskID,
+		WorkflowID:    wfID,
 		SequenceNum:   1,
 		TaskType:      "execution",
 		AgentType:     s.cfg.Repos[repo].OpenCodeAgentExecutor,
 		TargetRepo:    repo,
 		InputArtifact: path,
 		State:         "pending",
-		MaxAttempts:   s.cfg.Safety.MaxTaskRetries,
-	}
-
-	if err := s.db.CreateTask(task); err != nil {
+		MaxAttempts:   int64(s.cfg.Safety.MaxTaskRetries),
+	})
+	if err != nil {
 		return fmt.Errorf("create task: %w", err)
 	}
 
-	s.db.LogEvent(wf.ID, task.ID, "workflow_created", map[string]any{"file": path, "branch": branchName})
+	s.db.LogEvent(wfID, taskID, "workflow_created", map[string]any{"file": path, "branch": branchName})
 	return nil
 }
 
@@ -193,33 +192,37 @@ func (s *Scanner) handleTicket(repo, path string) error {
 		workflowID = parts[1]
 	}
 
-	var wf *database.Workflow
+	var wf database.Workflow
 	var err error
+
 	if workflowID != "" {
-		wf, err = s.db.GetWorkflow(workflowID)
+		wf, err = s.db.GetWorkflow(context.Background(), workflowID)
 	}
 
+	// If workflow not found or error, create new one via handleWorkOrder
 	if workflowID == "" || err != nil {
 		slog.Info("Could not link ticket to workflow, creating new one", "ticket", fileName)
 		return s.handleWorkOrder(repo, path)
 	}
 
-	task := &database.Task{
-		ID:            uuid.New().String(),
+	// Link to existing workflow
+	taskID := uuid.New().String()
+
+	err = s.db.CreateTask(context.Background(), database.CreateTaskParams{
+		ID:            taskID,
 		WorkflowID:    wf.ID,
-		SequenceNum:   wf.CurrentDepth + 1,
+		SequenceNum:   int64(wf.CurrentDepth + 1),
 		TaskType:      "work_order_generation",
 		AgentType:     s.cfg.Repos[repo].OpenCodeAgentWorkOrder,
 		TargetRepo:    repo,
 		InputArtifact: path,
 		State:         "pending",
-		MaxAttempts:   s.cfg.Safety.MaxTaskRetries,
-	}
-
-	if err := s.db.CreateTask(task); err != nil {
+		MaxAttempts:   int64(s.cfg.Safety.MaxTaskRetries),
+	})
+	if err != nil {
 		return err
 	}
 
-	s.db.LogEvent(wf.ID, task.ID, "task_created_from_ticket", map[string]any{"file": path})
+	s.db.LogEvent(wf.ID, taskID, "task_created_from_ticket", map[string]any{"file": path})
 	return nil
 }

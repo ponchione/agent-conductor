@@ -1,6 +1,9 @@
 package queue
 
 import (
+	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +22,13 @@ type Queue struct {
 	cfg *config.Config
 }
 
+type TaskResult struct {
+	ExitCode     int
+	StdoutLog    string
+	StderrLog    string
+	FilesChanged []string
+}
+
 func New(cfg *config.Config, db *database.DB) *Queue {
 	return &Queue{
 		db:  db,
@@ -28,8 +38,10 @@ func New(cfg *config.Config, db *database.DB) *Queue {
 
 // ClaimNextTask attempts to claim a task for a worker.
 func (q *Queue) ClaimNextTask(workerID string) (*database.Task, error) {
-	//Claim from DB
-	task, err := q.db.ClaimTask(workerID)
+	ctx := context.Background()
+
+	// Use the atomic helper we added to database.go
+	task, err := q.db.AtomicClaimTask(ctx, workerID)
 	if err != nil {
 		return nil, err
 	}
@@ -37,23 +49,19 @@ func (q *Queue) ClaimNextTask(workerID string) (*database.Task, error) {
 		return nil, ErrNoTasks
 	}
 
-	//Load Workflow
-	wf, err := q.db.GetWorkflow(task.WorkflowID)
+	wf, err := q.db.GetWorkflow(ctx, task.WorkflowID)
 	if err != nil {
-		// Should not happen, but if so, fail task
 		q.FailTask(task.ID, fmt.Errorf("workflow missing: %w", err))
 		return nil, err
 	}
 
-	//Check Workflow State
-	if wf.CurrentState == "paused" || wf.CurrentState == "review_needed" || wf.CurrentState == "completed" || wf.CurrentState == "failed" {
+	if wf.CurrentState == "paused" || wf.CurrentState == "review_needed" ||
+		wf.CurrentState == "completed" || wf.CurrentState == "failed" {
 		q.ReleaseTask(task.ID)
 		return nil, ErrWorkflowPaused
 	}
 
-	//Check Safety Limits (Budget)
-	if q.checkBudgetExceeded(wf) {
-		// Trigger Gate
+	if q.checkBudgetExceeded(&wf) {
 		q.triggerGate(wf.ID, "budget_exceeded", "Workflow limits exceeded")
 		q.ReleaseTask(task.ID)
 		return nil, ErrWorkflowPaused
@@ -62,48 +70,60 @@ func (q *Queue) ClaimNextTask(workerID string) (*database.Task, error) {
 	return task, nil
 }
 
+func (q *Queue) ReleaseTask(taskID string) error {
+	return q.db.ReleaseTask(context.Background(), taskID)
+}
+
+func (q *Queue) CompleteTask(taskID string, result *TaskResult) error {
+	filesJson, _ := json.Marshal(result.FilesChanged)
+
+	params := database.CompleteTaskParams{
+		ID:           taskID,
+		ExitCode:     sql.NullInt64{Int64: int64(result.ExitCode), Valid: true},
+		StdoutLog:    sql.NullString{String: result.StdoutLog, Valid: result.StdoutLog != ""},
+		StderrLog:    sql.NullString{String: result.StderrLog, Valid: result.StderrLog != ""},
+		FilesChanged: sql.NullString{String: string(filesJson), Valid: true},
+	}
+	return q.db.CompleteTask(context.Background(), params)
+}
+
+func (q *Queue) FailTask(taskID string, err error) error {
+	params := database.FailTaskParams{
+		ID:           taskID,
+		ErrorMessage: sql.NullString{String: err.Error(), Valid: true},
+	}
+	return q.db.FailTask(context.Background(), params)
+}
+
+func (q *Queue) RetryTask(taskID string) error {
+	return q.db.RetryTask(context.Background(), taskID)
+}
+
+func (q *Queue) ShouldRetry(task *database.Task) bool {
+	return task.Attempts < task.MaxAttempts
+}
+
 func (q *Queue) checkBudgetExceeded(wf *database.Workflow) bool {
-	// Depth limit
 	if wf.CurrentDepth >= wf.MaxDepth {
-		slog.Warn("Workflow depth exceeded", "wf", wf.ID, "depth", wf.CurrentDepth)
 		return true
 	}
-
-	// File count limit
 	if wf.FilesChanged >= wf.MaxFilesChanged {
-		slog.Warn("Workflow file limit exceeded", "wf", wf.ID, "files", wf.FilesChanged)
 		return true
 	}
-
 	return false
 }
 
 func (q *Queue) triggerGate(workflowID, gateType, details string) {
 	slog.Info("Triggering gate", "wf", workflowID, "type", gateType)
-	q.db.UpdateWorkflowState(workflowID, "review_needed")
+
+	ctx := context.Background()
+	q.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
+		ID:           workflowID,
+		CurrentState: "review_needed",
+	})
+
 	q.db.LogEvent(workflowID, "", "gate_triggered", map[string]any{
 		"gate_type": gateType,
 		"details":   details,
 	})
-}
-
-func (q *Queue) ReleaseTask(taskID string) error {
-	return nil
-}
-
-func (q *Queue) CompleteTask(taskID string, result *TaskResult) error {
-	//implement fully in Worker phase
-	return nil
-}
-
-func (q *Queue) FailTask(taskID string, err error) error {
-	//implement fully in Worker phase
-	return nil
-}
-
-type TaskResult struct {
-	ExitCode     int
-	StdoutLog    string
-	StderrLog    string
-	FilesChanged []string
 }

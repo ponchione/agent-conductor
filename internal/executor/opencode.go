@@ -38,16 +38,13 @@ type RunResult struct {
 }
 
 func (r *OpenCodeRunner) Run(ctx context.Context, runCfg RunConfig) (*RunResult, error) {
-	// 1. Setup Context with Timeout
-	// Use the shorter of the provided context or the config timeout
 	timeout := runCfg.Timeout
 	if timeout == 0 {
-		timeout = 30 * time.Minute // Default safe fallback
+		timeout = 30 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 2. Prepare Log Files
 	if err := os.MkdirAll(runCfg.LogDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create log dir: %w", err)
 	}
@@ -67,8 +64,6 @@ func (r *OpenCodeRunner) Run(ctx context.Context, runCfg RunConfig) (*RunResult,
 	}
 	defer stderrFile.Close()
 
-	// 3. Construct Command
-	// opencode run --agent <agent> --file <file> --title <title>
 	args := []string{
 		"run",
 		"--agent", runCfg.Agent,
@@ -81,7 +76,6 @@ func (r *OpenCodeRunner) Run(ctx context.Context, runCfg RunConfig) (*RunResult,
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
 
-	// Inject Environment if needed (e.g. inherit current env)
 	cmd.Env = os.Environ()
 
 	slog.Info("Executing OpenCode",
@@ -89,12 +83,10 @@ func (r *OpenCodeRunner) Run(ctx context.Context, runCfg RunConfig) (*RunResult,
 		"dir", runCfg.RepoPath,
 		"timeout", timeout)
 
-	// 4. Execute
 	startTime := time.Now()
 	err = cmd.Run()
 	duration := time.Since(startTime)
 
-	// 5. Analyze Result
 	exitCode := 0
 	success := true
 
@@ -105,10 +97,9 @@ func (r *OpenCodeRunner) Run(ctx context.Context, runCfg RunConfig) (*RunResult,
 		} else if ctx.Err() == context.DeadlineExceeded {
 			exitCode = -1 // Custom code for Timeout
 			slog.Error("Task timed out", "duration", duration)
-			// Append timeout note to stderr log
+
 			_, _ = stderrFile.WriteString("\n\n[CONDUCTOR] Task Timed Out\n")
 		} else {
-			// Other errors (e.g. binary not found)
 			exitCode = 127
 			slog.Error("Execution failed", "error", err)
 		}
