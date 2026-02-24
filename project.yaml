@@ -1,0 +1,44 @@
+project:
+  name: calculator
+  # Absolute path to the calculator repo root
+  path: /home/YOUR_USER/source/calculator   # <-- fill in
+  language: go
+  # All conductor artifacts live here — outside the repo, never touched by git
+  data_dir: /home/gernsback/source/.conductor/calculator   # <-- fill in
+
+index:
+  include:
+    - "**/*.go"
+    - "**/*.md"
+    - "**/*.yaml"
+  exclude:
+    - "vendor/**"
+    - "**/*_test.go"
+    - ".git/**"
+
+conventions:
+  # Relative to project.path — assembler joins these to build file paths
+  module_path: "internal/"
+  sql_path: "sql/"          # calculator has no SQL; assembler handles missing dir gracefully
+  docs_path: "docs/"
+
+local_model:
+  endpoint: "http://localhost:8080/v1"
+  model_name: "qwen-local"
+  temperature: 0.1
+  timeout_seconds: 120
+
+prompts:
+  scope: ""   # empty = uses embedded constant in templates/prompts.go
+  verify: ""
+  build: ""
+
+safety:
+  forbidden_paths:
+    - "go.mod"
+    - "go.sum"
+
+git:
+  branch_prefix: "conductor"
+  commit_author_name: "Conductor"
+  commit_author_email: "conductor@local"

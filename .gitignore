@@ -20,6 +20,9 @@ go.work
 # IDE
 .idea/
 
+/bin
+/work-orders
+
 # OS specific
 .DS_Store
 Thumbs.db

@@ -1,167 +1,151 @@
 package main
 
 import (
-	"context"
-	"database/sql"
+	stdctx "context"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"time"
 
 	"github.com/ponchione/agent-conductor/internal/config"
+	"github.com/ponchione/agent-conductor/internal/context"
 	"github.com/ponchione/agent-conductor/internal/database"
+	"github.com/ponchione/agent-conductor/internal/executor"
+	"github.com/ponchione/agent-conductor/internal/gate"
 	"github.com/ponchione/agent-conductor/internal/git"
+	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/queue"
-	"github.com/ponchione/agent-conductor/internal/scanner"
-	//"github.com/ponchione/agent-conductor/internal/database"
-	//"github.com/ponchione/agent-conductor/internal/git"
-	//"github.com/ponchione/agent-conductor/internal/scanner"
+	"github.com/ponchione/agent-conductor/internal/worker"
 )
 
 func main() {
 	opts := &slog.HandlerOptions{Level: slog.LevelDebug}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, opts)))
 
-	// 1. Setup Environment
-	repoPath := "/tmp/conductor-refactor-test"
-	setupTestRepo(repoPath)
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: conductor <command> [args]")
+		os.Exit(1)
+	}
 
-	configFile := "config.yaml"
-	createConfig(configFile, repoPath)
-	cfg, _ := config.Load(configFile)
+	cmd := os.Args[1]
+	args := os.Args[2:]
 
-	// 2. Initialize DB (New sqlc version)
-	os.Remove("conductor.db")
-	db, err := database.NewDB(cfg.Database) // Renamed constructor
+	// Subcommand dispatch
+	switch cmd {
+	case "approve", "reject":
+		runGateCommand(cmd, args)
+		return
+	case "status":
+		runStatus(args)
+		return
+	case "run":
+		projectPath := "project.yaml" // fallback default
+		workOrderPath := ""
+
+		for i := 0; i < len(args); i++ {
+			if args[i] == "--project" && i+1 < len(args) {
+				projectPath = args[i+1]
+				i++ // skip the value
+			} else if workOrderPath == "" && len(args[i]) > 0 && args[i][0] != '-' {
+				workOrderPath = args[i]
+			}
+		}
+
+		if workOrderPath == "" {
+			fmt.Println("Usage: conductor run <work-order-path> --project <project.yaml-path>")
+			os.Exit(1)
+		}
+
+		cfg, err := config.Load(projectPath)
+		if err != nil {
+			slog.Error("Failed to load config", "path", projectPath, "error", err)
+			os.Exit(1)
+		}
+
+		dataDir := cfg.Project.DataDir
+		if err := os.MkdirAll(dataDir, 0755); err != nil {
+			slog.Error("Failed to create data directory", "path", dataDir, "error", err)
+			os.Exit(1)
+		}
+
+		dbPath := filepath.Join(dataDir, "db", "conductor.db")
+		slog.Info("Initializing database", "path", dbPath)
+
+		db, err := database.NewDB(dbPath)
+		if err != nil {
+			panic(err)
+		}
+		defer db.Close()
+
+		gitMgr := git.New(cfg)
+		q := queue.New(cfg, db)
+		runner := executor.New(cfg)
+		llmClient := llm.New(cfg.LocalModel)
+		assembler := context.NewAssembler(cfg, gitMgr)
+
+		w := worker.New("worker-1", q, db, cfg, assembler, llmClient, runner, gitMgr)
+
+		runSync(args, w, db, cfg, gitMgr)
+		return
+
+	default:
+		fmt.Printf("Unknown command: %s\n", cmd)
+		os.Exit(1)
+	}
+}
+
+// runGateCommand handles the approve/reject subcommands.
+// Usage: conductor approve <workflow-id>
+//
+//	conductor reject <workflow-id> [reason]
+func runGateCommand(cmd string, args []string) {
+	if len(args) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: conductor %s <workflow-id> [reason]\n", cmd)
+		os.Exit(1)
+	}
+	workflowID := args[0]
+
+	projectPath := "project.yaml" // default fallback
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--project" && i+1 < len(args) {
+			projectPath = args[i+1]
+			break
+		}
+	}
+
+	cfg, err := config.Load(projectPath)
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	dbPath := filepath.Join(cfg.Project.DataDir, "db", "conductor.db")
+	//fmt.Printf("\n--- DEBUG COMMAND ---\n%s\n---------------------\n\n", dbPath)
+	db, err := database.NewDB(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to open database: %v\n", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
-	// 3. Initialize Components
-	gitMgr := git.New(cfg)
-	scan, _ := scanner.New(cfg, db, gitMgr)
-	q := queue.New(cfg, db)
+	ctx := stdctx.Background()
+	switch cmd {
+	case "approve":
+		if err := gate.Approve(ctx, db, workflowID); err != nil {
+			fmt.Fprintf(os.Stderr, "approve failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Workflow %s approved. Merging branch...\n", workflowID)
+	case "reject":
+		reason := ""
+		if len(args) > 1 && args[1] != "--project" {
+			reason = args[1]
+		}
 
-	// 4. Run Verification
-	verifyRefactor(scan, q, db, cfg, repoPath, gitMgr)
-}
-
-func verifyRefactor(
-	s *scanner.Scanner,
-	q *queue.Queue,
-	db *database.DB,
-	cfg *config.Config,
-	repoPath string,
-	gitMgr *git.GitManager,
-) {
-	slog.Info("--- Starting Refactor Verification (SQLC + Go-Git) ---")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// 1. Start Scanner
-	if err := s.Start(ctx); err != nil {
-		panic(err)
+		if err := gate.Reject(ctx, db, workflowID, reason); err != nil {
+			fmt.Fprintf(os.Stderr, "reject failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Workflow %s rejected: %s\n", workflowID, reason)
 	}
-
-	// 2. Create Work Order
-	woPath := filepath.Join(cfg.Scanner.InboxPath, "backend", "orders", "wo-refactor.md")
-	os.MkdirAll(filepath.Dir(woPath), 0755)
-	os.WriteFile(woPath, []byte("# Refactor Test"), 0644)
-	slog.Info("Created work order", "path", woPath)
-
-	// 3. Wait for processing
-	time.Sleep(2 * time.Second)
-
-	// 4. Claim Task
-	slog.Info("Attempting to claim task...")
-	task, err := q.ClaimNextTask("worker-test")
-	if err != nil {
-		slog.Error("Claim failed", "error", err)
-		return
-	}
-	slog.Info("Task Claimed", "id", task.ID)
-
-	// 5. Verify Git Branch (using go-git to verify itself!)
-	currentBranch, err := gitMgr.GetCurrentBranch(repoPath)
-	if err != nil {
-		slog.Error("Failed to get branch", "error", err)
-		return
-	}
-	slog.Info("Git Branch Checked", "branch", currentBranch)
-
-	// 6. Test Git Commit (using go-git)
-	slog.Info("Testing Go-Git Commit...")
-	newFile := filepath.Join(repoPath, "go-git-test.txt")
-	os.WriteFile(newFile, []byte("Created by go-git"), 0644)
-
-	changed, err := gitMgr.GetChangedFiles(repoPath)
-	if err != nil {
-		slog.Error("Failed to get changed files", "error", err)
-		return
-	}
-	slog.Info("Changed Files Detected", "files", changed)
-
-	if err := gitMgr.Commit(repoPath, "Commit via go-git"); err != nil {
-		slog.Error("Commit failed", "error", err)
-		return
-	}
-	slog.Info("Commit Successful")
-
-	slog.Info("--- Verification Complete ---")
-}
-
-// Helper to handle sql.NullString creation for queries
-func sqlNullString(s string) sql.NullString {
-	// sqlc generated struct might be using sql.NullString or database.NullString depending on config
-	// Usually it uses sql.NullString.
-	// If you see type errors here, we might need to adjust.
-	// For now assuming standard sql.NullString, but aliases might exist.
-	// Actually, let's just use the helper we added earlier or raw struct.
-	return sql.NullString{String: s, Valid: s != ""}
-}
-
-// --- Test Helpers ---
-
-func setupTestRepo(path string) {
-	os.RemoveAll(path)
-	os.MkdirAll(path, 0755)
-	execCmd(path, "git", "init")
-	execCmd(path, "git", "config", "user.email", "test@test.com")
-	execCmd(path, "git", "config", "user.name", "Test User")
-	execCmd(path, "git", "commit", "--allow-empty", "-m", "Initial commit")
-	execCmd(path, "git", "branch", "-m", "main")
-}
-
-func execCmd(dir, name string, args ...string) {
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	cmd.Run()
-}
-
-func createConfig(path, repoPath string) {
-	content := fmt.Sprintf(`
-log_level: info
-database: conductor.db
-scanner:
-  interval_seconds: 5
-  inbox_path: ./inbox
-workers:
-  count: 1
-repositories:
-  backend:
-    path: %s
-    opencode_agent_executor: executor
-    opencode_agent_workorder: work-order
-safety:
-  max_depth: 5
-  max_files_changed: 50
-  max_workflow_duration_minutes: 60
-  max_task_retries: 2
-git:
-  branch_prefix: feature/refactor
-`, repoPath)
-	os.WriteFile(path, []byte(content), 0644)
 }

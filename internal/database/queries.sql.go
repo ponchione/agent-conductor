@@ -81,8 +81,8 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) error 
 const createTask = `-- name: CreateTask :exec
 INSERT INTO tasks (
     id, workflow_id, sequence_num, task_type, agent_type, target_repo,
-    input_artifact, state, max_attempts
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    phase, input_artifact, state, max_attempts
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateTaskParams struct {
@@ -92,6 +92,7 @@ type CreateTaskParams struct {
 	TaskType      string `json:"task_type"`
 	AgentType     string `json:"agent_type"`
 	TargetRepo    string `json:"target_repo"`
+	Phase         string `json:"phase"`
 	InputArtifact string `json:"input_artifact"`
 	State         string `json:"state"`
 	MaxAttempts   int64  `json:"max_attempts"`
@@ -105,6 +106,7 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) error {
 		arg.TaskType,
 		arg.AgentType,
 		arg.TargetRepo,
+		arg.Phase,
 		arg.InputArtifact,
 		arg.State,
 		arg.MaxAttempts,
@@ -115,20 +117,23 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) error {
 const createWorkflow = `-- name: CreateWorkflow :exec
 INSERT INTO workflows (
     id, original_intent, original_file, current_state, target_repo, git_branch,
+    context_package_path, verification_report_path,
     max_depth, max_files_changed, max_duration_mins
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateWorkflowParams struct {
-	ID              string `json:"id"`
-	OriginalIntent  string `json:"original_intent"`
-	OriginalFile    string `json:"original_file"`
-	CurrentState    string `json:"current_state"`
-	TargetRepo      string `json:"target_repo"`
-	GitBranch       string `json:"git_branch"`
-	MaxDepth        int64  `json:"max_depth"`
-	MaxFilesChanged int64  `json:"max_files_changed"`
-	MaxDurationMins int64  `json:"max_duration_mins"`
+	ID                     string         `json:"id"`
+	OriginalIntent         string         `json:"original_intent"`
+	OriginalFile           string         `json:"original_file"`
+	CurrentState           string         `json:"current_state"`
+	TargetRepo             string         `json:"target_repo"`
+	GitBranch              string         `json:"git_branch"`
+	ContextPackagePath     sql.NullString `json:"context_package_path"`
+	VerificationReportPath sql.NullString `json:"verification_report_path"`
+	MaxDepth               int64          `json:"max_depth"`
+	MaxFilesChanged        int64          `json:"max_files_changed"`
+	MaxDurationMins        int64          `json:"max_duration_mins"`
 }
 
 func (q *Queries) CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) error {
@@ -139,6 +144,8 @@ func (q *Queries) CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) 
 		arg.CurrentState,
 		arg.TargetRepo,
 		arg.GitBranch,
+		arg.ContextPackagePath,
+		arg.VerificationReportPath,
 		arg.MaxDepth,
 		arg.MaxFilesChanged,
 		arg.MaxDurationMins,
@@ -178,7 +185,7 @@ func (q *Queries) GetPendingTask(ctx context.Context) (string, error) {
 }
 
 const getTask = `-- name: GetTask :one
-SELECT id, workflow_id, sequence_num, task_type, agent_type, target_repo, input_artifact, output_artifact, state, claimed_by, claimed_at, attempts, max_attempts, exit_code, stdout_log, stderr_log, files_changed, created_at, started_at, completed_at, error_message FROM tasks WHERE id = ? LIMIT 1
+SELECT id, workflow_id, sequence_num, task_type, agent_type, target_repo, phase, input_artifact, output_artifact, state, claimed_by, claimed_at, attempts, max_attempts, exit_code, stdout_log, stderr_log, files_changed, created_at, started_at, completed_at, error_message FROM tasks WHERE id = ? LIMIT 1
 `
 
 func (q *Queries) GetTask(ctx context.Context, id string) (Task, error) {
@@ -191,6 +198,7 @@ func (q *Queries) GetTask(ctx context.Context, id string) (Task, error) {
 		&i.TaskType,
 		&i.AgentType,
 		&i.TargetRepo,
+		&i.Phase,
 		&i.InputArtifact,
 		&i.OutputArtifact,
 		&i.State,
@@ -211,7 +219,7 @@ func (q *Queries) GetTask(ctx context.Context, id string) (Task, error) {
 }
 
 const getWorkflow = `-- name: GetWorkflow :one
-SELECT id, original_intent, original_file, current_state, target_repo, git_branch, max_depth, max_files_changed, max_duration_mins, current_depth, files_changed, started_at, created_at, updated_at, completed_at, error_message FROM workflows WHERE id = ? LIMIT 1
+SELECT id, original_intent, original_file, current_state, target_repo, git_branch, context_package_path, verification_report_path, max_depth, max_files_changed, max_duration_mins, current_depth, files_changed, started_at, created_at, updated_at, completed_at, error_message FROM workflows WHERE id = ? LIMIT 1
 `
 
 func (q *Queries) GetWorkflow(ctx context.Context, id string) (Workflow, error) {
@@ -224,6 +232,8 @@ func (q *Queries) GetWorkflow(ctx context.Context, id string) (Workflow, error) 
 		&i.CurrentState,
 		&i.TargetRepo,
 		&i.GitBranch,
+		&i.ContextPackagePath,
+		&i.VerificationReportPath,
 		&i.MaxDepth,
 		&i.MaxFilesChanged,
 		&i.MaxDurationMins,
@@ -329,5 +339,38 @@ type UpdateWorkflowStateParams struct {
 
 func (q *Queries) UpdateWorkflowState(ctx context.Context, arg UpdateWorkflowStateParams) error {
 	_, err := q.db.ExecContext(ctx, updateWorkflowState, arg.CurrentState, arg.ID)
+	return err
+}
+
+const updateWorkflowContext = `-- name: UpdateWorkflowContext :exec
+UPDATE workflows
+SET context_package_path = ?, updated_at = datetime('now')
+WHERE id = ?
+`
+
+type UpdateWorkflowContextParams struct {
+	ContextPackagePath sql.NullString `json:"context_package_path"`
+	ID                 string         `json:"id"`
+}
+
+func (q *Queries) UpdateWorkflowContext(ctx context.Context, arg UpdateWorkflowContextParams) error {
+	_, err := q.db.ExecContext(ctx, updateWorkflowContext, arg.ContextPackagePath, arg.ID)
+	return err
+}
+
+const updateWorkflowVerification = `-- name: UpdateWorkflowVerification :exec
+UPDATE workflows
+SET verification_report_path = ?, current_state = ?, updated_at = datetime('now')
+WHERE id = ?
+`
+
+type UpdateWorkflowVerificationParams struct {
+	VerificationReportPath sql.NullString `json:"verification_report_path"`
+	CurrentState           string         `json:"current_state"`
+	ID                     string         `json:"id"`
+}
+
+func (q *Queries) UpdateWorkflowVerification(ctx context.Context, arg UpdateWorkflowVerificationParams) error {
+	_, err := q.db.ExecContext(ctx, updateWorkflowVerification, arg.VerificationReportPath, arg.CurrentState, arg.ID)
 	return err
 }

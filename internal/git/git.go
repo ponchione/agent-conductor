@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5"
@@ -12,10 +13,10 @@ import (
 )
 
 type GitManager struct {
-	cfg *gitconfig.Config
+	cfg *gitconfig.ProjectConfig
 }
 
-func New(cfg *gitconfig.Config) *GitManager {
+func New(cfg *gitconfig.ProjectConfig) *GitManager {
 	return &GitManager{cfg: cfg}
 }
 
@@ -166,6 +167,60 @@ func (g *GitManager) HasUncommittedChanges(repoPath string) (bool, error) {
 	return !status.IsClean(), nil
 }
 
+// GetDiff returns the diff between two branches
+func (g *GitManager) GetDiff(repoPath, base, target string) (string, error) {
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return "", err
+	}
+
+	// Resolve Base
+	baseHash, err := r.ResolveRevision(plumbing.Revision(base))
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve base %s: %w", base, err)
+	}
+
+	// Resolve Target
+	targetHash, err := r.ResolveRevision(plumbing.Revision(target))
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve target %s: %w", target, err)
+	}
+
+	// Get Commit Objects
+	baseCommit, err := r.CommitObject(*baseHash)
+	if err != nil {
+		return "", err
+	}
+	targetCommit, err := r.CommitObject(*targetHash)
+	if err != nil {
+		return "", err
+	}
+
+	// Get Trees
+	baseTree, err := baseCommit.Tree()
+	if err != nil {
+		return "", err
+	}
+	targetTree, err := targetCommit.Tree()
+	if err != nil {
+		return "", err
+	}
+
+	// Get Changes
+	changes, err := baseTree.Diff(targetTree)
+	if err != nil {
+		return "", err
+	}
+
+	// Patch
+	patch, err := changes.Patch()
+	if err != nil {
+		return "", err
+	}
+
+	return patch.String(), nil
+}
+
 func (g *GitManager) Push(repoPath, branchName string) error {
 	r, err := git.PlainOpen(repoPath)
 	if err != nil {
@@ -183,6 +238,118 @@ func (g *GitManager) Push(repoPath, branchName string) error {
 		return nil
 	}
 	return err
+}
+
+type CommitInfo struct {
+	Hash    string
+	Message string
+	Author  string
+	Date    time.Time
+}
+
+// GetRecentCommits returns the last n commits affecting the given path
+func (g *GitManager) GetRecentCommits(repoPath string, count int, pathFilter string) ([]CommitInfo, error) {
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Retrieve the commit history
+	cIter, err := r.Log(&git.LogOptions{
+		Order:    git.LogOrderCommitterTime,
+		FileName: &pathFilter,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var commits []CommitInfo
+	err = cIter.ForEach(func(c *object.Commit) error {
+		if len(commits) >= count {
+			return fmt.Errorf("limit reached") // stop iteration
+		}
+
+		// Clean message (first line only)
+		msg := c.Message
+		lines := splitLines(msg)
+		if len(lines) > 0 {
+			msg = lines[0]
+		}
+
+		commits = append(commits, CommitInfo{
+			Hash:    c.Hash.String()[:7],
+			Message: msg,
+			Author:  c.Author.Name,
+			Date:    c.Author.When,
+		})
+		return nil
+	})
+
+	if err != nil && err.Error() != "limit reached" {
+		return nil, err
+	}
+
+	return commits, nil
+}
+
+func splitLines(s string) []string {
+	var lines []string
+	for _, line := range strings.Split(s, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			lines = append(lines, trimmed)
+		}
+	}
+	return lines
+}
+
+// GetChangedFilesBetween returns the list of file paths that differ between base and target branches.
+func (g *GitManager) GetChangedFilesBetween(repoPath, base, target string) ([]string, error) {
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return nil, err
+	}
+
+	baseHash, err := r.ResolveRevision(plumbing.Revision(base))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve base %s: %w", base, err)
+	}
+	targetHash, err := r.ResolveRevision(plumbing.Revision(target))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve target %s: %w", target, err)
+	}
+
+	baseCommit, err := r.CommitObject(*baseHash)
+	if err != nil {
+		return nil, err
+	}
+	targetCommit, err := r.CommitObject(*targetHash)
+	if err != nil {
+		return nil, err
+	}
+
+	baseTree, err := baseCommit.Tree()
+	if err != nil {
+		return nil, err
+	}
+	targetTree, err := targetCommit.Tree()
+	if err != nil {
+		return nil, err
+	}
+
+	changes, err := baseTree.Diff(targetTree)
+	if err != nil {
+		return nil, err
+	}
+
+	var files []string
+	for _, c := range changes {
+		if c.To.Name != "" {
+			files = append(files, c.To.Name)
+		} else if c.From.Name != "" {
+			files = append(files, c.From.Name)
+		}
+	}
+	return files, nil
 }
 
 // GetCurrentBranch returns the name of the currently checked out branch

@@ -1,0 +1,68 @@
+package gate
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/ponchione/agent-conductor/internal/database"
+)
+
+// Approve transitions a workflow in human_review to completed.
+// Returns an error if the workflow is not in the human_review state.
+func Approve(ctx context.Context, db *database.DB, workflowID string) error {
+	wf, err := db.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return fmt.Errorf("workflow not found: %w", err)
+	}
+
+	if wf.CurrentState != "human_review" {
+		return fmt.Errorf("workflow %s is in state %q, expected human_review", workflowID, wf.CurrentState)
+	}
+
+	if err := db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
+		ID:           workflowID,
+		CurrentState: "completed",
+	}); err != nil {
+		return fmt.Errorf("failed to approve workflow: %w", err)
+	}
+
+	db.LogEvent(workflowID, "", "human_approved", map[string]any{
+		"workflow_id": workflowID,
+	})
+
+	slog.Info("Workflow approved", "workflow", workflowID)
+	return nil
+}
+
+// Reject transitions a workflow in human_review to failed, storing the reason.
+// Returns an error if the workflow is not in the human_review state.
+func Reject(ctx context.Context, db *database.DB, workflowID, reason string) error {
+	wf, err := db.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return fmt.Errorf("workflow not found: %w", err)
+	}
+
+	if wf.CurrentState != "human_review" {
+		return fmt.Errorf("workflow %s is in state %q, expected human_review", workflowID, wf.CurrentState)
+	}
+
+	if reason == "" {
+		reason = "rejected by human reviewer"
+	}
+
+	if err := db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
+		ID:           workflowID,
+		CurrentState: "failed",
+	}); err != nil {
+		return fmt.Errorf("failed to reject workflow: %w", err)
+	}
+
+	db.LogEvent(workflowID, "", "human_rejected", map[string]any{
+		"workflow_id": workflowID,
+		"reason":      reason,
+	})
+
+	slog.Info("Workflow rejected", "workflow", workflowID, "reason", reason)
+	return nil
+}

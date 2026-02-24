@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,10 +16,12 @@ import (
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/git"
+	"github.com/ponchione/agent-conductor/internal/models"
+	"gopkg.in/yaml.v3"
 )
 
 type Scanner struct {
-	cfg     *config.Config
+	cfg     *config.ProjectConfig
 	db      *database.DB
 	git     *git.GitManager
 	watcher *fsnotify.Watcher
@@ -26,7 +29,7 @@ type Scanner struct {
 	mu      sync.Mutex
 }
 
-func New(cfg *config.Config, db *database.DB, gitMgr *git.GitManager) (*Scanner, error) {
+func New(cfg *config.ProjectConfig, db *database.DB, gitMgr *git.GitManager) (*Scanner, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
@@ -42,25 +45,17 @@ func New(cfg *config.Config, db *database.DB, gitMgr *git.GitManager) (*Scanner,
 }
 
 func (s *Scanner) Start(ctx context.Context) error {
-	for repoName := range s.cfg.Repos {
-		orderPath := filepath.Join(s.cfg.Scanner.InboxPath, repoName, "orders")
-		if err := os.MkdirAll(orderPath, 0755); err != nil {
-			return err
-		}
-		if err := s.watcher.Add(orderPath); err != nil {
-			return err
-		}
-
-		ticketPath := filepath.Join(s.cfg.Scanner.InboxPath, repoName, "tickets")
-		if err := os.MkdirAll(ticketPath, 0755); err != nil {
-			return err
-		}
-		if err := s.watcher.Add(ticketPath); err != nil {
-			return err
-		}
-
-		slog.Info("Watching inbox", "repo", repoName, "path", orderPath)
+	baseInbox := filepath.Join(s.cfg.Project.DataDir, "inbox")
+	orderPath := filepath.Join(baseInbox, "orders")
+	if err := os.MkdirAll(orderPath, 0755); err != nil {
+		return err
 	}
+	if err := s.watcher.Add(orderPath); err != nil {
+		return err
+	}
+
+	slog.Info("Watching inbox", "path", baseInbox)
+
 	go s.eventLoop(ctx)
 	return nil
 }
@@ -106,17 +101,13 @@ func (s *Scanner) debounce(path string) {
 
 func (s *Scanner) processFile(path string) error {
 	parts := strings.Split(path, string(os.PathSeparator))
-	if len(parts) < 3 {
+	if len(parts) < 2 {
 		return nil
 	}
 
 	dir := filepath.Dir(path)
 	typeDir := filepath.Base(dir)
-	repoDir := filepath.Base(filepath.Dir(dir))
-
-	if _, ok := s.cfg.Repos[repoDir]; !ok {
-		return nil
-	}
+	// inbox/orders -> typeDir=orders
 
 	fileName := filepath.Base(path)
 	if strings.HasPrefix(fileName, ".") || !strings.HasSuffix(fileName, ".md") {
@@ -124,105 +115,104 @@ func (s *Scanner) processFile(path string) error {
 	}
 
 	if typeDir == "orders" {
-		return s.handleWorkOrder(repoDir, path)
-	} else if typeDir == "tickets" {
-		return s.handleTicket(repoDir, path)
+		return s.handleWorkOrder(path)
 	}
 	return nil
 }
 
-func (s *Scanner) handleWorkOrder(repo, path string) error {
-	slog.Info("Processing new work order", "repo", repo, "file", filepath.Base(path))
+// validateWorkOrder parses and validates required fields of a work order file.
+// Returns a descriptive error if any required field is missing or invalid.
+func validateWorkOrder(path string) (*models.WorkOrder, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read work order: %w", err)
+	}
+
+	var wo models.WorkOrder
+	if err := yaml.Unmarshal(data, &wo); err != nil {
+		return nil, fmt.Errorf("invalid YAML in work order: %w", err)
+	}
+
+	if strings.TrimSpace(wo.Title) == "" {
+		return nil, fmt.Errorf("work order missing required field: title")
+	}
+	if strings.TrimSpace(wo.TargetModule) == "" {
+		return nil, fmt.Errorf("work order missing required field: target_module")
+	}
+	if strings.TrimSpace(wo.Type) == "" {
+		return nil, fmt.Errorf("work order missing required field: type")
+	}
+	if len(wo.AcceptanceCriteria) == 0 {
+		return nil, fmt.Errorf("work order missing required field: acceptance_criteria (must have at least one entry)")
+	}
+
+	return &wo, nil
+}
+
+func (s *Scanner) handleWorkOrder(path string) error {
+	repoName := s.cfg.Project.Name
+	slog.Info("Processing new work order", "file", filepath.Base(path))
+
+	// Validate before creating any DB records — bad work orders are rejected here.
+	wo, err := validateWorkOrder(path)
+	if err != nil {
+		slog.Error("Invalid work order — rejecting without creating workflow", "file", filepath.Base(path), "error", err)
+		return fmt.Errorf("work order validation failed: %w", err)
+	}
 
 	// Create IDs ahead of time
 	wfID := uuid.New().String()
 	taskID := uuid.New().String()
 	branchName := fmt.Sprintf("%s-%s", s.cfg.Git.BranchPrefix, wfID[:8])
 
-	repoConfig, ok := s.cfg.Repos[repo]
-	if ok {
-		slog.Info("Creating git branch", "repo", repo, "branch", branchName)
-		if err := s.git.CreateBranch(repoConfig.Path, branchName, "main"); err != nil {
-			slog.Error("Failed to create git branch", "error", err)
-			return fmt.Errorf("git create branch failed: %w", err)
-		}
+	slog.Info("Creating git branch", "branch", branchName)
+	if err := s.git.CreateBranch(s.cfg.Project.Path, branchName, "main"); err != nil {
+		slog.Error("Failed to create git branch", "error", err)
+		return fmt.Errorf("git create branch failed: %w", err)
 	}
+	
+	maxDepth := int64(5)
+	maxFiles := int64(50)
+	maxDuration := int64(60)
 
-	err := s.db.CreateWorkflow(context.Background(), database.CreateWorkflowParams{
-		ID:              wfID,
-		OriginalIntent:  "Work Order: " + filepath.Base(path),
-		OriginalFile:    path,
-		CurrentState:    "pending",
-		TargetRepo:      repo,
-		GitBranch:       branchName,
-		MaxDepth:        int64(s.cfg.Safety.MaxDepth),
-		MaxFilesChanged: int64(s.cfg.Safety.MaxFilesChanged),
-		MaxDurationMins: int64(s.cfg.Safety.MaxWorkflowDurationMinutes),
-	})
-	if err != nil {
+	if err := s.db.CreateWorkflow(context.Background(), database.CreateWorkflowParams{
+		ID:                     wfID,
+		OriginalIntent:         "Work Order: " + filepath.Base(path),
+		OriginalFile:           path,
+		CurrentState:           "pending",
+		TargetRepo:             repoName,
+		GitBranch:              branchName,
+		ContextPackagePath:     sql.NullString{}, // NULL
+		VerificationReportPath: sql.NullString{}, // NULL
+		MaxDepth:               maxDepth,
+		MaxFilesChanged:        maxFiles,
+		MaxDurationMins:        maxDuration,
+	}); err != nil {
 		return fmt.Errorf("create workflow: %w", err)
 	}
 
-	err = s.db.CreateTask(context.Background(), database.CreateTaskParams{
+	if err := s.db.CreateTask(context.Background(), database.CreateTaskParams{
 		ID:            taskID,
 		WorkflowID:    wfID,
 		SequenceNum:   1,
 		TaskType:      "execution",
-		AgentType:     s.cfg.Repos[repo].OpenCodeAgentExecutor,
-		TargetRepo:    repo,
+		AgentType:     "opencode", // Default agent
+		TargetRepo:    repoName,
+		Phase:         "scope", // Start with scope phase
 		InputArtifact: path,
 		State:         "pending",
-		MaxAttempts:   int64(s.cfg.Safety.MaxTaskRetries),
-	})
-	if err != nil {
+		MaxAttempts:   2, // Default
+	}); err != nil {
 		return fmt.Errorf("create task: %w", err)
 	}
 
 	s.db.LogEvent(wfID, taskID, "workflow_created", map[string]any{"file": path, "branch": branchName})
-	return nil
-}
 
-func (s *Scanner) handleTicket(repo, path string) error {
-	slog.Info("Processing new ticket", "repo", repo, "file", filepath.Base(path))
-	fileName := filepath.Base(path)
-	parts := strings.Split(fileName, "-")
-
-	var workflowID string
-	if len(parts) >= 2 && parts[0] == "ticket" {
-		workflowID = parts[1]
+	// Create pipeline_run row to track phase timing and outcomes
+	pipelineRunID := uuid.New().String()
+	if err := s.db.CreatePipelineRun(context.Background(), pipelineRunID, wfID, repoName, wo.Type); err != nil {
+		slog.Warn("Failed to create pipeline_run", "workflow", wfID, "error", err)
 	}
 
-	var wf database.Workflow
-	var err error
-
-	if workflowID != "" {
-		wf, err = s.db.GetWorkflow(context.Background(), workflowID)
-	}
-
-	// If workflow not found or error, create new one via handleWorkOrder
-	if workflowID == "" || err != nil {
-		slog.Info("Could not link ticket to workflow, creating new one", "ticket", fileName)
-		return s.handleWorkOrder(repo, path)
-	}
-
-	// Link to existing workflow
-	taskID := uuid.New().String()
-
-	err = s.db.CreateTask(context.Background(), database.CreateTaskParams{
-		ID:            taskID,
-		WorkflowID:    wf.ID,
-		SequenceNum:   int64(wf.CurrentDepth + 1),
-		TaskType:      "work_order_generation",
-		AgentType:     s.cfg.Repos[repo].OpenCodeAgentWorkOrder,
-		TargetRepo:    repo,
-		InputArtifact: path,
-		State:         "pending",
-		MaxAttempts:   int64(s.cfg.Safety.MaxTaskRetries),
-	})
-	if err != nil {
-		return err
-	}
-
-	s.db.LogEvent(wf.ID, taskID, "task_created_from_ticket", map[string]any{"file": path})
 	return nil
 }

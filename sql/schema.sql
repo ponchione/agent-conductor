@@ -6,6 +6,10 @@ CREATE TABLE workflows (
                            target_repo         TEXT NOT NULL,
                            git_branch          TEXT NOT NULL,
 
+                           -- New fields for 3-phase execution
+                           context_package_path     TEXT,
+                           verification_report_path TEXT,
+
     -- Budget Limits
                            max_depth           INTEGER NOT NULL DEFAULT 5,
                            max_files_changed   INTEGER NOT NULL DEFAULT 50,
@@ -31,6 +35,9 @@ CREATE TABLE tasks (
                        task_type           TEXT NOT NULL,
                        agent_type          TEXT NOT NULL,
                        target_repo         TEXT NOT NULL,
+
+                       -- New field for 3-phase execution
+                       phase               TEXT NOT NULL DEFAULT 'scope', -- scope, build, verify, human_review, complete, failed
 
                        input_artifact      TEXT NOT NULL,
                        output_artifact     TEXT,

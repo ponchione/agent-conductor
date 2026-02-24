@@ -24,6 +24,7 @@ type Task struct {
 	TaskType       string         `json:"task_type"`
 	AgentType      string         `json:"agent_type"`
 	TargetRepo     string         `json:"target_repo"`
+	Phase          string         `json:"phase"`
 	InputArtifact  string         `json:"input_artifact"`
 	OutputArtifact sql.NullString `json:"output_artifact"`
 	State          string         `json:"state"`
@@ -41,21 +42,52 @@ type Task struct {
 	ErrorMessage   sql.NullString `json:"error_message"`
 }
 
+type PipelineRun struct {
+	ID               string         `json:"id"`
+	WorkflowID       string         `json:"workflow_id"`
+	Project          string         `json:"project"`
+	WorkOrderType    sql.NullString `json:"work_order_type"`
+	ScopeStartedAt   sql.NullString `json:"scope_started_at"`
+	ScopeCompletedAt sql.NullString `json:"scope_completed_at"`
+	BuildStartedAt   sql.NullString `json:"build_started_at"`
+	BuildCompletedAt sql.NullString `json:"build_completed_at"`
+	VerifyStartedAt  sql.NullString `json:"verify_started_at"`
+	VerifyCompletedAt sql.NullString `json:"verify_completed_at"`
+	ScopeModel       sql.NullString `json:"scope_model"`
+	BuildModel       sql.NullString `json:"build_model"`
+	VerifyModel      sql.NullString `json:"verify_model"`
+	ScopeFilesSuggested sql.NullInt64 `json:"scope_files_suggested"`
+	BuildFilesChanged   sql.NullInt64 `json:"build_files_changed"`
+	BuildScopeDrift     int64          `json:"build_scope_drift"`
+	VerifyResult     sql.NullString `json:"verify_result"`
+	HumanResult      sql.NullString `json:"human_result"`
+	ScopeTokensIn    sql.NullInt64  `json:"scope_tokens_in"`
+	ScopeTokensOut   sql.NullInt64  `json:"scope_tokens_out"`
+	BuildTokensIn    sql.NullInt64  `json:"build_tokens_in"`
+	BuildTokensOut   sql.NullInt64  `json:"build_tokens_out"`
+	VerifyTokensIn   sql.NullInt64  `json:"verify_tokens_in"`
+	VerifyTokensOut  sql.NullInt64  `json:"verify_tokens_out"`
+	CreatedAt        string         `json:"created_at"`
+	UpdatedAt        string         `json:"updated_at"`
+}
+
 type Workflow struct {
-	ID              string         `json:"id"`
-	OriginalIntent  string         `json:"original_intent"`
-	OriginalFile    string         `json:"original_file"`
-	CurrentState    string         `json:"current_state"`
-	TargetRepo      string         `json:"target_repo"`
-	GitBranch       string         `json:"git_branch"`
-	MaxDepth        int64          `json:"max_depth"`
-	MaxFilesChanged int64          `json:"max_files_changed"`
-	MaxDurationMins int64          `json:"max_duration_mins"`
-	CurrentDepth    int64          `json:"current_depth"`
-	FilesChanged    int64          `json:"files_changed"`
-	StartedAt       sql.NullString `json:"started_at"`
-	CreatedAt       string         `json:"created_at"`
-	UpdatedAt       string         `json:"updated_at"`
-	CompletedAt     sql.NullString `json:"completed_at"`
-	ErrorMessage    sql.NullString `json:"error_message"`
+	ID                     string         `json:"id"`
+	OriginalIntent         string         `json:"original_intent"`
+	OriginalFile           string         `json:"original_file"`
+	CurrentState           string         `json:"current_state"`
+	TargetRepo             string         `json:"target_repo"`
+	GitBranch              string         `json:"git_branch"`
+	ContextPackagePath     sql.NullString `json:"context_package_path"`
+	VerificationReportPath sql.NullString `json:"verification_report_path"`
+	MaxDepth               int64          `json:"max_depth"`
+	MaxFilesChanged        int64          `json:"max_files_changed"`
+	MaxDurationMins        int64          `json:"max_duration_mins"`
+	CurrentDepth           int64          `json:"current_depth"`
+	FilesChanged           int64          `json:"files_changed"`
+	StartedAt              sql.NullString `json:"started_at"`
+	CreatedAt              string         `json:"created_at"`
+	UpdatedAt              string         `json:"updated_at"`
+	CompletedAt            sql.NullString `json:"completed_at"`
+	ErrorMessage           sql.NullString `json:"error_message"`
 }

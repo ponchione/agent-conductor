@@ -19,7 +19,7 @@ var (
 
 type Queue struct {
 	db  *database.DB
-	cfg *config.Config
+	cfg *config.ProjectConfig
 }
 
 type TaskResult struct {
@@ -29,7 +29,7 @@ type TaskResult struct {
 	FilesChanged []string
 }
 
-func New(cfg *config.Config, db *database.DB) *Queue {
+func New(cfg *config.ProjectConfig, db *database.DB) *Queue {
 	return &Queue{
 		db:  db,
 		cfg: cfg,

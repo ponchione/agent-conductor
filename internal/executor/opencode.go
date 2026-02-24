@@ -13,20 +13,21 @@ import (
 )
 
 type OpenCodeRunner struct {
-	cfg *config.Config
+	cfg *config.ProjectConfig
 }
 
-func New(cfg *config.Config) *OpenCodeRunner {
+func New(cfg *config.ProjectConfig) *OpenCodeRunner {
 	return &OpenCodeRunner{cfg: cfg}
 }
 
 type RunConfig struct {
-	RepoPath  string
-	Agent     string
-	InputFile string
-	Title     string
-	Timeout   time.Duration
-	LogDir    string
+	RepoPath   string
+	Agent      string
+	InputFiles []string
+	Prompt     string // Optional trailing prompt
+	Title      string
+	Timeout    time.Duration
+	LogDir     string
 }
 
 type RunResult struct {
@@ -67,14 +68,30 @@ func (r *OpenCodeRunner) Run(ctx context.Context, runCfg RunConfig) (*RunResult,
 	args := []string{
 		"run",
 		"--agent", runCfg.Agent,
-		"--file", runCfg.InputFile,
-		"--title", runCfg.Title,
+	}
+
+	for _, f := range runCfg.InputFiles {
+		args = append(args, "--file", f)
+	}
+
+	args = append(args, "--title", runCfg.Title)
+
+	args = append(args, "Execute this work order using the provided context package.")
+
+	if runCfg.Prompt != "" {
+		args = append(args, runCfg.Prompt)
 	}
 
 	cmd := exec.CommandContext(ctx, "opencode", args...)
 	cmd.Dir = runCfg.RepoPath
-	cmd.Stdout = stdoutFile
-	cmd.Stderr = stderrFile
+	fmt.Printf("\n--- DEBUG COMMAND ---\n%s\n---------------------\n\n", cmd.String())
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = nil
+	//cmd.Stdout = stdoutFile
+	//cmd.Stderr = stderrFile
+	//cmd.Stdin = os.Stdin
 
 	cmd.Env = os.Environ()
 
