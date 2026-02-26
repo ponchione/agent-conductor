@@ -43,6 +43,10 @@ func (w *Worker) runPreChecks(ctx context.Context, criteria []string) []criterio
 		}
 		cmd := exec.CommandContext(ctx, "go", args...)
 		cmd.Dir = w.cfg.Project.Path
+		cmd.Env = append(os.Environ(),
+			"CGO_CFLAGS=-I"+filepath.Join(w.cfg.Project.Path, "include"),
+			"CGO_LDFLAGS=-L"+filepath.Join(w.cfg.Project.Path, "lib/linux_amd64")+" -llancedb_go -lm -ldl -lpthread",
+		)
 		out, err := cmd.CombinedOutput()
 		met := err == nil
 		var notes string
