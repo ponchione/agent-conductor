@@ -1,8 +1,8 @@
 project:
   name: agent-conductor
-  path: /home/source/agent-conductor
+  path: /home/gernsback/source/agent-conductor
   language: go
-  data_dir: /home/LLM/.conductor/agent-conductor
+  data_dir: /home/gernsback/LLM/.conductor/agent-conductor
 
 index:
   include:
