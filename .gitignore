@@ -22,6 +22,8 @@ go.work
 
 /bin
 /work-orders
+/include
+/lib
 
 # OS specific
 .DS_Store
