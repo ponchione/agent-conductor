@@ -8,14 +8,9 @@ I use AI agents (via OpenCode) to help build my product. The problem: coordinati
 
 This system automates that coordination layer while keeping humans in the loop for the decisions that matter.
 
-## Current State
-
-**Phase 4 of 9 complete.** This is a work in progress.
-
 What works:
 - Project scaffolding and configuration
 - SQLite database with workflow/task/event tables
-- File scanner that detects new work orders
 - Task queue with atomic claiming
 - Git branch creation and management
 - OpenCode CLI execution with timeout handling
@@ -30,19 +25,17 @@ What doesn't exist yet:
 ## The Idea
 
 ```
-Work Order dropped in inbox
-    ↓
-Orchestrator detects it
+conductor run <work-order.yaml>
     ↓
 Creates isolated git branch
     ↓
-Runs agent via OpenCode
+Scope phase: LLM generates context package
     ↓
-Agent does Planning phase → pauses for human approval
+Build phase: OpenCode agent writes the code
     ↓
-Human approves → Agent does Build phase
+Verify phase: tests + LLM grades the result
     ↓
-If agent creates ticket for other repo → route it there, repeat
+Human review: conductor approve/reject <id>
     ↓
 PR created when done
 ```
@@ -60,7 +53,6 @@ Two reasons:
 
 - Go 1.21+
 - SQLite (via modernc.org/sqlite, pure Go)
-- fsnotify for file watching
 - Cobra for CLI
 - Shells out to `git` and `opencode`
 

@@ -78,7 +78,7 @@ func TestClient_Complete(t *testing.T) {
 
 	// Test successful completion
 	ctx := context.Background()
-	result, err := client.Complete(ctx, "System Prompt", "User Message")
+	result, _, err := client.Complete(ctx, "System Prompt", "User Message")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestClient_Errors(t *testing.T) {
 		defer server.Close()
 
 		client := New(config.LocalModel{Endpoint: server.URL, TimeoutSeconds: 1})
-		_, err := client.Complete(context.Background(), "sys", "user")
+		_, _, err := client.Complete(context.Background(), "sys", "user")
 		if err == nil {
 			t.Error("expected error, got nil")
 		}
@@ -115,7 +115,7 @@ func TestClient_Errors(t *testing.T) {
 		defer server.Close()
 
 		client := New(config.LocalModel{Endpoint: server.URL, TimeoutSeconds: 1})
-		_, err := client.Complete(context.Background(), "sys", "user")
+		_, _, err := client.Complete(context.Background(), "sys", "user")
 		if err == nil {
 			t.Error("expected error, got nil")
 		}
@@ -130,7 +130,7 @@ func TestClient_Errors(t *testing.T) {
 		defer server.Close()
 
 		client := New(config.LocalModel{Endpoint: server.URL, TimeoutSeconds: 1})
-		_, err := client.Complete(context.Background(), "sys", "user")
+		_, _, err := client.Complete(context.Background(), "sys", "user")
 		if err == nil {
 			t.Error("expected error, got nil")
 		}
@@ -154,7 +154,7 @@ func TestClient_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err := client.Complete(ctx, "sys", "user")
+	_, _, err := client.Complete(ctx, "sys", "user")
 	if err == nil {
 		t.Error("expected timeout error, got nil")
 	}

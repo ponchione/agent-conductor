@@ -4,7 +4,6 @@ import (
 	stdctx "context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/context"
@@ -46,25 +45,6 @@ func New(
 		llm:       llmClient,
 		runner:    runner,
 		git:       gitMgr,
-	}
-}
-
-// Start begins the worker loop
-func (w *Worker) Start(ctx stdctx.Context) {
-	slog.Info("Worker starting", "id", w.ID)
-	w.ProcessNextTask(ctx)
-
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			slog.Info("Worker stopping", "id", w.ID)
-			return
-		case <-ticker.C:
-			w.ProcessNextTask(ctx)
-		}
 	}
 }
 

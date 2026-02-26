@@ -27,6 +27,13 @@ func Approve(ctx context.Context, db *database.DB, workflowID string) error {
 		return fmt.Errorf("failed to approve workflow: %w", err)
 	}
 
+	if err := db.UpdatePipelineRunHumanResult(ctx, database.UpdatePipelineRunHumanResultParams{
+		WorkflowID:  workflowID,
+		HumanResult: database.String("approved"),
+	}); err != nil {
+		slog.Warn("Failed to update pipeline run human result", "workflow", workflowID, "error", err)
+	}
+
 	db.LogEvent(workflowID, "", "human_approved", map[string]any{
 		"workflow_id": workflowID,
 	})
@@ -56,6 +63,13 @@ func Reject(ctx context.Context, db *database.DB, workflowID, reason string) err
 		CurrentState: "failed",
 	}); err != nil {
 		return fmt.Errorf("failed to reject workflow: %w", err)
+	}
+
+	if err := db.UpdatePipelineRunHumanResult(ctx, database.UpdatePipelineRunHumanResultParams{
+		WorkflowID:  workflowID,
+		HumanResult: database.String("rejected"),
+	}); err != nil {
+		slog.Warn("Failed to update pipeline run human result", "workflow", workflowID, "error", err)
 	}
 
 	db.LogEvent(workflowID, "", "human_rejected", map[string]any{

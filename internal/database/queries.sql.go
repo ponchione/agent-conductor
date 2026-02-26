@@ -78,6 +78,28 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) error 
 	return err
 }
 
+const createPipelineRun = `-- name: CreatePipelineRun :exec
+INSERT INTO pipeline_runs (id, workflow_id, project, work_order_type)
+VALUES (?, ?, ?, ?)
+`
+
+type CreatePipelineRunParams struct {
+	ID            string         `json:"id"`
+	WorkflowID    string         `json:"workflow_id"`
+	Project       string         `json:"project"`
+	WorkOrderType sql.NullString `json:"work_order_type"`
+}
+
+func (q *Queries) CreatePipelineRun(ctx context.Context, arg CreatePipelineRunParams) error {
+	_, err := q.db.ExecContext(ctx, createPipelineRun,
+		arg.ID,
+		arg.WorkflowID,
+		arg.Project,
+		arg.WorkOrderType,
+	)
+	return err
+}
+
 const createTask = `-- name: CreateTask :exec
 INSERT INTO tasks (
     id, workflow_id, sequence_num, task_type, agent_type, target_repo,
@@ -182,6 +204,117 @@ func (q *Queries) GetPendingTask(ctx context.Context) (string, error) {
 	var id string
 	err := row.Scan(&id)
 	return id, err
+}
+
+const getPipelineStats = `-- name: GetPipelineStats :one
+SELECT
+    COUNT(*)                                                                AS total_runs,
+    SUM(CASE WHEN verify_result = 'PASS' THEN 1 ELSE 0 END)               AS verify_pass,
+    SUM(CASE WHEN verify_result = 'WARN' THEN 1 ELSE 0 END)               AS verify_warn,
+    SUM(CASE WHEN verify_result = 'FAIL' THEN 1 ELSE 0 END)               AS verify_fail,
+    SUM(CASE WHEN human_result = 'approved' THEN 1 ELSE 0 END)            AS human_approved,
+    SUM(CASE WHEN human_result = 'rejected' THEN 1 ELSE 0 END)            AS human_rejected,
+    SUM(CASE WHEN human_result IS NULL THEN 1 ELSE 0 END)                 AS human_pending,
+    AVG(CASE
+        WHEN scope_started_at IS NOT NULL AND scope_completed_at IS NOT NULL
+        THEN CAST(strftime('%s', scope_completed_at) AS INTEGER) - CAST(strftime('%s', scope_started_at) AS INTEGER)
+    END)                                                                    AS avg_scope_secs,
+    AVG(CASE
+        WHEN verify_started_at IS NOT NULL AND verify_completed_at IS NOT NULL
+        THEN CAST(strftime('%s', verify_completed_at) AS INTEGER) - CAST(strftime('%s', verify_started_at) AS INTEGER)
+    END)                                                                    AS avg_verify_secs,
+    SUM(COALESCE(scope_tokens_in, 0))                                      AS total_scope_tokens_in,
+    SUM(COALESCE(scope_tokens_out, 0))                                     AS total_scope_tokens_out,
+    SUM(COALESCE(verify_tokens_in, 0))                                     AS total_verify_tokens_in,
+    SUM(COALESCE(verify_tokens_out, 0))                                    AS total_verify_tokens_out
+FROM pipeline_runs
+`
+
+type GetPipelineStatsRow struct {
+	TotalRuns            int64           `json:"total_runs"`
+	VerifyPass           sql.NullFloat64 `json:"verify_pass"`
+	VerifyWarn           sql.NullFloat64 `json:"verify_warn"`
+	VerifyFail           sql.NullFloat64 `json:"verify_fail"`
+	HumanApproved        sql.NullFloat64 `json:"human_approved"`
+	HumanRejected        sql.NullFloat64 `json:"human_rejected"`
+	HumanPending         sql.NullFloat64 `json:"human_pending"`
+	AvgScopeSecs         sql.NullFloat64 `json:"avg_scope_secs"`
+	AvgVerifySecs        sql.NullFloat64 `json:"avg_verify_secs"`
+	TotalScopeTokensIn   sql.NullFloat64 `json:"total_scope_tokens_in"`
+	TotalScopeTokensOut  sql.NullFloat64 `json:"total_scope_tokens_out"`
+	TotalVerifyTokensIn  sql.NullFloat64 `json:"total_verify_tokens_in"`
+	TotalVerifyTokensOut sql.NullFloat64 `json:"total_verify_tokens_out"`
+}
+
+func (q *Queries) GetPipelineStats(ctx context.Context) (GetPipelineStatsRow, error) {
+	row := q.db.QueryRowContext(ctx, getPipelineStats)
+	var i GetPipelineStatsRow
+	err := row.Scan(
+		&i.TotalRuns,
+		&i.VerifyPass,
+		&i.VerifyWarn,
+		&i.VerifyFail,
+		&i.HumanApproved,
+		&i.HumanRejected,
+		&i.HumanPending,
+		&i.AvgScopeSecs,
+		&i.AvgVerifySecs,
+		&i.TotalScopeTokensIn,
+		&i.TotalScopeTokensOut,
+		&i.TotalVerifyTokensIn,
+		&i.TotalVerifyTokensOut,
+	)
+	return i, err
+}
+
+const getRecentPipelineRuns = `-- name: GetRecentPipelineRuns :many
+SELECT
+    workflow_id,
+    work_order_type,
+    verify_result,
+    human_result,
+    COALESCE(scope_tokens_in, 0) + COALESCE(scope_tokens_out, 0) +
+    COALESCE(verify_tokens_in, 0) + COALESCE(verify_tokens_out, 0) AS total_tokens
+FROM pipeline_runs
+ORDER BY created_at DESC
+LIMIT 5
+`
+
+type GetRecentPipelineRunsRow struct {
+	WorkflowID    string         `json:"workflow_id"`
+	WorkOrderType sql.NullString `json:"work_order_type"`
+	VerifyResult  sql.NullString `json:"verify_result"`
+	HumanResult   sql.NullString `json:"human_result"`
+	TotalTokens   int64          `json:"total_tokens"`
+}
+
+func (q *Queries) GetRecentPipelineRuns(ctx context.Context) ([]GetRecentPipelineRunsRow, error) {
+	rows, err := q.db.QueryContext(ctx, getRecentPipelineRuns)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetRecentPipelineRunsRow
+	for rows.Next() {
+		var i GetRecentPipelineRunsRow
+		if err := rows.Scan(
+			&i.WorkflowID,
+			&i.WorkOrderType,
+			&i.VerifyResult,
+			&i.HumanResult,
+			&i.TotalTokens,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getTask = `-- name: GetTask :one
@@ -309,6 +442,106 @@ func (q *Queries) RetryTask(ctx context.Context, id string) error {
 	return err
 }
 
+const updatePipelineRunBuild = `-- name: UpdatePipelineRunBuild :exec
+UPDATE pipeline_runs
+SET build_started_at = ?, build_completed_at = ?,
+    build_files_changed = ?, updated_at = datetime('now')
+WHERE workflow_id = ?
+`
+
+type UpdatePipelineRunBuildParams struct {
+	BuildStartedAt    sql.NullString `json:"build_started_at"`
+	BuildCompletedAt  sql.NullString `json:"build_completed_at"`
+	BuildFilesChanged sql.NullInt64  `json:"build_files_changed"`
+	WorkflowID        string         `json:"workflow_id"`
+}
+
+func (q *Queries) UpdatePipelineRunBuild(ctx context.Context, arg UpdatePipelineRunBuildParams) error {
+	_, err := q.db.ExecContext(ctx, updatePipelineRunBuild,
+		arg.BuildStartedAt,
+		arg.BuildCompletedAt,
+		arg.BuildFilesChanged,
+		arg.WorkflowID,
+	)
+	return err
+}
+
+const updatePipelineRunHumanResult = `-- name: UpdatePipelineRunHumanResult :exec
+UPDATE pipeline_runs
+SET human_result = ?, updated_at = datetime('now')
+WHERE workflow_id = ?
+`
+
+type UpdatePipelineRunHumanResultParams struct {
+	HumanResult sql.NullString `json:"human_result"`
+	WorkflowID  string         `json:"workflow_id"`
+}
+
+func (q *Queries) UpdatePipelineRunHumanResult(ctx context.Context, arg UpdatePipelineRunHumanResultParams) error {
+	_, err := q.db.ExecContext(ctx, updatePipelineRunHumanResult, arg.HumanResult, arg.WorkflowID)
+	return err
+}
+
+const updatePipelineRunScope = `-- name: UpdatePipelineRunScope :exec
+UPDATE pipeline_runs
+SET scope_started_at = ?, scope_completed_at = ?,
+    scope_tokens_in = ?, scope_tokens_out = ?,
+    scope_model = ?, updated_at = datetime('now')
+WHERE workflow_id = ?
+`
+
+type UpdatePipelineRunScopeParams struct {
+	ScopeStartedAt   sql.NullString `json:"scope_started_at"`
+	ScopeCompletedAt sql.NullString `json:"scope_completed_at"`
+	ScopeTokensIn    sql.NullInt64  `json:"scope_tokens_in"`
+	ScopeTokensOut   sql.NullInt64  `json:"scope_tokens_out"`
+	ScopeModel       sql.NullString `json:"scope_model"`
+	WorkflowID       string         `json:"workflow_id"`
+}
+
+func (q *Queries) UpdatePipelineRunScope(ctx context.Context, arg UpdatePipelineRunScopeParams) error {
+	_, err := q.db.ExecContext(ctx, updatePipelineRunScope,
+		arg.ScopeStartedAt,
+		arg.ScopeCompletedAt,
+		arg.ScopeTokensIn,
+		arg.ScopeTokensOut,
+		arg.ScopeModel,
+		arg.WorkflowID,
+	)
+	return err
+}
+
+const updatePipelineRunVerify = `-- name: UpdatePipelineRunVerify :exec
+UPDATE pipeline_runs
+SET verify_started_at = ?, verify_completed_at = ?,
+    verify_tokens_in = ?, verify_tokens_out = ?,
+    verify_model = ?, verify_result = ?, updated_at = datetime('now')
+WHERE workflow_id = ?
+`
+
+type UpdatePipelineRunVerifyParams struct {
+	VerifyStartedAt   sql.NullString `json:"verify_started_at"`
+	VerifyCompletedAt sql.NullString `json:"verify_completed_at"`
+	VerifyTokensIn    sql.NullInt64  `json:"verify_tokens_in"`
+	VerifyTokensOut   sql.NullInt64  `json:"verify_tokens_out"`
+	VerifyModel       sql.NullString `json:"verify_model"`
+	VerifyResult      sql.NullString `json:"verify_result"`
+	WorkflowID        string         `json:"workflow_id"`
+}
+
+func (q *Queries) UpdatePipelineRunVerify(ctx context.Context, arg UpdatePipelineRunVerifyParams) error {
+	_, err := q.db.ExecContext(ctx, updatePipelineRunVerify,
+		arg.VerifyStartedAt,
+		arg.VerifyCompletedAt,
+		arg.VerifyTokensIn,
+		arg.VerifyTokensOut,
+		arg.VerifyModel,
+		arg.VerifyResult,
+		arg.WorkflowID,
+	)
+	return err
+}
+
 const updateWorkflowBudget = `-- name: UpdateWorkflowBudget :exec
 UPDATE workflows
 SET current_depth = ?, files_changed = ?, updated_at = datetime('now')
@@ -326,22 +559,6 @@ func (q *Queries) UpdateWorkflowBudget(ctx context.Context, arg UpdateWorkflowBu
 	return err
 }
 
-const updateWorkflowState = `-- name: UpdateWorkflowState :exec
-UPDATE workflows
-SET current_state = ?, updated_at = datetime('now')
-WHERE id = ?
-`
-
-type UpdateWorkflowStateParams struct {
-	CurrentState string `json:"current_state"`
-	ID           string `json:"id"`
-}
-
-func (q *Queries) UpdateWorkflowState(ctx context.Context, arg UpdateWorkflowStateParams) error {
-	_, err := q.db.ExecContext(ctx, updateWorkflowState, arg.CurrentState, arg.ID)
-	return err
-}
-
 const updateWorkflowContext = `-- name: UpdateWorkflowContext :exec
 UPDATE workflows
 SET context_package_path = ?, updated_at = datetime('now')
@@ -355,6 +572,22 @@ type UpdateWorkflowContextParams struct {
 
 func (q *Queries) UpdateWorkflowContext(ctx context.Context, arg UpdateWorkflowContextParams) error {
 	_, err := q.db.ExecContext(ctx, updateWorkflowContext, arg.ContextPackagePath, arg.ID)
+	return err
+}
+
+const updateWorkflowState = `-- name: UpdateWorkflowState :exec
+UPDATE workflows
+SET current_state = ?, updated_at = datetime('now')
+WHERE id = ?
+`
+
+type UpdateWorkflowStateParams struct {
+	CurrentState string `json:"current_state"`
+	ID           string `json:"id"`
+}
+
+func (q *Queries) UpdateWorkflowState(ctx context.Context, arg UpdateWorkflowStateParams) error {
+	_, err := q.db.ExecContext(ctx, updateWorkflowState, arg.CurrentState, arg.ID)
 	return err
 }
 

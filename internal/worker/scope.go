@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/ponchione/agent-conductor/internal/database"
+	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
 	"github.com/ponchione/agent-conductor/internal/templates"
@@ -20,6 +22,8 @@ import (
 func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	slog.Info("Starting Scope Phase", "task", task.ID)
 	w.db.LogEvent(task.WorkflowID, task.ID, "scope_started", nil)
+
+	scopeStartedAt := time.Now()
 
 	// 1. Read Work Order
 	woContent, err := os.ReadFile(task.InputArtifact)
@@ -46,6 +50,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 
 	var pkg models.ContextPackage
 	var lastErr error
+	var lastUsage llm.Usage
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
 			slog.Warn("Retrying scope LLM call", "task", task.ID, "attempt", attempt)
@@ -55,17 +60,20 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 			})
 		}
 
-		jsonStr, err := w.llm.Complete(ctx, templates.ScopePrompt, contextBlock)
+		jsonStr, usage, err := w.llm.Complete(ctx, templates.ScopePrompt, contextBlock)
 		if err != nil {
 			lastErr = fmt.Errorf("llm completion failed (attempt %d): %w", attempt, err)
 			continue
 		}
 
-		if err := json.Unmarshal([]byte(jsonStr), &pkg); err != nil {
+		cleanedJSON := cleanLLMResponse(jsonStr)
+
+		if err := json.Unmarshal([]byte(cleanedJSON), &pkg); err != nil {
 			lastErr = fmt.Errorf("invalid json from llm (attempt %d): %w", attempt, err)
 			continue
 		}
 
+		lastUsage = usage
 		lastErr = nil
 		break
 	}
@@ -85,7 +93,19 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		return fmt.Errorf("failed to write context package: %w", err)
 	}
 
-	// 5. Update Workflow
+	// 5. Record scope metrics in pipeline_run
+	if err := w.db.UpdatePipelineRunScope(ctx, database.UpdatePipelineRunScopeParams{
+		WorkflowID:       task.WorkflowID,
+		ScopeStartedAt:   sql.NullString{String: scopeStartedAt.UTC().Format(time.RFC3339), Valid: true},
+		ScopeCompletedAt: sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
+		ScopeTokensIn:    sql.NullInt64{Int64: int64(lastUsage.PromptTokens), Valid: true},
+		ScopeTokensOut:   sql.NullInt64{Int64: int64(lastUsage.CompletionTokens), Valid: true},
+		ScopeModel:       sql.NullString{String: w.cfg.LocalModel.ModelName, Valid: true},
+	}); err != nil {
+		slog.Warn("Failed to update pipeline run scope metrics", "error", err)
+	}
+
+	// 6. Update Workflow
 	if err := w.db.UpdateWorkflowContext(ctx, database.UpdateWorkflowContextParams{
 		ID:                 task.WorkflowID,
 		ContextPackagePath: sql.NullString{String: pkgPath, Valid: true},

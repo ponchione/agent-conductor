@@ -13,17 +13,26 @@ type Querier interface {
 	ClaimTask(ctx context.Context, arg ClaimTaskParams) error
 	CompleteTask(ctx context.Context, arg CompleteTaskParams) error
 	CreateEvent(ctx context.Context, arg CreateEventParams) error
+	CreatePipelineRun(ctx context.Context, arg CreatePipelineRunParams) error
 	CreateTask(ctx context.Context, arg CreateTaskParams) error
 	CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) error
 	FailTask(ctx context.Context, arg FailTaskParams) error
 	GetPendingTask(ctx context.Context) (string, error)
+	GetPipelineStats(ctx context.Context) (GetPipelineStatsRow, error)
+	GetRecentPipelineRuns(ctx context.Context) ([]GetRecentPipelineRunsRow, error)
 	GetTask(ctx context.Context, id string) (Task, error)
 	GetWorkflow(ctx context.Context, id string) (Workflow, error)
 	ListEvents(ctx context.Context, workflowID sql.NullString) ([]Event, error)
 	ReleaseTask(ctx context.Context, id string) error
 	RetryTask(ctx context.Context, id string) error
+	UpdatePipelineRunBuild(ctx context.Context, arg UpdatePipelineRunBuildParams) error
+	UpdatePipelineRunHumanResult(ctx context.Context, arg UpdatePipelineRunHumanResultParams) error
+	UpdatePipelineRunScope(ctx context.Context, arg UpdatePipelineRunScopeParams) error
+	UpdatePipelineRunVerify(ctx context.Context, arg UpdatePipelineRunVerifyParams) error
 	UpdateWorkflowBudget(ctx context.Context, arg UpdateWorkflowBudgetParams) error
+	UpdateWorkflowContext(ctx context.Context, arg UpdateWorkflowContextParams) error
 	UpdateWorkflowState(ctx context.Context, arg UpdateWorkflowStateParams) error
+	UpdateWorkflowVerification(ctx context.Context, arg UpdateWorkflowVerificationParams) error
 }
 
 var _ Querier = (*Queries)(nil)

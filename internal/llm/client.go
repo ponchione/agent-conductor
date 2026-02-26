@@ -36,8 +36,14 @@ func New(cfg config.LocalModel) *Client {
 	}
 }
 
+// Usage holds token counts returned by the LLM API.
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+}
+
 // Complete sends a chat completion request to the LLM.
-func (c *Client) Complete(ctx context.Context, systemPrompt string, userMessage string) (string, error) {
+func (c *Client) Complete(ctx context.Context, systemPrompt string, userMessage string) (string, Usage, error) {
 	reqBody := chatCompletionRequest{
 		Model:       c.modelName,
 		Temperature: c.temperature,
@@ -49,7 +55,7 @@ func (c *Client) Complete(ctx context.Context, systemPrompt string, userMessage 
 
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal request: %w", err)
+		return "", Usage{}, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	// Construct URL: <endpoint>/chat/completions
@@ -57,36 +63,41 @@ func (c *Client) Complete(ctx context.Context, systemPrompt string, userMessage 
 	// but let's be robust here too.
 	targetURL, err := url.JoinPath(c.endpoint, "chat", "completions")
 	if err != nil {
-		return "", fmt.Errorf("failed to construct URL: %w", err)
+		return "", Usage{}, fmt.Errorf("failed to construct URL: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return "", Usage{}, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("http request failed: %w", err)
+		return "", Usage{}, fmt.Errorf("http request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	duration := time.Since(start)
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		return "", Usage{}, fmt.Errorf("api returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var respBody chatCompletionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
-		return "", fmt.Errorf("failed to decode response: %w", err)
+		return "", Usage{}, fmt.Errorf("failed to decode response: %w", err)
 	}
+
+	// DEBUG: Log the performance of the local LLM
+	fmt.Printf("[LLM] %s call took %v\n", c.modelName, duration)
 
 	if len(respBody.Choices) == 0 {
-		return "", fmt.Errorf("api returned no choices")
+		return "", Usage{}, fmt.Errorf("api returned no choices")
 	}
 
-	return respBody.Choices[0].Message.Content, nil
+	return respBody.Choices[0].Message.Content, respBody.Usage, nil
 }
 
 // internal structs for JSON marshaling
@@ -100,10 +111,12 @@ type chatCompletionRequest struct {
 	Model       string    `json:"model"`
 	Messages    []message `json:"messages"`
 	Temperature float64   `json:"temperature"`
+	Stop        []string  `json:"stop,omitempty"`
 }
 
 type chatCompletionResponse struct {
 	Choices []choice `json:"choices"`
+	Usage   Usage    `json:"usage"`
 }
 
 type choice struct {

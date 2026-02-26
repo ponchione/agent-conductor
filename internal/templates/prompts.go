@@ -38,6 +38,7 @@ CRITICAL RULES:
 3. "new_files": Only list exact files explicitly requested in the Work Order.
 
 Analyze the Work Order and Repository Context carefully. Base your output STRICTLY on the provided text.
+You are to only provide the json output. Nothing else. Strictly no markdown. 
 `
 
 const VerifyPrompt = `
@@ -83,12 +84,13 @@ concerns: ["string"]
 
 Status definitions:
 - "PASS": all acceptance criteria met, no scope drift, follows conventions
-- Input validation (returning errors for bad argument counts) is CORRECT behavior and must never be counted as a failing criterion.
 - "WARN": minor issues (e.g., small unscoped change with clear justification, one criterion partially met) but core feature works
 - "FAIL": one or more acceptance criteria unmet, broken code, or significant unscoped changes
 
 Set "status" to "FAIL" if critical requirements are missing or the code appears broken.
 Set "status" to "WARN" if there are minor issues but the core feature is functional.
+
+You must respond with json only. Absolutely no markdown is allowed
 `
 
 const BuildPrompt = `

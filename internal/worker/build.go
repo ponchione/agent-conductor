@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -18,6 +19,8 @@ import (
 func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	slog.Info("Starting Build Phase", "task", task.ID)
 	w.db.LogEvent(task.WorkflowID, task.ID, "build_started", nil)
+
+	buildStartedAt := time.Now()
 
 	// 1. Get Workflow
 	wf, err := w.db.GetWorkflow(ctx, task.WorkflowID)
@@ -102,6 +105,15 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	changedFiles, err := w.git.GetChangedFilesBetween(w.cfg.Project.Path, "main", wf.GitBranch)
 	if err == nil {
 		changedFilesCount = len(changedFiles)
+	}
+
+	if err := w.db.UpdatePipelineRunBuild(ctx, database.UpdatePipelineRunBuildParams{
+		WorkflowID:        task.WorkflowID,
+		BuildStartedAt:    sql.NullString{String: buildStartedAt.UTC().Format(time.RFC3339), Valid: true},
+		BuildCompletedAt:  sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
+		BuildFilesChanged: sql.NullInt64{Int64: int64(changedFilesCount), Valid: true},
+	}); err != nil {
+		slog.Warn("Failed to update pipeline run build metrics", "error", err)
 	}
 
 	fmt.Printf("\n--- BUILD PHASE COMPLETE ---\n")

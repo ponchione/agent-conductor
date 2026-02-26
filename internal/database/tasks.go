@@ -47,53 +47,6 @@ func (db *DB) AtomicClaimTask(ctx context.Context, workerID string) (*Task, erro
 	return &task, nil
 }
 
-// CreatePipelineRun inserts a new pipeline_run row when a workflow starts.
-func (db *DB) CreatePipelineRun(ctx context.Context, id, workflowID, project, workOrderType string) error {
-	_, err := db.conn.ExecContext(ctx,
-		`INSERT INTO pipeline_runs (id, workflow_id, project, work_order_type) VALUES (?, ?, ?, ?)`,
-		id, workflowID, project, sql.NullString{String: workOrderType, Valid: workOrderType != ""},
-	)
-	return err
-}
-
-// MarkPipelinePhaseStart records the start time for a given phase (scope, build, verify).
-func (db *DB) MarkPipelinePhaseStart(ctx context.Context, workflowID, phase string) error {
-	col := phase + "_started_at"
-	_, err := db.conn.ExecContext(ctx,
-		`UPDATE pipeline_runs SET `+col+` = datetime('now'), updated_at = datetime('now') WHERE workflow_id = ?`,
-		workflowID,
-	)
-	return err
-}
-
-// MarkPipelinePhaseComplete records the completion time and optional outcome for a phase.
-func (db *DB) MarkPipelinePhaseComplete(ctx context.Context, workflowID, phase string) error {
-	col := phase + "_completed_at"
-	_, err := db.conn.ExecContext(ctx,
-		`UPDATE pipeline_runs SET `+col+` = datetime('now'), updated_at = datetime('now') WHERE workflow_id = ?`,
-		workflowID,
-	)
-	return err
-}
-
-// SetVerifyResult stores the PASS/WARN/FAIL result from the verify phase.
-func (db *DB) SetVerifyResult(ctx context.Context, workflowID, result string) error {
-	_, err := db.conn.ExecContext(ctx,
-		`UPDATE pipeline_runs SET verify_result = ?, updated_at = datetime('now') WHERE workflow_id = ?`,
-		result, workflowID,
-	)
-	return err
-}
-
-// SetHumanResult stores the approve/reject decision from the human gate.
-func (db *DB) SetHumanResult(ctx context.Context, workflowID, result string) error {
-	_, err := db.conn.ExecContext(ctx,
-		`UPDATE pipeline_runs SET human_result = ?, updated_at = datetime('now') WHERE workflow_id = ?`,
-		result, workflowID,
-	)
-	return err
-}
-
 // ApproveWorkflow transitions a workflow from human_review to completed.
 func (db *DB) ApproveWorkflow(ctx context.Context, workflowID string) error {
 	_, err := db.conn.ExecContext(ctx,

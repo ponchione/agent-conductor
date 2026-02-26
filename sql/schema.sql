@@ -36,7 +36,6 @@ CREATE TABLE tasks (
                        agent_type          TEXT NOT NULL,
                        target_repo         TEXT NOT NULL,
 
-                       -- New field for 3-phase execution
                        phase               TEXT NOT NULL DEFAULT 'scope', -- scope, build, verify, human_review, complete, failed
 
                        input_artifact      TEXT NOT NULL,
@@ -79,3 +78,33 @@ CREATE TABLE events (
 );
 
 CREATE INDEX idx_events_workflow ON events(workflow_id);
+
+CREATE TABLE pipeline_runs (
+    id                      TEXT PRIMARY KEY,
+    workflow_id             TEXT NOT NULL REFERENCES workflows(id),
+    project                 TEXT NOT NULL,
+    work_order_type         TEXT,
+    scope_started_at        TEXT,
+    scope_completed_at      TEXT,
+    build_started_at        TEXT,
+    build_completed_at      TEXT,
+    verify_started_at       TEXT,
+    verify_completed_at     TEXT,
+    scope_model             TEXT,
+    build_model             TEXT,
+    verify_model            TEXT,
+    scope_files_suggested   INTEGER,
+    build_files_changed     INTEGER,
+    build_scope_drift       INTEGER NOT NULL DEFAULT 0,
+    verify_result           TEXT,
+    human_result            TEXT,
+    scope_tokens_in         INTEGER,
+    scope_tokens_out        INTEGER,
+    build_tokens_in         INTEGER,
+    build_tokens_out        INTEGER,
+    verify_tokens_in        INTEGER,
+    verify_tokens_out       INTEGER,
+    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_pipeline_runs_workflow ON pipeline_runs(workflow_id);

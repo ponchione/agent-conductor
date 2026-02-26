@@ -16,6 +16,7 @@ type ProjectConfig struct {
 	Conventions Conventions `yaml:"conventions"`
 	Prompts     Prompts     `yaml:"prompts"`
 	LocalModel  LocalModel  `yaml:"local_model"`
+	EmbedModel  EmbedModel  `yaml:"embed_model"`
 	Safety      Safety      `yaml:"safety"`
 	Git         Git         `yaml:"git"`
 }
@@ -45,6 +46,12 @@ type Prompts struct {
 	Scope  string `yaml:"scope"`
 	Verify string `yaml:"verify"`
 	Build  string `yaml:"build"`
+}
+
+type EmbedModel struct {
+	Endpoint       string `yaml:"endpoint"`
+	ModelName      string `yaml:"model_name"`
+	TimeoutSeconds int    `yaml:"timeout_seconds"`
 }
 
 type LocalModel struct {
@@ -77,6 +84,11 @@ func Load(path string) (*ProjectConfig, error) {
 			Endpoint:       "http://localhost:8080/v1",
 			Temperature:    0.0,
 			TimeoutSeconds: 60,
+		},
+		EmbedModel: EmbedModel{
+			Endpoint:       "http://localhost:8081/v1",
+			ModelName:      "nomic-embed-text-v1.5",
+			TimeoutSeconds: 30,
 		},
 		Git: Git{
 			BranchPrefix:      "feature/conducted",

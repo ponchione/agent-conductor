@@ -10,10 +10,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/ponchione/agent-conductor/internal/database"
+	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
 	"github.com/ponchione/agent-conductor/internal/templates"
@@ -61,6 +63,9 @@ func (w *Worker) runPreChecks(ctx context.Context, criteria []string) []criterio
 func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 	slog.Info("Starting Verify Phase", "task", task.ID)
 	w.db.LogEvent(task.WorkflowID, task.ID, "verify_started", nil)
+
+	verifyStartedAt := time.Now()
+	var lastVerifyUsage llm.Usage
 
 	wf, err := w.db.GetWorkflow(ctx, task.WorkflowID)
 	if err != nil {
@@ -208,17 +213,27 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 				})
 			}
 
-			jsonStr, err := w.llm.Complete(ctx, templates.VerifyPrompt, promptContext)
+			jsonStr, usage, err := w.llm.Complete(ctx, templates.VerifyPrompt, promptContext)
 			if err != nil {
 				lastErr = fmt.Errorf("llm verification failed (attempt %d): %w", attempt, err)
 				continue
 			}
 
-			if err := json.Unmarshal([]byte(jsonStr), &report); err != nil {
+			// DEBUG: See exactly what the model said (including <think> tags)
+			fmt.Printf("\n--- DEBUG: RAW LLM RESPONSE (ATTEMPT %d) ---\n%s\n-------------------------------------------\n", attempt, jsonStr)
+
+			cleanedJSON := cleanLLMResponse(jsonStr)
+
+			// DEBUG: See what the string looks like after we stripped the reasoning and backticks
+			fmt.Printf("\n--- DEBUG: CLEANED JSON FOR PARSING ---\n%s\n---------------------------------------\n", cleanedJSON)
+
+			if err := json.Unmarshal([]byte(cleanedJSON), &report); err != nil {
+				slog.Error("JSON parse failed", "task", task.ID, "cleaned_body", cleanedJSON)
 				lastErr = fmt.Errorf("invalid json from llm (attempt %d): %w", attempt, err)
 				continue
 			}
 
+			lastVerifyUsage = usage
 			lastErr = nil
 			break
 		}
@@ -266,7 +281,20 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		}
 	}
 
-	// 9. Write Report
+	// 9. Record verify metrics in pipeline_run
+	if err := w.db.UpdatePipelineRunVerify(ctx, database.UpdatePipelineRunVerifyParams{
+		WorkflowID:        task.WorkflowID,
+		VerifyStartedAt:   sql.NullString{String: verifyStartedAt.UTC().Format(time.RFC3339), Valid: true},
+		VerifyCompletedAt: sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
+		VerifyTokensIn:    sql.NullInt64{Int64: int64(lastVerifyUsage.PromptTokens), Valid: true},
+		VerifyTokensOut:   sql.NullInt64{Int64: int64(lastVerifyUsage.CompletionTokens), Valid: true},
+		VerifyModel:       sql.NullString{String: w.cfg.LocalModel.ModelName, Valid: true},
+		VerifyResult:      sql.NullString{String: report.Status, Valid: true},
+	}); err != nil {
+		slog.Warn("Failed to update pipeline run verify metrics", "error", err)
+	}
+
+	// 10. Write Report
 	reportDir := filepath.Join(w.cfg.Project.DataDir, "artifacts", "verify-reports")
 	if err := os.MkdirAll(reportDir, 0755); err != nil {
 		return fmt.Errorf("failed to create verify-reports dir: %w", err)
@@ -277,7 +305,7 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		return fmt.Errorf("failed to write verification report: %w", err)
 	}
 
-	// 10. Update Workflow State → HUMAN_REVIEW
+	// 11. Update Workflow State → HUMAN_REVIEW
 	if err := w.db.UpdateWorkflowVerification(ctx, database.UpdateWorkflowVerificationParams{
 		ID:                     task.WorkflowID,
 		VerificationReportPath: sql.NullString{String: reportPath, Valid: true},
@@ -301,9 +329,22 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 	fmt.Printf("Run 'conductor status %s' to view details.\n", task.WorkflowID)
 	fmt.Printf("Run 'conductor approve %s' or 'conductor reject %s' to proceed.\n\n", task.WorkflowID, task.WorkflowID)
 
-	// 11. Complete Task
+	// 12. Complete Task
 	return w.q.CompleteTask(task.ID, &queue.TaskResult{
 		ExitCode:  0,
 		StdoutLog: fmt.Sprintf("Verification Status: %s", report.Status),
 	})
+}
+
+func cleanLLMResponse(raw string) string {
+	// 1. Find the first '{' and the last '}'
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+
+	if start == -1 || end == -1 || end < start {
+		return strings.TrimSpace(raw) // Fallback to raw if no braces found
+	}
+
+	// 2. Extract exactly the JSON object
+	return raw[start : end+1]
 }
