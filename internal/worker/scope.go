@@ -15,7 +15,6 @@ import (
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
-	"github.com/ponchione/agent-conductor/internal/templates"
 	"gopkg.in/yaml.v3"
 )
 
@@ -60,7 +59,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 			})
 		}
 
-		jsonStr, usage, err := w.llm.Complete(ctx, templates.ScopePrompt, contextBlock)
+		jsonStr, usage, err := w.llm.Complete(ctx, w.prompts.Scope, contextBlock)
 		if err != nil {
 			lastErr = fmt.Errorf("llm completion failed (attempt %d): %w", attempt, err)
 			continue
@@ -125,12 +124,11 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		"files_to_modify":      len(pkg.FilesToModify),
 	})
 
-	// Add Observability Printf
-	fmt.Printf("\n--- SCOPE PHASE COMPLETE ---\n")
-	fmt.Printf("Summary: %s\n", pkg.Summary)
-	fmt.Printf("Files to modify: %d\n", len(pkg.FilesToModify))
-	fmt.Printf("Files to reference: %d\n", len(pkg.FilesToReference))
-	fmt.Printf("----------------------------\n\n")
+	slog.Info("Scope phase complete",
+		"summary", pkg.Summary,
+		"files_to_modify", len(pkg.FilesToModify),
+		"files_to_reference", len(pkg.FilesToReference),
+	)
 
 	// 6. Complete Task
 	w.q.CompleteTask(task.ID, &queue.TaskResult{

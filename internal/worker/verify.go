@@ -18,7 +18,6 @@ import (
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
-	"github.com/ponchione/agent-conductor/internal/templates"
 )
 
 type criterionPreCheck struct {
@@ -217,19 +216,17 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 				})
 			}
 
-			jsonStr, usage, err := w.llm.Complete(ctx, templates.VerifyPrompt, promptContext)
+			jsonStr, usage, err := w.llm.Complete(ctx, w.prompts.Verify, promptContext)
 			if err != nil {
 				lastErr = fmt.Errorf("llm verification failed (attempt %d): %w", attempt, err)
 				continue
 			}
 
-			// DEBUG: See exactly what the model said (including <think> tags)
-			fmt.Printf("\n--- DEBUG: RAW LLM RESPONSE (ATTEMPT %d) ---\n%s\n-------------------------------------------\n", attempt, jsonStr)
+			slog.Debug("Raw LLM response", "attempt", attempt, "response", jsonStr)
 
 			cleanedJSON := cleanLLMResponse(jsonStr)
 
-			// DEBUG: See what the string looks like after we stripped the reasoning and backticks
-			fmt.Printf("\n--- DEBUG: CLEANED JSON FOR PARSING ---\n%s\n---------------------------------------\n", cleanedJSON)
+			slog.Debug("Cleaned JSON for parsing", "json", cleanedJSON)
 
 			if err := json.Unmarshal([]byte(cleanedJSON), &report); err != nil {
 				slog.Error("JSON parse failed", "task", task.ID, "cleaned_body", cleanedJSON)
@@ -324,14 +321,14 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		"all_criteria_met": report.Completeness.AllCriteriaMet,
 	})
 
-	// Add Observability Printf
-	fmt.Printf("\n--- VERIFY PHASE COMPLETE ---\n")
-	fmt.Printf("Status: %s\n", report.Status)
-	fmt.Printf("Summary: %s\n", report.Summary)
-	fmt.Printf("-----------------------------\n")
-	fmt.Printf("\n>>> WORKFLOW PAUSED FOR HUMAN REVIEW <<<\n")
-	fmt.Printf("Run 'conductor status %s' to view details.\n", task.WorkflowID)
-	fmt.Printf("Run 'conductor approve %s' or 'conductor reject %s' to proceed.\n\n", task.WorkflowID, task.WorkflowID)
+	slog.Info("Verify phase complete",
+		"status", report.Status,
+		"summary", report.Summary,
+	)
+	slog.Info("Workflow paused for human review",
+		"workflow", task.WorkflowID,
+		"hint", "run 'conductor approve/reject "+task.WorkflowID+"'",
+	)
 
 	// 12. Complete Task
 	return w.q.CompleteTask(task.ID, &queue.TaskResult{

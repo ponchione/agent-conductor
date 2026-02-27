@@ -8,6 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+
 // ProjectConfig replaces the old global Config.
 // It maps to the new project.yaml schema for a single-project orchestrator.
 type ProjectConfig struct {
@@ -19,6 +20,7 @@ type ProjectConfig struct {
 	EmbedModel  EmbedModel  `yaml:"embed_model"`
 	Safety      Safety      `yaml:"safety"`
 	Git         Git         `yaml:"git"`
+	Executor    Executor    `yaml:"executor"`
 }
 
 type Project struct {
@@ -62,7 +64,23 @@ type LocalModel struct {
 }
 
 type Safety struct {
-	ForbiddenPaths []string `yaml:"forbidden_paths"`
+	ForbiddenPaths  []string `yaml:"forbidden_paths"`
+	MaxFilesChanged int      `yaml:"max_files_changed"`
+	MaxDurationMins int      `yaml:"max_duration_mins"`
+}
+
+type Executor struct {
+	Tool           string          `yaml:"tool"`
+	TimeoutMinutes int             `yaml:"timeout_minutes"`
+	ClaudeCode     ClaudeCodeConfig `yaml:"claude_code"`
+	OpenCode       OpenCodeConfig  `yaml:"opencode"`
+}
+
+// ClaudeCodeConfig is reserved for future tool-specific config.
+type ClaudeCodeConfig struct{}
+
+type OpenCodeConfig struct {
+	Agent string `yaml:"agent"`
 }
 
 type Git struct {
@@ -95,6 +113,13 @@ func Load(path string) (*ProjectConfig, error) {
 			CommitAuthorName:  "Agent Conductor",
 			CommitAuthorEmail: "conductor@local",
 		},
+		Safety: Safety{
+			MaxFilesChanged: 50,
+			MaxDurationMins: 60,
+		},
+		Executor: Executor{
+			Tool: "claude-code",
+		},
 	}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
@@ -107,4 +132,18 @@ func Load(path string) (*ProjectConfig, error) {
 // GetTimeout returns the configured timeout as a duration.
 func (lm LocalModel) GetTimeout() time.Duration {
 	return time.Duration(lm.TimeoutSeconds) * time.Second
+}
+
+// Validate checks that required fields are present.
+func Validate(cfg *ProjectConfig) error {
+	if cfg.Project.Name == "" {
+		return fmt.Errorf("project.name is required")
+	}
+	if cfg.Project.Path == "" {
+		return fmt.Errorf("project.path is required")
+	}
+	if cfg.Project.DataDir == "" {
+		return fmt.Errorf("project.data_dir is required")
+	}
+	return nil
 }

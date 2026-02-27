@@ -13,7 +13,6 @@ import (
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/executor"
 	"github.com/ponchione/agent-conductor/internal/queue"
-	"github.com/ponchione/agent-conductor/internal/templates"
 )
 
 func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
@@ -41,7 +40,7 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		RepoPath:   w.cfg.Project.Path,
 		Agent:      "build",
 		InputFiles: []string{workOrderPath, contextPath},
-		Prompt:     templates.BuildPrompt,
+		Prompt:     w.prompts.Build,
 		Title:      fmt.Sprintf("Build Task %s", task.ID),
 		Timeout:    time.Duration(wf.MaxDurationMins) * time.Minute,
 		LogDir:     filepath.Join(w.cfg.Project.DataDir, "logs", task.ID),
@@ -116,10 +115,10 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		slog.Warn("Failed to update pipeline run build metrics", "error", err)
 	}
 
-	fmt.Printf("\n--- BUILD PHASE COMPLETE ---\n")
-	fmt.Printf("Duration: %s\n", result.Duration.String())
-	fmt.Printf("Files Changed: %d\n", changedFilesCount)
-	fmt.Printf("----------------------------\n\n")
+	slog.Info("Build phase complete",
+		"duration", result.Duration.String(),
+		"files_changed", changedFilesCount,
+	)
 
 	// 6. Complete Task
 	w.q.CompleteTask(task.ID, &queue.TaskResult{

@@ -12,6 +12,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/git"
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/queue"
+	"github.com/ponchione/agent-conductor/internal/templates"
 )
 
 // Worker processes tasks from the queue
@@ -24,6 +25,7 @@ type Worker struct {
 	llm       *llm.Client
 	runner    *executor.OpenCodeRunner
 	git       *git.GitManager
+	prompts   *templates.LoadedPrompts
 }
 
 func New(
@@ -35,6 +37,7 @@ func New(
 	llmClient *llm.Client,
 	runner *executor.OpenCodeRunner,
 	gitMgr *git.GitManager,
+	prompts *templates.LoadedPrompts,
 ) *Worker {
 	return &Worker{
 		ID:        id,
@@ -45,6 +48,7 @@ func New(
 		llm:       llmClient,
 		runner:    runner,
 		git:       gitMgr,
+		prompts:   prompts,
 	}
 }
 

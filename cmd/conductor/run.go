@@ -17,6 +17,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
+	"github.com/ponchione/agent-conductor/internal/templates"
 	"github.com/ponchione/agent-conductor/internal/worker"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -32,6 +33,16 @@ var runCmd = &cobra.Command{
 		cfg, err := config.Load(projectPath)
 		if err != nil {
 			slog.Error("Failed to load config", "path", projectPath, "error", err)
+			return err
+		}
+		if err := config.Validate(cfg); err != nil {
+			slog.Error("Invalid config", "path", projectPath, "error", err)
+			return err
+		}
+
+		prompts, err := templates.LoadPrompts(cfg)
+		if err != nil {
+			slog.Error("Failed to load prompts", "error", err)
 			return err
 		}
 
@@ -56,7 +67,7 @@ var runCmd = &cobra.Command{
 		llmClient := llm.New(cfg.LocalModel)
 		assembler := condctx.NewAssembler(cfg, gitMgr)
 
-		w := worker.New("worker-1", q, db, cfg, assembler, llmClient, runner, gitMgr)
+		w := worker.New("worker-1", q, db, cfg, assembler, llmClient, runner, gitMgr, prompts)
 
 		return runSync(args[0], w, db, cfg, gitMgr)
 	},
@@ -82,7 +93,11 @@ func runSync(woPath string, w *worker.Worker, db *database.DB, cfg *config.Proje
 	// Parse work order to get type for pipeline_run tracking
 	var wo models.WorkOrder
 	if data, err := os.ReadFile(absPath); err == nil {
-		_ = yaml.Unmarshal(data, &wo)
+		if err := yaml.Unmarshal(data, &wo); err == nil {
+			if err := wo.Validate(); err != nil {
+				return fmt.Errorf("invalid work order: %w", err)
+			}
+		}
 	}
 
 	ctx := context.Background()
@@ -107,8 +122,8 @@ func runSync(woPath string, w *worker.Worker, db *database.DB, cfg *config.Proje
 		ContextPackagePath:     sql.NullString{},
 		VerificationReportPath: sql.NullString{},
 		MaxDepth:               5,
-		MaxFilesChanged:        50,
-		MaxDurationMins:        60,
+		MaxFilesChanged:        int64(cfg.Safety.MaxFilesChanged),
+		MaxDurationMins:        int64(cfg.Safety.MaxDurationMins),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create workflow: %w", err)

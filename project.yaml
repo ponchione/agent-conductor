@@ -24,3 +24,16 @@ embed_model:
   endpoint: "http://localhost:8081/v1"
   model_name: "nomic-embed-text-v1.5"
   timeout_seconds: 30
+
+executor:
+  tool: claude-code
+  timeout_minutes: 30
+
+prompts:
+  scope: templates/scope-prompt.md
+  verify: templates/verify-prompt.md
+  build: templates/build-prompt.md
+
+safety:
+  max_files_changed: 50
+  max_duration_mins: 60

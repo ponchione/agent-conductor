@@ -1,5 +1,7 @@
 package models
 
+import "fmt"
+
 type WorkOrder struct {
 	Title              string   `yaml:"title"`
 	TargetModule       string   `yaml:"target_module"`
@@ -7,4 +9,20 @@ type WorkOrder struct {
 	Type               string   `yaml:"type"`
 	KnownFiles         []string `yaml:"known_files"`
 	AcceptanceCriteria []string `yaml:"acceptance_criteria"`
+	Constraints        []string `yaml:"constraints"`
+}
+
+var validWorkOrderTypes = map[string]bool{
+	"new_feature":   true,
+	"bug_fix":       true,
+	"refactor":      true,
+	"schema_change": true,
+	"docs":          true,
+}
+
+func (wo *WorkOrder) Validate() error {
+	if !validWorkOrderTypes[wo.Type] {
+		return fmt.Errorf("invalid work order type %q: must be one of new_feature, bug_fix, refactor, schema_change, docs", wo.Type)
+	}
+	return nil
 }

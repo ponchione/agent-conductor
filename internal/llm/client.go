@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -90,8 +91,7 @@ func (c *Client) Complete(ctx context.Context, systemPrompt string, userMessage 
 		return "", Usage{}, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	// DEBUG: Log the performance of the local LLM
-	fmt.Printf("[LLM] %s call took %v\n", c.modelName, duration)
+	slog.Debug("LLM call complete", "model", c.modelName, "duration_ms", duration.Milliseconds())
 
 	if len(respBody.Choices) == 0 {
 		return "", Usage{}, fmt.Errorf("api returned no choices")

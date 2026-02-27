@@ -84,7 +84,7 @@ func (r *OpenCodeRunner) Run(ctx context.Context, runCfg RunConfig) (*RunResult,
 
 	cmd := exec.CommandContext(ctx, "opencode", args...)
 	cmd.Dir = runCfg.RepoPath
-	fmt.Printf("\n--- DEBUG COMMAND ---\n%s\n---------------------\n\n", cmd.String())
+	slog.Debug("Executing command", "cmd", cmd.String())
 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
