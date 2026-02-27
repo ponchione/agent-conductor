@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/rag"
 	"github.com/spf13/cobra"
@@ -24,13 +23,6 @@ var indexCmd = &cobra.Command{
 	Use:   "index",
 	Short: "Index the project repository into the RAG store",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfgPath, _ := cmd.Flags().GetString("config")
-
-		cfg, err := config.Load(cfgPath)
-		if err != nil {
-			return fmt.Errorf("load config: %w", err)
-		}
-
 		dataDir := cfg.Project.DataDir
 		if dataDir == "" {
 			dataDir = ".conductor"
@@ -60,6 +52,3 @@ var indexCmd = &cobra.Command{
 	},
 }
 
-func init() {
-	indexCmd.Flags().String("config", "project.yaml", "Path to project config file")
-}

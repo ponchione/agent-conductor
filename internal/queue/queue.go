@@ -4,17 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
+	goerrors "errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/database"
+	pipelineerrors "github.com/ponchione/agent-conductor/internal/errors"
 )
 
 var (
-	ErrNoTasks        = errors.New("no tasks available")
-	ErrWorkflowPaused = errors.New("workflow is paused")
+	ErrNoTasks        = goerrors.New("no tasks available")
+	ErrWorkflowPaused = goerrors.New("workflow is paused")
 )
 
 type Queue struct {
@@ -99,7 +100,11 @@ func (q *Queue) RetryTask(taskID string) error {
 	return q.db.RetryTask(context.Background(), taskID)
 }
 
-func (q *Queue) ShouldRetry(task *database.Task) bool {
+func (q *Queue) ShouldRetry(task *database.Task, err error) bool {
+	var pe *pipelineerrors.PipelineError
+	if goerrors.As(err, &pe) && pe.Class != pipelineerrors.Retryable {
+		return false
+	}
 	return task.Attempts < task.MaxAttempts
 }
 

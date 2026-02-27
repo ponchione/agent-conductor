@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/spf13/cobra"
 )
@@ -13,16 +12,12 @@ import (
 var statusCmd = &cobra.Command{
 	Use:   "status <workflow-id>",
 	Short: "Show the current status of a workflow",
-	Args:  cobra.ExactArgs(1),
+	Long: `Show detailed status for a workflow.
+
+The workflow ID can be a full UUID or a unique prefix (e.g. the 8-char prefix
+shown by 'conductor list').`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectPath, _ := cmd.Flags().GetString("project")
-		workflowID := args[0]
-
-		cfg, err := config.Load(projectPath)
-		if err != nil {
-			return fmt.Errorf("failed to load config: %w", err)
-		}
-
 		dbPath := filepath.Join(cfg.Project.DataDir, "db", "conductor.db")
 		db, err := database.NewDB(dbPath)
 		if err != nil {
@@ -31,7 +26,11 @@ var statusCmd = &cobra.Command{
 		defer db.Close()
 
 		ctx := context.Background()
-		wf, err := db.GetWorkflow(ctx, workflowID)
+		resolvedID, err := resolveWorkflowID(ctx, db, args[0])
+		if err != nil {
+			return err
+		}
+		wf, err := db.GetWorkflow(ctx, resolvedID)
 		if err != nil {
 			return fmt.Errorf("failed to fetch workflow: %w", err)
 		}
@@ -74,8 +73,4 @@ var statusCmd = &cobra.Command{
 
 		return nil
 	},
-}
-
-func init() {
-	statusCmd.Flags().String("project", "project.yaml", "Path to project config file")
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ponchione/agent-conductor/internal/database"
+	pipelineerrors "github.com/ponchione/agent-conductor/internal/errors"
 	"github.com/ponchione/agent-conductor/internal/executor"
 	"github.com/ponchione/agent-conductor/internal/queue"
 )
@@ -24,13 +25,13 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	// 1. Get Workflow
 	wf, err := w.db.GetWorkflow(ctx, task.WorkflowID)
 	if err != nil {
-		return fmt.Errorf("workflow missing: %w", err)
+		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "workflow missing: %w", err)
 	}
 
 	// 2. Validate context package path
 	contextPath := wf.ContextPackagePath.String
 	if !wf.ContextPackagePath.Valid {
-		return fmt.Errorf("context package path is missing")
+		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "context package path is missing")
 	}
 
 	workOrderPath := wf.OriginalFile
@@ -48,11 +49,12 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 
 	result, err := w.runner.Run(ctx, runCfg)
 	if err != nil {
-		return fmt.Errorf("build execution failed: %w", err)
+		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "build execution failed: %w", err)
 	}
 
 	if !result.Success {
-		return fmt.Errorf("build failed with exit code %d", result.ExitCode)
+		return pipelineerrors.NeedsHumanf("build", task.WorkflowID, task.ID,
+			"build agent exited with code %d", result.ExitCode)
 	}
 
 	// 4a. Commit changes made by the build agent
@@ -62,7 +64,7 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	} else if hasChanges {
 		commitMsg := fmt.Sprintf("Build phase implementation [%s]", task.ID)
 		if err := w.git.Commit(w.cfg.Project.Path, commitMsg); err != nil {
-			return fmt.Errorf("failed to commit build changes: %w", err)
+			return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "failed to commit build changes: %w", err)
 		}
 	} else {
 		slog.Warn("No changes to commit after build phase", "task", task.ID)
@@ -77,7 +79,7 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 			for _, changed := range changedFiles {
 				for _, forbidden := range w.cfg.Safety.ForbiddenPaths {
 					if strings.EqualFold(changed, forbidden) || strings.HasSuffix(changed, "/"+forbidden) {
-						return fmt.Errorf("forbidden path violation: build agent modified %q which is listed in safety.forbidden_paths", changed)
+						return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "forbidden path violation: build agent modified %q which is listed in safety.forbidden_paths", changed)
 					}
 				}
 			}
@@ -141,7 +143,7 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		State:         "pending",
 		MaxAttempts:   2,
 	}); err != nil {
-		return fmt.Errorf("failed to create verify task: %w", err)
+		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "failed to create verify task: %w", err)
 	}
 
 	return nil

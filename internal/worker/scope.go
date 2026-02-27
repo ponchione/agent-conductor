@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ponchione/agent-conductor/internal/database"
+	pipelineerrors "github.com/ponchione/agent-conductor/internal/errors"
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
@@ -27,18 +28,18 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	// 1. Read Work Order
 	woContent, err := os.ReadFile(task.InputArtifact)
 	if err != nil {
-		return fmt.Errorf("failed to read work order: %w", err)
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to read work order: %w", err)
 	}
 
 	var wo models.WorkOrder
 	if err := yaml.Unmarshal(woContent, &wo); err != nil {
-		return fmt.Errorf("failed to parse work order: %w", err)
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to parse work order: %w", err)
 	}
 
 	// 2. Assemble Context
 	contextBlock, err := w.assembler.Assemble(ctx, &wo)
 	if err != nil {
-		return fmt.Errorf("context assembly failed: %w", err)
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "context assembly failed: %w", err)
 	}
 
 	// 3. Call LLM with retry
@@ -65,7 +66,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 			continue
 		}
 
-		cleanedJSON := cleanLLMResponse(jsonStr)
+		cleanedJSON := llm.CleanLLMResponse(jsonStr)
 
 		if err := json.Unmarshal([]byte(cleanedJSON), &pkg); err != nil {
 			lastErr = fmt.Errorf("invalid json from llm (attempt %d): %w", attempt, err)
@@ -78,18 +79,19 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	}
 
 	if lastErr != nil {
-		return lastErr
+		return pipelineerrors.Retryablef("scope", task.WorkflowID, task.ID,
+			"llm failed after %d attempts: %w", maxAttempts, lastErr)
 	}
 
 	// 4. Write Context Package to Disk
 	pkgDir := filepath.Join(w.cfg.Project.DataDir, "artifacts", "context-packages")
 	if err := os.MkdirAll(pkgDir, 0755); err != nil {
-		return fmt.Errorf("failed to create context-packages dir: %w", err)
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to create context-packages dir: %w", err)
 	}
 	pkgPath := filepath.Join(pkgDir, task.WorkflowID+"-context-package.json")
 	pkgData, _ := json.MarshalIndent(pkg, "", "  ")
 	if err := os.WriteFile(pkgPath, pkgData, 0644); err != nil {
-		return fmt.Errorf("failed to write context package: %w", err)
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to write context package: %w", err)
 	}
 
 	// 5. Record scope metrics in pipeline_run
@@ -109,7 +111,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		ID:                 task.WorkflowID,
 		ContextPackagePath: sql.NullString{String: pkgPath, Valid: true},
 	}); err != nil {
-		return fmt.Errorf("failed to update workflow context path: %w", err)
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to update workflow context path: %w", err)
 	}
 
 	if err := w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
@@ -150,7 +152,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		State:         "pending",
 		MaxAttempts:   1, // No retries for build
 	}); err != nil {
-		return fmt.Errorf("failed to create build task: %w", err)
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to create build task: %w", err)
 	}
 
 	return nil

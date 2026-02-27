@@ -56,7 +56,7 @@ func TestAssembler_Assemble(t *testing.T) {
 	// Actually New() takes the config pointer.
 	gitMgr = git.New(cfg)
 
-	assembler := NewAssembler(cfg, gitMgr)
+	assembler := NewAssembler(cfg, gitMgr, nil)
 
 	wo := &models.WorkOrder{
 		Title:        "Test Feature",
@@ -87,4 +87,77 @@ func TestAssembler_Assemble(t *testing.T) {
 		t.Error("Missing schema.sql listing")
 	}
 	// Git section might be empty or error message, that's fine for this unit test
+}
+
+func TestAssembler_NilSearcher(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "conductor-context-nilrag-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.ProjectConfig{
+		Project: config.Project{
+			Path:    tmpDir,
+			DataDir: filepath.Join(tmpDir, "data"),
+		},
+		Conventions: config.Conventions{
+			ModulePath: "internal/features",
+		},
+	}
+	gitMgr := git.New(cfg)
+	assembler := NewAssembler(cfg, gitMgr, nil)
+
+	wo := &models.WorkOrder{
+		Title:        "Nil Searcher Test",
+		TargetModule: "auth",
+		Type:         "new_feature",
+	}
+
+	result, err := assembler.Assemble(context.Background(), wo)
+	if err != nil {
+		t.Fatalf("Assemble failed: %v", err)
+	}
+	if strings.Contains(result, "SEMANTICALLY RELEVANT CODE") {
+		t.Error("RAG section should not appear when searcher is nil")
+	}
+}
+
+func TestAssembler_SchemaChangeHints(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "conductor-context-schema-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sqlDir := filepath.Join(tmpDir, "sql")
+	os.MkdirAll(sqlDir, 0755)
+	os.WriteFile(filepath.Join(sqlDir, "schema.sql"), []byte("CREATE TABLE orders (id INT);\n"), 0644)
+
+	cfg := &config.ProjectConfig{
+		Project: config.Project{
+			Path:    tmpDir,
+			DataDir: filepath.Join(tmpDir, "data"),
+		},
+		Conventions: config.Conventions{
+			ModulePath: "internal/features",
+			SQLPath:    "sql",
+		},
+	}
+	gitMgr := git.New(cfg)
+	assembler := NewAssembler(cfg, gitMgr, nil)
+
+	wo := &models.WorkOrder{
+		Title:        "Add Orders Table",
+		TargetModule: "orders",
+		Type:         "schema_change",
+	}
+
+	result, err := assembler.Assemble(context.Background(), wo)
+	if err != nil {
+		t.Fatalf("Assemble failed: %v", err)
+	}
+	if !strings.Contains(result, "Additional context (sql):") {
+		t.Error("Expected 'Additional context (sql):' section for schema_change type")
+	}
 }

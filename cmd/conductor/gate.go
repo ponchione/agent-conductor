@@ -5,34 +5,35 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/ponchione/agent-conductor/internal/config"
+	"github.com/google/uuid"
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/gate"
 	"github.com/spf13/cobra"
 )
 
-func openDB(projectPath string) (*database.DB, *config.ProjectConfig, error) {
-	cfg, err := config.Load(projectPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load config: %w", err)
-	}
+func openDB() (*database.DB, error) {
 	dbPath := filepath.Join(cfg.Project.DataDir, "db", "conductor.db")
 	db, err := database.NewDB(dbPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
-	return db, cfg, nil
+	return db, nil
 }
 
 var approveCmd = &cobra.Command{
 	Use:   "approve <workflow-id>",
 	Short: "Approve a workflow in human_review and merge its branch",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		projectPath, _ := cmd.Flags().GetString("project")
-		workflowID := args[0]
+	Long: `Approve a workflow that is waiting in human_review state.
 
-		db, _, err := openDB(projectPath)
+The workflow ID must be a full UUID (e.g. from 'conductor list').`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		workflowID := args[0]
+		if _, err := uuid.Parse(workflowID); err != nil {
+			return fmt.Errorf("invalid workflow ID %q: expected a UUID (e.g. from 'conductor list')", workflowID)
+		}
+
+		db, err := openDB()
 		if err != nil {
 			return err
 		}
@@ -50,16 +51,23 @@ var approveCmd = &cobra.Command{
 var rejectCmd = &cobra.Command{
 	Use:   "reject <workflow-id> [reason]",
 	Short: "Reject a workflow in human_review",
-	Args:  cobra.RangeArgs(1, 2),
+	Long: `Reject a workflow that is waiting in human_review state.
+
+The workflow ID must be a full UUID (e.g. from 'conductor list').
+An optional reason can be provided as the second argument.`,
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectPath, _ := cmd.Flags().GetString("project")
 		workflowID := args[0]
+		if _, err := uuid.Parse(workflowID); err != nil {
+			return fmt.Errorf("invalid workflow ID %q: expected a UUID (e.g. from 'conductor list')", workflowID)
+		}
+
 		reason := ""
 		if len(args) > 1 {
 			reason = args[1]
 		}
 
-		db, _, err := openDB(projectPath)
+		db, err := openDB()
 		if err != nil {
 			return err
 		}
@@ -72,9 +80,4 @@ var rejectCmd = &cobra.Command{
 		fmt.Printf("Workflow %s rejected: %s\n", workflowID, reason)
 		return nil
 	},
-}
-
-func init() {
-	approveCmd.Flags().String("project", "project.yaml", "Path to project config file")
-	rejectCmd.Flags().String("project", "project.yaml", "Path to project config file")
 }

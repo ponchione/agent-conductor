@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/spf13/cobra"
 )
@@ -16,13 +15,6 @@ var statsCmd = &cobra.Command{
 	Short: "Display pipeline statistics",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectPath, _ := cmd.Flags().GetString("project")
-
-		cfg, err := config.Load(projectPath)
-		if err != nil {
-			return fmt.Errorf("failed to load config: %w", err)
-		}
-
 		dbPath := filepath.Join(cfg.Project.DataDir, "db", "conductor.db")
 		db, err := database.NewDB(dbPath)
 		if err != nil {
@@ -103,10 +95,6 @@ var statsCmd = &cobra.Command{
 
 		return nil
 	},
-}
-
-func init() {
-	statsCmd.Flags().String("project", "project.yaml", "Path to project config file")
 }
 
 func nullF64ToInt(f sql.NullFloat64) int64 {

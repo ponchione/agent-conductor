@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,23 +14,69 @@ import (
 	"github.com/ponchione/agent-conductor/internal/models"
 )
 
-// Assembler gathers and formats context for the LLM.
-type Assembler struct {
-	cfg *config.ProjectConfig
-	git *git.GitManager
+// RAGSearcher performs semantic search and returns a pre-formatted context
+// block ready for injection. Returning an empty string means no results.
+// Defined here so the context package stays free of CGo dependencies.
+type RAGSearcher interface {
+	SearchFormatted(ctx context.Context, query string, topK int) (string, error)
 }
 
-// NewAssembler creates a new context assembler.
-func NewAssembler(cfg *config.ProjectConfig, gitMgr *git.GitManager) *Assembler {
+// Assembler gathers and formats context for the LLM.
+type Assembler struct {
+	cfg      *config.ProjectConfig
+	git      *git.GitManager
+	searcher RAGSearcher // nil if RAG not configured
+}
+
+// NewAssembler creates a new context assembler. searcher may be nil.
+func NewAssembler(cfg *config.ProjectConfig, gitMgr *git.GitManager, searcher RAGSearcher) *Assembler {
 	return &Assembler{
-		cfg: cfg,
-		git: gitMgr,
+		cfg:      cfg,
+		git:      gitMgr,
+		searcher: searcher,
+	}
+}
+
+// AssemblyHints controls per-type context gathering behaviour.
+type AssemblyHints struct {
+	ExtraDirScans []string // repo-relative dirs to list as additional context
+	ExpandHistory int      // if > 0, override default 5-commit git history
+	BroadGrep     bool     // if true, git history without module path filter
+}
+
+// HintsForType returns AssemblyHints appropriate for the given work order type.
+func HintsForType(woType string, conv config.Conventions) AssemblyHints {
+	switch woType {
+	case "schema_change":
+		var dirs []string
+		if conv.SQLPath != "" {
+			dirs = []string{conv.SQLPath}
+		}
+		return AssemblyHints{ExtraDirScans: dirs}
+	case "bug_fix":
+		return AssemblyHints{ExpandHistory: 10, BroadGrep: true}
+	case "refactor":
+		var dirs []string
+		if conv.SharedPath != "" {
+			dirs = []string{conv.SharedPath}
+		}
+		return AssemblyHints{ExtraDirScans: dirs}
+	case "docs":
+		var dirs []string
+		if conv.DocsPath != "" {
+			dirs = []string{conv.DocsPath}
+		}
+		return AssemblyHints{ExtraDirScans: dirs}
+	default: // new_feature and unknown
+		return AssemblyHints{}
 	}
 }
 
 // Assemble gathers context and returns a formatted string.
 func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder) (string, error) {
 	var sb bytes.Buffer
+
+	hints := HintsForType(wo.Type, a.cfg.Conventions)
 
 	// 1. Work Order Header
 	sb.WriteString("=== WORK ORDER ===\n")
@@ -89,10 +136,16 @@ func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder) (string,
 	sb.WriteString("\n")
 
 	// 5. Git History
-	sb.WriteString("Recent changes to related files (last 5 commits):\n")
+	commitCount := 5
+	if hints.ExpandHistory > 0 {
+		commitCount = hints.ExpandHistory
+	}
 	relFilter := filepath.Join(a.cfg.Conventions.ModulePath, wo.TargetModule)
-
-	commits, err := a.git.GetRecentCommits(a.cfg.Project.Path, 5, relFilter)
+	if hints.BroadGrep {
+		relFilter = ""
+	}
+	sb.WriteString(fmt.Sprintf("Recent changes to related files (last %d commits):\n", commitCount))
+	commits, err := a.git.GetRecentCommits(a.cfg.Project.Path, commitCount, relFilter)
 	if err == nil && len(commits) > 0 {
 		for _, c := range commits {
 			sb.WriteString(fmt.Sprintf("  %s - %s (%s)\n", c.Hash, c.Message, c.Author))
@@ -109,6 +162,31 @@ func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder) (string,
 			sb.WriteString(fmt.Sprintf("  %s\n", kf))
 		}
 		sb.WriteString("\n")
+	}
+
+	// 7. Extra directory scans (per-type hints)
+	for _, dir := range hints.ExtraDirScans {
+		absDir := filepath.Join(a.cfg.Project.Path, dir)
+		sb.WriteString(fmt.Sprintf("Additional context (%s):\n", dir))
+		files, err := a.listFiles(absDir, a.cfg.Project.Path)
+		if err == nil {
+			for _, f := range files {
+				sb.WriteString(fmt.Sprintf("  %s (%d lines)\n", f.Name, f.Lines))
+			}
+		} else {
+			sb.WriteString(fmt.Sprintf("  (Directory not found: %s)\n", err))
+		}
+		sb.WriteString("\n")
+	}
+
+	// 8. RAG results
+	if a.searcher != nil {
+		block, err := a.searcher.SearchFormatted(ctx, wo.Title, 10)
+		if err != nil {
+			slog.Warn("RAG search failed, continuing without", "error", err)
+		} else if block != "" {
+			sb.WriteString(block)
+		}
 	}
 
 	return sb.String(), nil

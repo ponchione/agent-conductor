@@ -47,23 +47,6 @@ func (db *DB) AtomicClaimTask(ctx context.Context, workerID string) (*Task, erro
 	return &task, nil
 }
 
-// ApproveWorkflow transitions a workflow from human_review to completed.
-func (db *DB) ApproveWorkflow(ctx context.Context, workflowID string) error {
-	_, err := db.conn.ExecContext(ctx,
-		`UPDATE workflows SET current_state = 'completed', completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`,
-		workflowID,
-	)
-	return err
-}
-
-// RejectWorkflow transitions a workflow from human_review to failed with a reason.
-func (db *DB) RejectWorkflow(ctx context.Context, workflowID, reason string) error {
-	_, err := db.conn.ExecContext(ctx,
-		`UPDATE workflows SET current_state = 'failed', error_message = ?, completed_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`,
-		reason, workflowID,
-	)
-	return err
-}
 
 func (db *DB) LogEvent(workflowID, taskID, eventType string, data map[string]any) error {
 	var dataJson []byte

@@ -30,6 +30,13 @@ func IndexRepo(
 		return err
 	}
 
+	hashFile := filepath.Join(cfg.Project.DataDir, "rag_file_hashes.json")
+	fileHashes, err := loadFileHashes(hashFile)
+	if err != nil {
+		slog.Warn("could not load file hashes, re-indexing all", "error", err)
+		fileHashes = make(map[string]string)
+	}
+
 	var filesVisited, filesIndexed, totalChunks int
 
 	walkErr := filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
@@ -74,13 +81,10 @@ func IndexRepo(
 			return nil
 		}
 
-		// Change detection: skip if content hash matches stored chunks.
-		existing, err := store.ChunksByFilePath(ctx, relPath)
-		if err == nil && len(existing) > 0 {
-			if existing[0].ContentHash == ContentHashOf(string(content)) {
-				slog.Info("skipping unchanged file", "path", relPath)
-				return nil
-			}
+		fileHash := ContentHashOf(string(content))
+		if fileHashes[relPath] == fileHash {
+			slog.Info("skipping unchanged file", "path", relPath)
+			return nil
 		}
 
 		lang := langFromExt(filepath.Ext(relPath))
@@ -121,6 +125,7 @@ func IndexRepo(
 			return nil
 		}
 
+		fileHashes[relPath] = fileHash
 		filesIndexed++
 		totalChunks += len(chunks)
 		slog.Info("indexed file", "path", relPath, "chunks", len(chunks))
@@ -132,6 +137,10 @@ func IndexRepo(
 		"files_indexed", filesIndexed,
 		"total_chunks", totalChunks,
 	)
+
+	if saveErr := saveFileHashes(hashFile, fileHashes); saveErr != nil {
+		slog.Warn("could not save file hashes", "error", saveErr)
+	}
 
 	return walkErr
 }

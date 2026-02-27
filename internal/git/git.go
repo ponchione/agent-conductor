@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -32,7 +33,7 @@ func (g *GitManager) CreateBranch(repoPath, branchName, baseBranch string) error
 		RemoteName: "origin",
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate && err != git.ErrRemoteNotFound {
-
+		slog.Warn("git fetch failed", "error", err)
 	}
 
 	// Resolve the Hash of the base branch

@@ -2,12 +2,14 @@ package worker
 
 import (
 	stdctx "context"
+	goerrors "errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/context"
 	"github.com/ponchione/agent-conductor/internal/database"
+	pipelineerrors "github.com/ponchione/agent-conductor/internal/errors"
 	"github.com/ponchione/agent-conductor/internal/executor"
 	"github.com/ponchione/agent-conductor/internal/git"
 	"github.com/ponchione/agent-conductor/internal/llm"
@@ -23,7 +25,7 @@ type Worker struct {
 	cfg       *config.ProjectConfig
 	assembler *context.Assembler
 	llm       *llm.Client
-	runner    *executor.OpenCodeRunner
+	runner    executor.BuildExecutor
 	git       *git.GitManager
 	prompts   *templates.LoadedPrompts
 }
@@ -35,7 +37,7 @@ func New(
 	cfg *config.ProjectConfig,
 	assembler *context.Assembler,
 	llmClient *llm.Client,
-	runner *executor.OpenCodeRunner,
+	runner executor.BuildExecutor,
 	gitMgr *git.GitManager,
 	prompts *templates.LoadedPrompts,
 ) *Worker {
@@ -81,19 +83,37 @@ func (w *Worker) ProcessNextTask(ctx stdctx.Context) {
 	}
 
 	if result != nil {
-		slog.Error("Task failed", "id", task.ID, "phase", task.Phase, "error", result)
+		var pe *pipelineerrors.PipelineError
+		if !goerrors.As(result, &pe) {
+			// unknown phase or future error not yet wrapped — treat as Fatal
+			pe = pipelineerrors.Fatalf(task.Phase, task.WorkflowID, task.ID, "%v", result)
+		}
 
+		slog.Error("Task failed",
+			"id", task.ID, "phase", task.Phase,
+			"class", pe.Class.String(), "error", pe)
 		w.db.LogEvent(task.WorkflowID, task.ID, task.Phase+"_failed", map[string]any{
-			"error": result.Error(),
+			"error": pe.Error(), "class": pe.Class.String(),
 		})
 
-		w.q.FailTask(task.ID, result)
-
-		if err := w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
-			ID:           task.WorkflowID,
-			CurrentState: "failed",
-		}); err != nil {
-			slog.Error("Failed to update workflow state to failed", "workflow", task.WorkflowID, "error", err)
+		switch pe.Class {
+		case pipelineerrors.Retryable:
+			if w.q.ShouldRetry(task, result) {
+				w.q.RetryTask(task.ID)
+				return
+			}
+			// retries exhausted — fall through to fail
+		case pipelineerrors.NeedsHuman:
+			w.q.FailTask(task.ID, result)
+			w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
+				ID: task.WorkflowID, CurrentState: "human_review",
+			})
+			return
 		}
+		// Fatal or Retryable-exhausted
+		w.q.FailTask(task.ID, result)
+		w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
+			ID: task.WorkflowID, CurrentState: "failed",
+		})
 	}
 }

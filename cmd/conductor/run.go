@@ -17,6 +17,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
+	"github.com/ponchione/agent-conductor/internal/rag"
 	"github.com/ponchione/agent-conductor/internal/templates"
 	"github.com/ponchione/agent-conductor/internal/worker"
 	"github.com/spf13/cobra"
@@ -28,18 +29,29 @@ var runCmd = &cobra.Command{
 	Short: "Execute a work order synchronously",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		projectPath, _ := cmd.Flags().GetString("project")
-
-		cfg, err := config.Load(projectPath)
+		// 1. Parse and validate work order FIRST — before any side effects
+		absPath, err := filepath.Abs(args[0])
 		if err != nil {
-			slog.Error("Failed to load config", "path", projectPath, "error", err)
-			return err
+			return fmt.Errorf("invalid path: %w", err)
 		}
-		if err := config.Validate(cfg); err != nil {
-			slog.Error("Invalid config", "path", projectPath, "error", err)
-			return err
+		data, err := os.ReadFile(absPath)
+		if err != nil {
+			return fmt.Errorf("work order not found: %w", err)
+		}
+		var wo models.WorkOrder
+		if err := yaml.Unmarshal(data, &wo); err != nil {
+			return fmt.Errorf("invalid work order YAML: %w", err)
+		}
+		if err := wo.Validate(); err != nil {
+			return fmt.Errorf("work order validation failed: %w", err)
 		}
 
+		// 2. Validate config
+		if err := config.Validate(cfg); err != nil {
+			return fmt.Errorf("invalid config: %w", err)
+		}
+
+		// 3. Load prompts and set up infrastructure
 		prompts, err := templates.LoadPrompts(cfg)
 		if err != nil {
 			slog.Error("Failed to load prompts", "error", err)
@@ -63,42 +75,34 @@ var runCmd = &cobra.Command{
 
 		gitMgr := git.New(cfg)
 		q := queue.New(cfg, db)
-		runner := executor.New(cfg)
+		runner := executor.NewExecutor(cfg)
 		llmClient := llm.New(cfg.LocalModel)
-		assembler := condctx.NewAssembler(cfg, gitMgr)
+
+		var ragSearcher condctx.RAGSearcher
+		if cfg.EmbedModel.Endpoint != "" {
+			lanceDir := filepath.Join(cfg.Project.DataDir, "lancedb")
+			store, err := rag.NewStore(context.Background(), lanceDir)
+			if err != nil {
+				slog.Warn("RAG store unavailable, proceeding without RAG", "error", err)
+			} else {
+				embedder := rag.NewEmbedder(rag.EmbedderConfig{
+					Endpoint:       cfg.EmbedModel.Endpoint,
+					TimeoutSeconds: cfg.EmbedModel.TimeoutSeconds,
+				})
+				ragSearcher = rag.NewSearcher(store, embedder)
+			}
+		}
+		assembler := condctx.NewAssembler(cfg, gitMgr, ragSearcher)
 
 		w := worker.New("worker-1", q, db, cfg, assembler, llmClient, runner, gitMgr, prompts)
 
-		return runSync(args[0], w, db, cfg, gitMgr)
+		return runSync(absPath, wo, w, db, cfg, gitMgr)
 	},
 }
 
-func init() {
-	runCmd.Flags().String("project", "project.yaml", "Path to project config file")
-}
-
-// runSync executes a work order synchronously
-func runSync(woPath string, w *worker.Worker, db *database.DB, cfg *config.ProjectConfig, gitMgr *git.GitManager) error {
-	absPath, err := filepath.Abs(woPath)
-	if err != nil {
-		return fmt.Errorf("invalid path: %w", err)
-	}
-
-	if _, err := os.Stat(absPath); os.IsNotExist(err) {
-		return fmt.Errorf("file not found: %s", absPath)
-	}
-
+// runSync executes a work order synchronously.
+func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database.DB, cfg *config.ProjectConfig, gitMgr *git.GitManager) error {
 	fmt.Printf("Starting synchronous execution for: %s\n\n", absPath)
-
-	// Parse work order to get type for pipeline_run tracking
-	var wo models.WorkOrder
-	if data, err := os.ReadFile(absPath); err == nil {
-		if err := yaml.Unmarshal(data, &wo); err == nil {
-			if err := wo.Validate(); err != nil {
-				return fmt.Errorf("invalid work order: %w", err)
-			}
-		}
-	}
 
 	ctx := context.Background()
 
@@ -112,7 +116,7 @@ func runSync(woPath string, w *worker.Worker, db *database.DB, cfg *config.Proje
 		return fmt.Errorf("git create branch failed: %w", err)
 	}
 
-	err = db.CreateWorkflow(ctx, database.CreateWorkflowParams{
+	err := db.CreateWorkflow(ctx, database.CreateWorkflowParams{
 		ID:                     wfID,
 		OriginalIntent:         "Work Order: " + filepath.Base(absPath),
 		OriginalFile:           absPath,

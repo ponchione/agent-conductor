@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/ponchione/agent-conductor/internal/database"
+	pipelineerrors "github.com/ponchione/agent-conductor/internal/errors"
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
@@ -72,26 +73,26 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 
 	wf, err := w.db.GetWorkflow(ctx, task.WorkflowID)
 	if err != nil {
-		return fmt.Errorf("workflow missing: %w", err)
+		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "workflow missing: %w", err)
 	}
 
 	// 1. Commit any uncommitted changes left by the build agent
 	hasChanges, err := w.git.HasUncommittedChanges(w.cfg.Project.Path)
 	if err != nil {
-		return fmt.Errorf("failed to check for uncommitted changes: %w", err)
+		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to check for uncommitted changes: %w", err)
 	}
 
 	if hasChanges {
 		slog.Info("Committing agent changes to feature branch before verification")
 		if err := w.git.Commit(w.cfg.Project.Path, "Agent build phase implementation"); err != nil {
-			return fmt.Errorf("failed to commit agent changes: %w", err)
+			return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to commit agent changes: %w", err)
 		}
 	}
 
 	// 2. Get Git Diff
 	diff, err := w.git.GetDiff(w.cfg.Project.Path, "main", wf.GitBranch)
 	if err != nil {
-		return fmt.Errorf("git diff failed: %w", err)
+		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "git diff failed: %w", err)
 	}
 
 	if diff == "" {
@@ -102,16 +103,16 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 	// 3. Read work order and context package
 	woContent, err := os.ReadFile(wf.OriginalFile)
 	if err != nil {
-		return fmt.Errorf("failed to read work order: %w", err)
+		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to read work order: %w", err)
 	}
 
 	cpPath := wf.ContextPackagePath.String
 	if !wf.ContextPackagePath.Valid {
-		return fmt.Errorf("missing context package path")
+		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "missing context package path")
 	}
 	cpContent, err := os.ReadFile(cpPath)
 	if err != nil {
-		return fmt.Errorf("failed to read context package: %w", err)
+		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to read context package: %w", err)
 	}
 
 	// 4. Parse work order for acceptance criteria and run deterministic pre-checks
@@ -224,7 +225,7 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 
 			slog.Debug("Raw LLM response", "attempt", attempt, "response", jsonStr)
 
-			cleanedJSON := cleanLLMResponse(jsonStr)
+			cleanedJSON := llm.CleanLLMResponse(jsonStr)
 
 			slog.Debug("Cleaned JSON for parsing", "json", cleanedJSON)
 
@@ -240,7 +241,8 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		}
 
 		if lastErr != nil {
-			return lastErr
+			return pipelineerrors.Retryablef("verify", task.WorkflowID, task.ID,
+				"llm failed after %d attempts: %w", maxAttempts, lastErr)
 		}
 
 		// 8. Merge pre-checked results into the report (prepend so they appear first)
@@ -298,12 +300,12 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 	// 10. Write Report
 	reportDir := filepath.Join(w.cfg.Project.DataDir, "artifacts", "verify-reports")
 	if err := os.MkdirAll(reportDir, 0755); err != nil {
-		return fmt.Errorf("failed to create verify-reports dir: %w", err)
+		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to create verify-reports dir: %w", err)
 	}
 	reportPath := filepath.Join(reportDir, task.WorkflowID+"-verify-report.json")
 	reportData, _ := json.MarshalIndent(report, "", "  ")
 	if err := os.WriteFile(reportPath, reportData, 0644); err != nil {
-		return fmt.Errorf("failed to write verification report: %w", err)
+		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to write verification report: %w", err)
 	}
 
 	// 11. Update Workflow State → HUMAN_REVIEW
@@ -312,7 +314,13 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		VerificationReportPath: sql.NullString{String: reportPath, Valid: true},
 		CurrentState:           "human_review",
 	}); err != nil {
-		return fmt.Errorf("failed to update workflow verification: %w", err)
+		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to update workflow verification: %w", err)
+	}
+
+	// If all pre-checks failed, the report and workflow state are recorded; signal human review.
+	if allPreFailed {
+		return pipelineerrors.NeedsHumanf("verify", task.WorkflowID, task.ID,
+			"all pre-checks failed; skipping LLM evaluation")
 	}
 
 	w.db.LogEvent(task.WorkflowID, task.ID, "verify_completed", map[string]any{
@@ -335,17 +343,4 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		ExitCode:  0,
 		StdoutLog: fmt.Sprintf("Verification Status: %s", report.Status),
 	})
-}
-
-func cleanLLMResponse(raw string) string {
-	// 1. Find the first '{' and the last '}'
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-
-	if start == -1 || end == -1 || end < start {
-		return strings.TrimSpace(raw) // Fallback to raw if no braces found
-	}
-
-	// 2. Extract exactly the JSON object
-	return raw[start : end+1]
 }
