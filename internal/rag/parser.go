@@ -34,6 +34,10 @@ func ParseFile(filePath string, language string, content []byte) ([]RawChunk, er
 		return parseGo(content)
 	case "markdown", "md":
 		return parseMarkdown(content)
+	case "typescript":
+		return parseTypeScript(content, false)
+	case "tsx":
+		return parseTypeScript(content, true)
 	default:
 		return parseFallback(filePath, content), nil
 	}

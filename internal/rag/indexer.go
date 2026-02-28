@@ -344,6 +344,10 @@ func langFromExt(ext string) string {
 		return "go"
 	case ".md":
 		return "markdown"
+	case ".ts":
+		return "typescript"
+	case ".tsx":
+		return "tsx"
 	default:
 		return ""
 	}
