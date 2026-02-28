@@ -9,7 +9,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-
 // ProjectConfig replaces the old global Config.
 // It maps to the new project.yaml schema for a single-project orchestrator.
 type ProjectConfig struct {
@@ -72,10 +71,10 @@ type Safety struct {
 }
 
 type Executor struct {
-	Tool           string          `yaml:"tool"`
-	TimeoutMinutes int             `yaml:"timeout_minutes"`
+	Tool           string           `yaml:"tool"`
+	TimeoutMinutes int              `yaml:"timeout_minutes"`
 	ClaudeCode     ClaudeCodeConfig `yaml:"claude_code"`
-	OpenCode       OpenCodeConfig  `yaml:"opencode"`
+	OpenCode       OpenCodeConfig   `yaml:"opencode"`
 }
 
 // ClaudeCodeConfig is reserved for future tool-specific config.
@@ -127,7 +126,7 @@ func Load(projectPath string) (*ProjectConfig, error) {
 	}
 
 	// 2. Global config — optional, missing file is not an error
-	globalPath := filepath.Join(home, ".conductor", "config.yaml")
+	globalPath := filepath.Join(home, "source", ".conductor", "config.yaml")
 	if globalData, err := os.ReadFile(globalPath); err == nil {
 		if err := yaml.Unmarshal(globalData, cfg); err != nil {
 			return nil, fmt.Errorf("failed to parse global config: %w", err)
@@ -149,7 +148,7 @@ func Load(projectPath string) (*ProjectConfig, error) {
 	}
 
 	// 5. Compute DataDir — always derived, never configurable
-	cfg.Project.DataDir = filepath.Join(home, ".conductor", "projects", cfg.Project.Name)
+	cfg.Project.DataDir = filepath.Join(home, "source", ".conductor", "projects", cfg.Project.Name)
 
 	return cfg, nil
 }

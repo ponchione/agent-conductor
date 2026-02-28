@@ -22,4 +22,4 @@ smokeparser:
 
 index:
     LD_LIBRARY_PATH=$(CURDIR)/lib/linux_amd64 \
-    ./bin/conductor index --config ./project.yaml
+    ./bin/conductor index --project ./project.yaml
