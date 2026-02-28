@@ -33,7 +33,7 @@ If the file already exists, the command prints its path and exits without modify
 		if err != nil {
 			return fmt.Errorf("could not determine home directory: %w", err)
 		}
-		dir := filepath.Join(home, ".conductor")
+		dir := filepath.Join(home, "source", ".conductor")
 		path := filepath.Join(dir, "config.yaml")
 
 		if _, err := os.Stat(path); err == nil {
