@@ -9,23 +9,26 @@ import (
 
 // DescriptionSystemPrompt is the system prompt for the local LLM when
 // generating semantic descriptions during indexing.
-const DescriptionSystemPrompt = `You are a code documentation assistant. Given a file containing source code,
-produce a brief semantic description for each function/method/type in the file.
+const DescriptionSystemPrompt = `You are a code documentation assistant. Given a file containing source code
+and optional relationship context, produce a brief semantic description for each
+function/method/type in the file.
 
 Respond ONLY in valid JSON with this schema:
 [
-  {"name": "FunctionName", "description": "1-2 sentence description of what this does and why"}
+  {"name": "FunctionName", "description": "1-3 sentence description"}
 ]
 
 Rules:
 - One entry per function, method, or type declaration
 - Descriptions should capture INTENT, not just restate the signature
+- When relationship context is provided, mention key relationships:
+  who calls this function, what it delegates to, and what types it uses
 - Focus on what the code does in the context of the application
-- Keep each description under 50 words`
+- Keep each description under 60 words`
 
 // MaxDescriptionFileLength is the maximum character length of file content
 // sent to the local LLM for description generation.
-const MaxDescriptionFileLength = 4000
+const MaxDescriptionFileLength = 6000
 
 // descriptionEntry is a single item in the LLM's JSON response.
 type descriptionEntry struct {
@@ -91,6 +94,68 @@ func (d *Describer) DescribeFile(ctx context.Context, filePath string, fileConte
 	}
 
 	return result, nil
+}
+
+// FormatRelationshipContext builds a structured relationship section from
+// chunk metadata for appending to file content before description generation.
+// Returns "" if no chunk has any relationship metadata.
+func FormatRelationshipContext(chunks []Chunk) string {
+	var b strings.Builder
+
+	for _, c := range chunks {
+		if c.Name == "" {
+			continue
+		}
+		if len(c.Calls) == 0 && len(c.CalledBy) == 0 && len(c.TypesUsed) == 0 && len(c.Implements) == 0 {
+			continue
+		}
+
+		b.WriteString("Function: ")
+		b.WriteString(c.Name)
+		b.WriteByte('\n')
+
+		if len(c.Calls) > 0 {
+			b.WriteString("  Calls: ")
+			b.WriteString(formatFuncRefs(c.Calls))
+			b.WriteByte('\n')
+		}
+		if len(c.CalledBy) > 0 {
+			b.WriteString("  Called by: ")
+			b.WriteString(formatFuncRefs(c.CalledBy))
+			b.WriteByte('\n')
+		}
+		if len(c.TypesUsed) > 0 {
+			b.WriteString("  Types used: ")
+			b.WriteString(strings.Join(c.TypesUsed, ", "))
+			b.WriteByte('\n')
+		}
+		if len(c.Implements) > 0 {
+			b.WriteString("  Implements: ")
+			b.WriteString(strings.Join(c.Implements, ", "))
+			b.WriteByte('\n')
+		}
+
+		b.WriteByte('\n')
+	}
+
+	if b.Len() == 0 {
+		return ""
+	}
+
+	return "=== RELATIONSHIP CONTEXT ===\n" + b.String()
+}
+
+// formatFuncRefs formats a slice of FuncRef as "Name (Package), Name2 (Package2)".
+func formatFuncRefs(refs []FuncRef) string {
+	parts := make([]string, len(refs))
+	for i, r := range refs {
+		if r.Package != "" {
+			parts[i] = r.Name + " (" + r.Package + ")"
+		} else {
+			parts[i] = r.Name
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // stripCodeFence removes markdown ```json ... ``` wrapping that local

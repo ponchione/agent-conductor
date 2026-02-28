@@ -76,20 +76,7 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "workflow missing: %w", err)
 	}
 
-	// 1. Commit any uncommitted changes left by the build agent
-	hasChanges, err := w.git.HasUncommittedChanges(w.cfg.Project.Path)
-	if err != nil {
-		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to check for uncommitted changes: %w", err)
-	}
-
-	if hasChanges {
-		slog.Info("Committing agent changes to feature branch before verification")
-		if err := w.git.Commit(w.cfg.Project.Path, "Agent build phase implementation"); err != nil {
-			return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to commit agent changes: %w", err)
-		}
-	}
-
-	// 2. Get Git Diff
+	// 1. Get Git Diff
 	diff, err := w.git.GetDiff(w.cfg.Project.Path, "main", wf.GitBranch)
 	if err != nil {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "git diff failed: %w", err)

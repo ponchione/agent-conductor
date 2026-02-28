@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -12,6 +13,10 @@ import (
 	"github.com/lancedb/lancedb-go/pkg/contracts"
 	"github.com/lancedb/lancedb-go/pkg/lancedb"
 )
+
+// SchemaVersion tracks the LanceDB table schema. Bump when columns change
+// to trigger a full re-index with DropAndRecreateTable.
+const SchemaVersion = "2"
 
 const tableName = "chunks"
 
@@ -86,6 +91,11 @@ func buildSchema() (contracts.ISchema, error) {
 		AddInt32Field("line_end", false).
 		AddStringField("content_hash", false).
 		AddTimestampField("indexed_at", arrow.Microsecond, false).
+		AddStringField("calls", true).
+		AddStringField("called_by", true).
+		AddStringField("types_used", true).
+		AddStringField("implements_ifaces", true).
+		AddStringField("imports", true).
 		AddVectorField("embedding", DefaultEmbeddingDims, contracts.VectorDataTypeFloat32, false).
 		Build()
 }
@@ -176,6 +186,23 @@ func (s *Store) ChunksByFilePath(ctx context.Context, filePath string) ([]Chunk,
 	return chunks, nil
 }
 
+// ChunksByName returns all stored chunks matching the given name field.
+// Used by the searcher for one-hop dependency expansion via the call graph.
+func (s *Store) ChunksByName(ctx context.Context, name string) ([]Chunk, error) {
+	filter := fmt.Sprintf("name = '%s'", name)
+	rows, err := s.table.SelectWithFilter(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select chunks by name %s: %w", name, err)
+	}
+
+	chunks := make([]Chunk, 0, len(rows))
+	for _, row := range rows {
+		chunk, _ := rowToChunk(row)
+		chunks = append(chunks, chunk)
+	}
+	return chunks, nil
+}
+
 // Close releases the table and connection.
 func (s *Store) Close() error {
 	if s.table != nil {
@@ -214,7 +241,12 @@ func (s *Store) chunksToRecord(chunks []Chunk, embeddings [][]float32) (arrow.Re
 	fLineEnd := builder.Field(10).(*array.Int32Builder)
 	fContentHash := builder.Field(11).(*array.StringBuilder)
 	fIndexedAt := builder.Field(12).(*array.TimestampBuilder)
-	fEmbedding := builder.Field(13).(*array.FixedSizeListBuilder)
+	fCalls := builder.Field(13).(*array.StringBuilder)
+	fCalledBy := builder.Field(14).(*array.StringBuilder)
+	fTypesUsed := builder.Field(15).(*array.StringBuilder)
+	fImplements := builder.Field(16).(*array.StringBuilder)
+	fImports := builder.Field(17).(*array.StringBuilder)
+	fEmbedding := builder.Field(18).(*array.FixedSizeListBuilder)
 	fEmbValues := fEmbedding.ValueBuilder().(*array.Float32Builder)
 
 	for i, c := range chunks {
@@ -231,6 +263,11 @@ func (s *Store) chunksToRecord(chunks []Chunk, embeddings [][]float32) (arrow.Re
 		fLineEnd.Append(int32(c.LineEnd))
 		fContentHash.Append(c.ContentHash)
 		fIndexedAt.Append(arrow.Timestamp(c.IndexedAt.UnixMicro()))
+		fCalls.Append(marshalJSON(c.Calls))
+		fCalledBy.Append(marshalJSON(c.CalledBy))
+		fTypesUsed.Append(marshalJSON(c.TypesUsed))
+		fImplements.Append(marshalJSON(c.Implements))
+		fImports.Append(marshalJSON(c.Imports))
 
 		fEmbedding.Append(true)
 		for _, v := range embeddings[i] {
@@ -301,6 +338,13 @@ func rowToChunk(row map[string]interface{}) (Chunk, float32) {
 		}
 	}
 
+	// Relationship fields (JSON-encoded strings).
+	c.Calls = unmarshalFuncRefs(mapStr(row, "calls"))
+	c.CalledBy = unmarshalFuncRefs(mapStr(row, "called_by"))
+	c.TypesUsed = unmarshalStrings(mapStr(row, "types_used"))
+	c.Implements = unmarshalStrings(mapStr(row, "implements_ifaces"))
+	c.Imports = unmarshalStrings(mapStr(row, "imports"))
+
 	// LanceDB returns distance as "_distance". Lower = more similar for cosine.
 	// Convert to a 0-1 similarity score.
 	var score float32
@@ -341,4 +385,60 @@ func mapInt(m map[string]interface{}, key string) int {
 		}
 	}
 	return 0
+}
+
+// DropAndRecreateTable drops the chunks table and recreates it with the current schema.
+// Used for schema migrations when columns change.
+func (s *Store) DropAndRecreateTable(ctx context.Context) error {
+	if s.table != nil {
+		_ = s.table.Close()
+		s.table = nil
+	}
+
+	if err := s.conn.DropTable(ctx, tableName); err != nil {
+		return fmt.Errorf("drop table %s: %w", tableName, err)
+	}
+
+	table, err := s.openOrCreateTable(ctx)
+	if err != nil {
+		return fmt.Errorf("recreate table: %w", err)
+	}
+	s.table = table
+	return nil
+}
+
+// marshalJSON encodes a value as a JSON string. Returns "[]" for nil slices.
+func marshalJSON(v any) string {
+	if v == nil {
+		return "[]"
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+// unmarshalFuncRefs decodes a JSON string into a slice of FuncRef.
+func unmarshalFuncRefs(s string) []FuncRef {
+	if s == "" || s == "[]" {
+		return nil
+	}
+	var refs []FuncRef
+	if err := json.Unmarshal([]byte(s), &refs); err != nil {
+		return nil
+	}
+	return refs
+}
+
+// unmarshalStrings decodes a JSON string into a slice of strings.
+func unmarshalStrings(s string) []string {
+	if s == "" || s == "[]" {
+		return nil
+	}
+	var strs []string
+	if err := json.Unmarshal([]byte(s), &strs); err != nil {
+		return nil
+	}
+	return strs
 }

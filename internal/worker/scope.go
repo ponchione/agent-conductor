@@ -36,8 +36,8 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to parse work order: %w", err)
 	}
 
-	// 2. Assemble Context
-	contextBlock, err := w.assembler.Assemble(ctx, &wo)
+	// 2. Assemble scope prompt (minimal text for the scope LLM)
+	scopePrompt, err := w.assembler.AssembleScopePrompt(ctx, &wo)
 	if err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "context assembly failed: %w", err)
 	}
@@ -60,7 +60,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 			})
 		}
 
-		jsonStr, usage, err := w.llm.Complete(ctx, w.prompts.Scope, contextBlock)
+		jsonStr, usage, err := w.llm.Complete(ctx, w.prompts.Scope, scopePrompt)
 		if err != nil {
 			lastErr = fmt.Errorf("llm completion failed (attempt %d): %w", attempt, err)
 			continue
@@ -83,18 +83,29 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 			"llm failed after %d attempts: %w", maxAttempts, lastErr)
 	}
 
-	// 4. Write Context Package to Disk
+	// 4. Fetch workflow for branch name, then build the full context package
+	wf, err := w.db.GetWorkflow(ctx, task.WorkflowID)
+	if err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to get workflow: %w", err)
+	}
+
+	fullPkg, err := w.assembler.Assemble(ctx, &wo, &pkg, wf.GitBranch)
+	if err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "full context assembly failed: %w", err)
+	}
+
+	// 5. Write Full Context Package to Disk
 	pkgDir := filepath.Join(w.cfg.Project.DataDir, "artifacts", "context-packages")
 	if err := os.MkdirAll(pkgDir, 0755); err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to create context-packages dir: %w", err)
 	}
 	pkgPath := filepath.Join(pkgDir, task.WorkflowID+"-context-package.json")
-	pkgData, _ := json.MarshalIndent(pkg, "", "  ")
+	pkgData, _ := json.MarshalIndent(fullPkg, "", "  ")
 	if err := os.WriteFile(pkgPath, pkgData, 0644); err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to write context package: %w", err)
 	}
 
-	// 5. Record scope metrics in pipeline_run
+	// 6. Record scope metrics in pipeline_run
 	if err := w.db.UpdatePipelineRunScope(ctx, database.UpdatePipelineRunScopeParams{
 		WorkflowID:       task.WorkflowID,
 		ScopeStartedAt:   sql.NullString{String: scopeStartedAt.UTC().Format(time.RFC3339), Valid: true},
@@ -106,7 +117,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		slog.Warn("Failed to update pipeline run scope metrics", "error", err)
 	}
 
-	// 6. Update Workflow
+	// 7. Update Workflow
 	if err := w.db.UpdateWorkflowContext(ctx, database.UpdateWorkflowContextParams{
 		ID:                 task.WorkflowID,
 		ContextPackagePath: sql.NullString{String: pkgPath, Valid: true},
@@ -123,22 +134,22 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 
 	w.db.LogEvent(task.WorkflowID, task.ID, "scope_completed", map[string]any{
 		"context_package_path": pkgPath,
-		"files_to_modify":      len(pkg.FilesToModify),
+		"files_to_modify":      len(fullPkg.Scope.FilesToModify),
 	})
 
 	slog.Info("Scope phase complete",
-		"summary", pkg.Summary,
-		"files_to_modify", len(pkg.FilesToModify),
-		"files_to_reference", len(pkg.FilesToReference),
+		"summary", fullPkg.Scope.Summary,
+		"files_to_modify", len(fullPkg.Scope.FilesToModify),
+		"files_to_reference", len(fullPkg.Scope.FilesToReference),
 	)
 
-	// 6. Complete Task
+	// 8. Complete Task
 	w.q.CompleteTask(task.ID, &queue.TaskResult{
 		ExitCode:  0,
 		StdoutLog: "Scope completed successfully",
 	})
 
-	// 7. Queue Build Task
+	// 9. Queue Build Task
 	buildTaskID := uuid.New().String()
 	if err := w.db.CreateTask(ctx, database.CreateTaskParams{
 		ID:            buildTaskID,
@@ -150,7 +161,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		Phase:         "build",
 		InputArtifact: pkgPath,
 		State:         "pending",
-		MaxAttempts:   1, // No retries for build
+		MaxAttempts:   1,
 	}); err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to create build task: %w", err)
 	}

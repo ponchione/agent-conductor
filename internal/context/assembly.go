@@ -1,84 +1,117 @@
 package context
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/ponchione/agent-conductor/internal/config"
-	"github.com/ponchione/agent-conductor/internal/git"
 	"github.com/ponchione/agent-conductor/internal/models"
 )
 
-// RAGSearcher performs semantic search and returns a pre-formatted context
-// block ready for injection. Returning an empty string means no results.
+// RAGResult is a single structured search result from the RAG index.
+type RAGResult struct {
+	Function    string
+	File        string
+	Description string
+}
+
+// RAGSearcher performs semantic search and returns structured results.
 // Defined here so the context package stays free of CGo dependencies.
 type RAGSearcher interface {
-	SearchFormatted(ctx context.Context, query string, topK int) (string, error)
+	SearchStructured(ctx context.Context, query string, topK int) ([]RAGResult, error)
+}
+
+// EnrichedRAGResult is a search result enriched with relationship metadata
+// and multi-query scoring from work-order-aware search.
+type EnrichedRAGResult struct {
+	Function        string
+	File            string
+	Description     string
+	Calls           []models.CodeRef
+	CalledBy        []models.CodeRef
+	IsDependencyHop bool
+	QueryHitCount   int
+	Score           float32
+}
+
+// RAGWorkOrderSearcher performs multi-query search driven by work order fields.
+// Separate from RAGSearcher to avoid breaking existing consumers.
+type RAGWorkOrderSearcher interface {
+	SearchForWorkOrder(ctx context.Context, wo *models.WorkOrder, maxResults int) ([]EnrichedRAGResult, error)
 }
 
 // Assembler gathers and formats context for the LLM.
 type Assembler struct {
 	cfg      *config.ProjectConfig
-	git      *git.GitManager
 	searcher RAGSearcher // nil if RAG not configured
 }
 
 // NewAssembler creates a new context assembler. searcher may be nil.
-func NewAssembler(cfg *config.ProjectConfig, gitMgr *git.GitManager, searcher RAGSearcher) *Assembler {
+func NewAssembler(cfg *config.ProjectConfig, searcher RAGSearcher) *Assembler {
 	return &Assembler{
 		cfg:      cfg,
-		git:      gitMgr,
 		searcher: searcher,
 	}
 }
 
-// AssemblyHints controls per-type context gathering behaviour.
-type AssemblyHints struct {
-	ExtraDirScans []string // repo-relative dirs to list as additional context
-	ExpandHistory int      // if > 0, override default 5-commit git history
-	BroadGrep     bool     // if true, git history without module path filter
-}
-
-// HintsForType returns AssemblyHints appropriate for the given work order type.
-func HintsForType(woType string, conv config.Conventions) AssemblyHints {
-	switch woType {
-	case "schema_change":
-		var dirs []string
-		if conv.SQLPath != "" {
-			dirs = []string{conv.SQLPath}
-		}
-		return AssemblyHints{ExtraDirScans: dirs}
-	case "bug_fix":
-		return AssemblyHints{ExpandHistory: 10, BroadGrep: true}
-	case "refactor":
-		var dirs []string
-		if conv.SharedPath != "" {
-			dirs = []string{conv.SharedPath}
-		}
-		return AssemblyHints{ExtraDirScans: dirs}
-	case "docs":
-		var dirs []string
-		if conv.DocsPath != "" {
-			dirs = []string{conv.DocsPath}
-		}
-		return AssemblyHints{ExtraDirScans: dirs}
-	default: // new_feature and unknown
-		return AssemblyHints{}
+// searchRelevantCode performs RAG search using the best available method.
+// It tries RAGWorkOrderSearcher first (multi-query expansion), falling back
+// to the basic RAGSearcher interface.
+func (a *Assembler) searchRelevantCode(ctx context.Context, wo *models.WorkOrder) []models.RelevantCode {
+	if a.searcher == nil {
+		return nil
 	}
+
+	// Prefer work-order-aware search if the searcher supports it.
+	if wos, ok := a.searcher.(RAGWorkOrderSearcher); ok {
+		maxResults := 30
+		if a.cfg.Index.MaxRAGResults > 0 {
+			maxResults = a.cfg.Index.MaxRAGResults
+		}
+		enriched, err := wos.SearchForWorkOrder(ctx, wo, maxResults)
+		if err != nil {
+			slog.Warn("enriched RAG search failed, falling back to basic", "error", err)
+		} else {
+			results := make([]models.RelevantCode, len(enriched))
+			for i, r := range enriched {
+				results[i] = models.RelevantCode{
+					Function:        r.Function,
+					File:            r.File,
+					Description:     r.Description,
+					Calls:           r.Calls,
+					CalledBy:        r.CalledBy,
+					IsDependencyHop: r.IsDependencyHop,
+					QueryHitCount:   r.QueryHitCount,
+				}
+			}
+			return results
+		}
+	}
+
+	// Fallback: basic title-only search.
+	results, err := a.searcher.SearchStructured(ctx, wo.Title, 10)
+	if err != nil {
+		slog.Warn("RAG search failed, continuing without", "error", err)
+		return nil
+	}
+	out := make([]models.RelevantCode, len(results))
+	for i, r := range results {
+		out[i] = models.RelevantCode{
+			Function:    r.Function,
+			File:        r.File,
+			Description: r.Description,
+		}
+	}
+	return out
 }
 
-// Assemble gathers context and returns a formatted string.
-func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder) (string, error) {
-	var sb bytes.Buffer
+// AssembleScopePrompt builds a minimal text prompt for the scope LLM.
+// It includes the work order header and any RAG results as text.
+func (a *Assembler) AssembleScopePrompt(ctx context.Context, wo *models.WorkOrder) (string, error) {
+	var sb strings.Builder
 
-	hints := HintsForType(wo.Type, a.cfg.Conventions)
-
-	// 1. Work Order Header
 	sb.WriteString("=== WORK ORDER ===\n")
 	sb.WriteString(fmt.Sprintf("Title: %s\n", wo.Title))
 	sb.WriteString(fmt.Sprintf("Target module: %s\n", wo.TargetModule))
@@ -86,155 +119,79 @@ func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder) (string,
 		sb.WriteString(fmt.Sprintf("Reference module: %s\n", wo.ReferenceModule))
 	}
 	sb.WriteString(fmt.Sprintf("Type: %s\n", wo.Type))
-	sb.WriteString("\n")
-
-	sb.WriteString("=== REPOSITORY CONTEXT ===\n\n")
-
-	// 2. Directory Tree (Target Module)
-	targetPath := filepath.Join(a.cfg.Project.Path, a.cfg.Conventions.ModulePath, wo.TargetModule)
-	sb.WriteString(fmt.Sprintf("Directory tree (%s):\n", filepath.Join(a.cfg.Conventions.ModulePath, wo.TargetModule)))
-
-	files, err := a.listFiles(targetPath, a.cfg.Project.Path)
-	if err == nil {
-		for _, f := range files {
-			sb.WriteString(fmt.Sprintf("  %s (%d lines)\n", f.Name, f.Lines))
+	if len(wo.AcceptanceCriteria) > 0 {
+		sb.WriteString("\nAcceptance criteria:\n")
+		for _, ac := range wo.AcceptanceCriteria {
+			sb.WriteString(fmt.Sprintf("  - %s\n", ac))
 		}
-	} else {
-		sb.WriteString(fmt.Sprintf("  (Module not found or empty: %s)\n", err))
 	}
-	sb.WriteString("\n")
-
-	// 3. Reference Module Files
-	if wo.ReferenceModule != "" {
-		refPath := filepath.Join(a.cfg.Project.Path, a.cfg.Conventions.ModulePath, wo.ReferenceModule)
-		sb.WriteString(fmt.Sprintf("Reference module files (%s):\n", wo.ReferenceModule))
-
-		files, err := a.listFiles(refPath, a.cfg.Project.Path)
-		if err == nil {
-			for _, f := range files {
-				sb.WriteString(fmt.Sprintf("  %s (%d lines)\n", f.Name, f.Lines))
-			}
-		} else {
-			sb.WriteString(fmt.Sprintf("  (Reference module not found: %s)\n", err))
+	if len(wo.Constraints) > 0 {
+		sb.WriteString("\nConstraints:\n")
+		for _, c := range wo.Constraints {
+			sb.WriteString(fmt.Sprintf("  - %s\n", c))
 		}
-		sb.WriteString("\n")
 	}
-
-	// 4. SQL Schema
-	sqlPath := filepath.Join(a.cfg.Project.Path, a.cfg.Conventions.SQLPath)
-	sb.WriteString("SQL schema files:\n")
-	sqlFiles, err := a.listFiles(sqlPath, a.cfg.Project.Path)
-	if err == nil {
-		for _, f := range sqlFiles {
-			if strings.HasSuffix(f.Name, ".sql") {
-				sb.WriteString(fmt.Sprintf("  %s\n", f.Name))
-			}
-		}
-	} else {
-		sb.WriteString("  (No schema files found)\n")
-	}
-	sb.WriteString("\n")
-
-	// 5. Git History
-	commitCount := 5
-	if hints.ExpandHistory > 0 {
-		commitCount = hints.ExpandHistory
-	}
-	relFilter := filepath.Join(a.cfg.Conventions.ModulePath, wo.TargetModule)
-	if hints.BroadGrep {
-		relFilter = ""
-	}
-	sb.WriteString(fmt.Sprintf("Recent changes to related files (last %d commits):\n", commitCount))
-	commits, err := a.git.GetRecentCommits(a.cfg.Project.Path, commitCount, relFilter)
-	if err == nil && len(commits) > 0 {
-		for _, c := range commits {
-			sb.WriteString(fmt.Sprintf("  %s - %s (%s)\n", c.Hash, c.Message, c.Author))
-		}
-	} else {
-		sb.WriteString("  (No recent commits found)\n")
-	}
-	sb.WriteString("\n")
-
-	// 6. Known Files (Explicitly listed)
 	if len(wo.KnownFiles) > 0 {
-		sb.WriteString("Explicitly listed known files:\n")
+		sb.WriteString("\nKnown files:\n")
 		for _, kf := range wo.KnownFiles {
-			sb.WriteString(fmt.Sprintf("  %s\n", kf))
+			sb.WriteString(fmt.Sprintf("  - %s\n", kf))
 		}
-		sb.WriteString("\n")
 	}
+	sb.WriteString("\n")
 
-	// 7. Extra directory scans (per-type hints)
-	for _, dir := range hints.ExtraDirScans {
-		absDir := filepath.Join(a.cfg.Project.Path, dir)
-		sb.WriteString(fmt.Sprintf("Additional context (%s):\n", dir))
-		files, err := a.listFiles(absDir, a.cfg.Project.Path)
-		if err == nil {
-			for _, f := range files {
-				sb.WriteString(fmt.Sprintf("  %s (%d lines)\n", f.Name, f.Lines))
+	// RAG results
+	relevantCode := a.searchRelevantCode(ctx, wo)
+	if len(relevantCode) > 0 {
+		sb.WriteString("=== SEMANTICALLY RELEVANT CODE (via RAG) ===\n")
+		for _, r := range relevantCode {
+			marker := ""
+			if r.IsDependencyHop {
+				marker = " [dependency-hop]"
 			}
-		} else {
-			sb.WriteString(fmt.Sprintf("  (Directory not found: %s)\n", err))
+			sb.WriteString(fmt.Sprintf("  %s — %s%s\n    %s\n", r.File, r.Function, marker, r.Description))
 		}
 		sb.WriteString("\n")
-	}
-
-	// 8. RAG results
-	if a.searcher != nil {
-		block, err := a.searcher.SearchFormatted(ctx, wo.Title, 10)
-		if err != nil {
-			slog.Warn("RAG search failed, continuing without", "error", err)
-		} else if block != "" {
-			sb.WriteString(block)
-		}
 	}
 
 	return sb.String(), nil
 }
 
-type fileInfo struct {
-	Name  string
-	Lines int
-}
+// Assemble builds the structured FullContextPackage after the scope LLM returns.
+// It maps work order fields, scope LLM output, and RAG results into a single JSON-serializable struct.
+func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder, scopePkg *models.ContextPackage, branchName string) (*models.FullContextPackage, error) {
+	relevantCode := a.searchRelevantCode(ctx, wo)
 
-func (a *Assembler) listFiles(dirPath, root string) ([]fileInfo, error) {
-	var files []fileInfo
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		return nil, err
+	// Build reference module note
+	var refNote string
+	if wo.ReferenceModule != "" {
+		refNote = fmt.Sprintf(
+			"Use %s as an architectural reference for patterns, conventions, and structure.",
+			wo.ReferenceModule,
+		)
 	}
 
-	for _, e := range entries {
-		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		// Skip large files?
-		if info.Size() > 1024*1024 { // 1MB limit for context listing?
-			continue
-		}
-
-		lines, err := countLines(filepath.Join(dirPath, e.Name()))
-		if err != nil {
-			lines = 0
-		}
-		relName, err := filepath.Rel(root, filepath.Join(dirPath, e.Name()))
-		if err != nil {
-			relName = e.Name() // fallback to basename on error
-		}
-		files = append(files, fileInfo{Name: relName, Lines: lines})
+	full := &models.FullContextPackage{
+		WorkOrder: models.WorkOrderContext{
+			Title:              wo.Title,
+			Type:               wo.Type,
+			TargetModule:       wo.TargetModule,
+			ReferenceModule:    wo.ReferenceModule,
+			AcceptanceCriteria: wo.AcceptanceCriteria,
+			Constraints:        wo.Constraints,
+			KnownFiles:         wo.KnownFiles,
+		},
+		Scope: models.ScopeContext{
+			FilesToModify:       scopePkg.FilesToModify,
+			FilesToReference:    scopePkg.FilesToReference,
+			RelevantCode:        relevantCode,
+			Summary:             scopePkg.Summary,
+			EstimatedComplexity: scopePkg.EstimatedComplexity,
+		},
+		Directives: models.Directives{
+			BranchName:          branchName,
+			ReferenceModuleNote: refNote,
+		},
 	}
-	return files, nil
-}
 
-func countLines(path string) (int, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return 0, err
-	}
-	return bytes.Count(content, []byte{'\n'}) + 1, nil
+	return full, nil
 }

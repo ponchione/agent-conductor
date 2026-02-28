@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -28,12 +29,13 @@ type Project struct {
 	Path      string `yaml:"path"`
 	Language  string `yaml:"language"`
 	Framework string `yaml:"framework"`
-	DataDir   string `yaml:"data_dir"`
+	DataDir   string // computed — not configurable via YAML
 }
 
 type Index struct {
-	Include []string `yaml:"include"`
-	Exclude []string `yaml:"exclude"`
+	Include       []string `yaml:"include"`
+	Exclude       []string `yaml:"exclude"`
+	MaxRAGResults int      `yaml:"max_rag_results"`
 }
 
 type Conventions struct {
@@ -89,14 +91,16 @@ type Git struct {
 	CommitAuthorEmail string `yaml:"commit_author_email"`
 }
 
-// Load reads and parses the project.yaml file.
-func Load(path string) (*ProjectConfig, error) {
-	data, err := os.ReadFile(path)
+// Load reads and merges the global and project config files.
+// Layer order: hardcoded defaults → global (~/.conductor/config.yaml) → project config.
+// DataDir is always computed, never read from YAML.
+func Load(projectPath string) (*ProjectConfig, error) {
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, fmt.Errorf("could not determine home directory: %w", err)
 	}
 
-	// Set defaults
+	// 1. Hardcoded defaults
 	cfg := &ProjectConfig{
 		LocalModel: LocalModel{
 			Endpoint:       "http://localhost:8080/v1",
@@ -105,7 +109,7 @@ func Load(path string) (*ProjectConfig, error) {
 		},
 		EmbedModel: EmbedModel{
 			Endpoint:       "http://localhost:8081/v1",
-			ModelName:      "nomic-embed-text-v1.5",
+			ModelName:      "nomic-embed-code",
 			TimeoutSeconds: 30,
 		},
 		Git: Git{
@@ -122,9 +126,30 @@ func Load(path string) (*ProjectConfig, error) {
 		},
 	}
 
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	// 2. Global config — optional, missing file is not an error
+	globalPath := filepath.Join(home, ".conductor", "config.yaml")
+	if globalData, err := os.ReadFile(globalPath); err == nil {
+		if err := yaml.Unmarshal(globalData, cfg); err != nil {
+			return nil, fmt.Errorf("failed to parse global config: %w", err)
+		}
+	}
+
+	// 3. Project config — required
+	projectData, err := os.ReadFile(projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+	if err := yaml.Unmarshal(projectData, cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
+
+	// 4. Apply zero-value defaults after YAML merge
+	if cfg.Index.MaxRAGResults == 0 {
+		cfg.Index.MaxRAGResults = 30
+	}
+
+	// 5. Compute DataDir — always derived, never configurable
+	cfg.Project.DataDir = filepath.Join(home, ".conductor", "projects", cfg.Project.Name)
 
 	return cfg, nil
 }
@@ -142,8 +167,22 @@ func Validate(cfg *ProjectConfig) error {
 	if cfg.Project.Path == "" {
 		return fmt.Errorf("project.path is required")
 	}
-	if cfg.Project.DataDir == "" {
-		return fmt.Errorf("project.data_dir is required")
+	return nil
+}
+
+// EnsureDataDirs creates the standard subdirectory layout under DataDir.
+func EnsureDataDirs(cfg *ProjectConfig) error {
+	dirs := []string{
+		filepath.Join(cfg.Project.DataDir, "db"),
+		filepath.Join(cfg.Project.DataDir, "rag"),
+		filepath.Join(cfg.Project.DataDir, "artifacts", "context-packages"),
+		filepath.Join(cfg.Project.DataDir, "artifacts", "verify-reports"),
+		filepath.Join(cfg.Project.DataDir, "logs"),
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", d, err)
+		}
 	}
 	return nil
 }

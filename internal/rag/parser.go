@@ -8,9 +8,26 @@ import (
 	golang "github.com/tree-sitter/tree-sitter-go/bindings/go"
 )
 
+// Parser is the interface for turning source files into structural chunks.
+type Parser interface {
+	ParseFile(filePath, language string, content []byte) ([]RawChunk, error)
+}
+
+// TreeSitterParser wraps the existing tree-sitter-based parsing logic.
+type TreeSitterParser struct{}
+
+// NewTreeSitterParser returns a new TreeSitterParser.
+func NewTreeSitterParser() *TreeSitterParser { return &TreeSitterParser{} }
+
+// ParseFile dispatches to language-specific tree-sitter parsers or the fallback splitter.
+func (p *TreeSitterParser) ParseFile(filePath, language string, content []byte) ([]RawChunk, error) {
+	return ParseFile(filePath, language, content)
+}
+
 // ParseFile turns raw file bytes into a slice of RawChunks.
 // It dispatches to a language-specific parser or falls back to a sliding-window
 // splitter. It never returns an error for unsupported languages.
+// Kept as a package-level function for backward compatibility (smokeparser).
 func ParseFile(filePath string, language string, content []byte) ([]RawChunk, error) {
 	switch language {
 	case "go":

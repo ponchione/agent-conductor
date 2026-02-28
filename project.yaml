@@ -2,7 +2,6 @@ project:
   name: agent-conductor
   path: /home/gernsback/source/agent-conductor
   language: go
-  data_dir: /home/gernsback/LLM/.conductor/agent-conductor
 
 index:
   include:
@@ -13,17 +12,6 @@ index:
     - "**/.git/**"
     - "**/bin/**"
     - "**/.conductor/**"
-
-local_model:
-  endpoint: "http://localhost:8080/v1"
-  model_name: ""
-  temperature: 0.0
-  timeout_seconds: 60
-
-embed_model:
-  endpoint: "http://localhost:8081/v1"
-  model_name: "nomic-embed-text-v1.5"
-  timeout_seconds: 30
 
 executor:
   tool: claude-code

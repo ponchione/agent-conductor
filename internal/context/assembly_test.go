@@ -2,162 +2,316 @@ package context
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ponchione/agent-conductor/internal/config"
-	"github.com/ponchione/agent-conductor/internal/git"
 	"github.com/ponchione/agent-conductor/internal/models"
 )
 
-func TestAssembler_Assemble(t *testing.T) {
-	// Setup temporary directory structure
-	tmpDir, err := os.MkdirTemp("", "conductor-context-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
+// stubSearcher is a test double for RAGSearcher (basic, no work order awareness).
+type stubSearcher struct {
+	results []RAGResult
+}
 
-	// Create project structure
-	modulePath := filepath.Join(tmpDir, "internal", "features")
-	targetModule := filepath.Join(modulePath, "auth")
-	sqlPath := filepath.Join(tmpDir, "sql")
+func (s *stubSearcher) SearchStructured(_ context.Context, _ string, _ int) ([]RAGResult, error) {
+	return s.results, nil
+}
 
-	os.MkdirAll(targetModule, 0755)
-	os.MkdirAll(sqlPath, 0755)
+// enrichedStubSearcher implements both RAGSearcher and RAGWorkOrderSearcher.
+type enrichedStubSearcher struct {
+	basicResults    []RAGResult
+	enrichedResults []EnrichedRAGResult
+}
 
-	// Create dummy files
-	os.WriteFile(filepath.Join(targetModule, "handler.go"), []byte("package auth\nfunc Login() {}\n"), 0644)
-	os.WriteFile(filepath.Join(sqlPath, "schema.sql"), []byte("CREATE TABLE users (id INT);\n"), 0644)
+func (s *enrichedStubSearcher) SearchStructured(_ context.Context, _ string, _ int) ([]RAGResult, error) {
+	return s.basicResults, nil
+}
 
-	// Init Git Repo
-	gitMgr := git.New(&config.ProjectConfig{Project: config.Project{Path: tmpDir}})
-	// We need a real git repo for GetRecentCommits to work without erroring,
-	// or we mock it. Since GitManager uses go-git on disk, we should init a repo.
-	// But let's just test file listing and structure first, maybe mock git if possible
-	// or accept "no commits found".
-	// The Assembler uses GitManager directly.
+func (s *enrichedStubSearcher) SearchForWorkOrder(_ context.Context, _ *models.WorkOrder, _ int) ([]EnrichedRAGResult, error) {
+	return s.enrichedResults, nil
+}
 
-	// Create Config
+func TestAssemble_FullContextPackage(t *testing.T) {
 	cfg := &config.ProjectConfig{
-		Project: config.Project{
-			Path:    tmpDir,
-			DataDir: filepath.Join(tmpDir, "data"),
-		},
-		Conventions: config.Conventions{
-			ModulePath: "internal/features",
-			SQLPath:    "sql",
-		},
+		Project: config.Project{Path: "/tmp/test", DataDir: "/tmp/test/data"},
 	}
 
-	// Re-init git mgr with the full config if needed, but it only needs Path for some ops?
-	// Actually New() takes the config pointer.
-	gitMgr = git.New(cfg)
-
-	assembler := NewAssembler(cfg, gitMgr, nil)
+	searcher := &stubSearcher{results: []RAGResult{
+		{Function: "Login", File: "internal/auth/service.go", Description: "Handles user login"},
+	}}
+	assembler := NewAssembler(cfg, searcher)
 
 	wo := &models.WorkOrder{
-		Title:        "Test Feature",
-		TargetModule: "auth",
-		Type:         "feature",
-		KnownFiles:   []string{"README.md"},
+		Title:              "Add logout endpoint",
+		Type:               "new_feature",
+		TargetModule:       "auth",
+		ReferenceModule:    "users",
+		AcceptanceCriteria: []string{"go test passes"},
+		Constraints:        []string{"no breaking changes"},
+		KnownFiles:         []string{"internal/auth/handler.go"},
 	}
 
-	ctx := context.Background()
-	result, err := assembler.Assemble(ctx, wo)
+	scopePkg := &models.ContextPackage{
+		Summary:             "Add logout handler",
+		EstimatedComplexity: "low",
+		FilesToModify:       []models.FileRef{{Path: "internal/auth/handler.go", Reason: "add route"}},
+		FilesToReference:    []models.FileRef{{Path: "internal/auth/service.go", Reason: "pattern reference"}},
+	}
+
+	full, err := assembler.Assemble(context.Background(), wo, scopePkg, "feature/conducted-abc12345")
 	if err != nil {
 		t.Fatalf("Assemble failed: %v", err)
 	}
 
-	// Verify Output Content
-	if !strings.Contains(result, "Title: Test Feature") {
-		t.Error("Missing title")
+	// Work order fields
+	if full.WorkOrder.Title != "Add logout endpoint" {
+		t.Errorf("expected title 'Add logout endpoint', got %q", full.WorkOrder.Title)
 	}
-	if !strings.Contains(result, "Target module: auth") {
-		t.Error("Missing target module")
+	if full.WorkOrder.TargetModule != "auth" {
+		t.Errorf("expected target module 'auth', got %q", full.WorkOrder.TargetModule)
 	}
-	// The dummy file 'handler.go' is in internal/features/auth
-	if !strings.Contains(result, "internal/features/auth/handler.go") {
-		t.Error("Missing repo-relative path for handler.go")
+	if full.WorkOrder.ReferenceModule != "users" {
+		t.Errorf("expected reference module 'users', got %q", full.WorkOrder.ReferenceModule)
 	}
-	// The dummy file 'schema.sql' is in sql/
-	if !strings.Contains(result, "schema.sql") {
-		t.Error("Missing schema.sql listing")
+
+	// Scope fields
+	if full.Scope.Summary != "Add logout handler" {
+		t.Errorf("expected summary 'Add logout handler', got %q", full.Scope.Summary)
 	}
-	// Git section might be empty or error message, that's fine for this unit test
+	if len(full.Scope.FilesToModify) != 1 {
+		t.Errorf("expected 1 file to modify, got %d", len(full.Scope.FilesToModify))
+	}
+
+	// RAG results mapped to RelevantCode
+	if len(full.Scope.RelevantCode) != 1 {
+		t.Fatalf("expected 1 relevant code entry, got %d", len(full.Scope.RelevantCode))
+	}
+	if full.Scope.RelevantCode[0].Function != "Login" {
+		t.Errorf("expected function 'Login', got %q", full.Scope.RelevantCode[0].Function)
+	}
+
+	// Directives
+	if full.Directives.BranchName != "feature/conducted-abc12345" {
+		t.Errorf("expected branch 'feature/conducted-abc12345', got %q", full.Directives.BranchName)
+	}
+	if full.Directives.ReferenceModuleNote == "" {
+		t.Error("expected reference module note to be set when ReferenceModule is non-empty")
+	}
 }
 
-func TestAssembler_NilSearcher(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "conductor-context-nilrag-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
-
+func TestAssemble_NilSearcher(t *testing.T) {
 	cfg := &config.ProjectConfig{
-		Project: config.Project{
-			Path:    tmpDir,
-			DataDir: filepath.Join(tmpDir, "data"),
-		},
-		Conventions: config.Conventions{
-			ModulePath: "internal/features",
-		},
+		Project: config.Project{Path: "/tmp/test", DataDir: "/tmp/test/data"},
 	}
-	gitMgr := git.New(cfg)
-	assembler := NewAssembler(cfg, gitMgr, nil)
+	assembler := NewAssembler(cfg, nil)
 
 	wo := &models.WorkOrder{
-		Title:        "Nil Searcher Test",
-		TargetModule: "auth",
+		Title:        "Test feature",
 		Type:         "new_feature",
+		TargetModule: "auth",
+	}
+	scopePkg := &models.ContextPackage{
+		Summary:             "test",
+		EstimatedComplexity: "low",
 	}
 
-	result, err := assembler.Assemble(context.Background(), wo)
+	full, err := assembler.Assemble(context.Background(), wo, scopePkg, "feature/test-branch")
 	if err != nil {
 		t.Fatalf("Assemble failed: %v", err)
 	}
-	if strings.Contains(result, "SEMANTICALLY RELEVANT CODE") {
-		t.Error("RAG section should not appear when searcher is nil")
+
+	if len(full.Scope.RelevantCode) != 0 {
+		t.Errorf("expected empty RelevantCode with nil searcher, got %d entries", len(full.Scope.RelevantCode))
 	}
 }
 
-func TestAssembler_SchemaChangeHints(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "conductor-context-schema-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	sqlDir := filepath.Join(tmpDir, "sql")
-	os.MkdirAll(sqlDir, 0755)
-	os.WriteFile(filepath.Join(sqlDir, "schema.sql"), []byte("CREATE TABLE orders (id INT);\n"), 0644)
-
+func TestAssemble_NoReferenceModuleNote(t *testing.T) {
 	cfg := &config.ProjectConfig{
-		Project: config.Project{
-			Path:    tmpDir,
-			DataDir: filepath.Join(tmpDir, "data"),
-		},
-		Conventions: config.Conventions{
-			ModulePath: "internal/features",
-			SQLPath:    "sql",
-		},
+		Project: config.Project{Path: "/tmp/test", DataDir: "/tmp/test/data"},
 	}
-	gitMgr := git.New(cfg)
-	assembler := NewAssembler(cfg, gitMgr, nil)
+	assembler := NewAssembler(cfg, nil)
 
 	wo := &models.WorkOrder{
-		Title:        "Add Orders Table",
-		TargetModule: "orders",
-		Type:         "schema_change",
+		Title:        "Test feature",
+		Type:         "new_feature",
+		TargetModule: "auth",
+		// ReferenceModule intentionally empty
+	}
+	scopePkg := &models.ContextPackage{
+		Summary:             "test",
+		EstimatedComplexity: "low",
 	}
 
-	result, err := assembler.Assemble(context.Background(), wo)
+	full, err := assembler.Assemble(context.Background(), wo, scopePkg, "feature/test-branch")
 	if err != nil {
 		t.Fatalf("Assemble failed: %v", err)
 	}
-	if !strings.Contains(result, "Additional context (sql):") {
-		t.Error("Expected 'Additional context (sql):' section for schema_change type")
+
+	if full.Directives.ReferenceModuleNote != "" {
+		t.Errorf("expected empty reference module note, got %q", full.Directives.ReferenceModuleNote)
+	}
+}
+
+func TestAssemble_WithEnrichedSearcher(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: "/tmp/test", DataDir: "/tmp/test/data"},
+		Index:   config.Index{MaxRAGResults: 30},
+	}
+
+	searcher := &enrichedStubSearcher{
+		enrichedResults: []EnrichedRAGResult{
+			{
+				Function:    "Login",
+				File:        "internal/auth/service.go",
+				Description: "Handles user login",
+				Calls: []models.CodeRef{
+					{Name: "ValidateToken", Package: "auth"},
+				},
+				CalledBy: []models.CodeRef{
+					{Name: "HandleLogin", Package: "handler"},
+				},
+				QueryHitCount: 3,
+				Score:         0.85,
+			},
+			{
+				Function:        "ValidateToken",
+				File:            "internal/auth/token.go",
+				Description:     "Validates JWT token",
+				IsDependencyHop: true,
+				Score:           0,
+			},
+		},
+	}
+	assembler := NewAssembler(cfg, searcher)
+
+	wo := &models.WorkOrder{
+		Title:        "Add logout endpoint",
+		Type:         "new_feature",
+		TargetModule: "auth",
+	}
+	scopePkg := &models.ContextPackage{
+		Summary:             "Add logout handler",
+		EstimatedComplexity: "low",
+	}
+
+	full, err := assembler.Assemble(context.Background(), wo, scopePkg, "feature/test")
+	if err != nil {
+		t.Fatalf("Assemble failed: %v", err)
+	}
+
+	if len(full.Scope.RelevantCode) != 2 {
+		t.Fatalf("expected 2 relevant code entries, got %d", len(full.Scope.RelevantCode))
+	}
+
+	// First result: direct hit with relationships
+	rc := full.Scope.RelevantCode[0]
+	if rc.Function != "Login" {
+		t.Errorf("expected function 'Login', got %q", rc.Function)
+	}
+	if len(rc.Calls) != 1 || rc.Calls[0].Name != "ValidateToken" {
+		t.Errorf("expected Calls to contain ValidateToken, got %v", rc.Calls)
+	}
+	if len(rc.CalledBy) != 1 || rc.CalledBy[0].Name != "HandleLogin" {
+		t.Errorf("expected CalledBy to contain HandleLogin, got %v", rc.CalledBy)
+	}
+	if rc.QueryHitCount != 3 {
+		t.Errorf("expected QueryHitCount 3, got %d", rc.QueryHitCount)
+	}
+	if rc.IsDependencyHop {
+		t.Error("first result should not be a dependency hop")
+	}
+
+	// Second result: dependency hop
+	rc2 := full.Scope.RelevantCode[1]
+	if !rc2.IsDependencyHop {
+		t.Error("second result should be a dependency hop")
+	}
+	if rc2.Function != "ValidateToken" {
+		t.Errorf("expected function 'ValidateToken', got %q", rc2.Function)
+	}
+}
+
+func TestAssemble_FallbackToBasicSearcher(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: "/tmp/test", DataDir: "/tmp/test/data"},
+	}
+
+	// Use plain stubSearcher — only implements RAGSearcher, not RAGWorkOrderSearcher
+	searcher := &stubSearcher{results: []RAGResult{
+		{Function: "Login", File: "internal/auth/service.go", Description: "Handles login"},
+	}}
+	assembler := NewAssembler(cfg, searcher)
+
+	wo := &models.WorkOrder{
+		Title:        "Add logout",
+		Type:         "new_feature",
+		TargetModule: "auth",
+	}
+	scopePkg := &models.ContextPackage{
+		Summary:             "test",
+		EstimatedComplexity: "low",
+	}
+
+	full, err := assembler.Assemble(context.Background(), wo, scopePkg, "feature/test")
+	if err != nil {
+		t.Fatalf("Assemble failed: %v", err)
+	}
+
+	if len(full.Scope.RelevantCode) != 1 {
+		t.Fatalf("expected 1 relevant code entry from fallback, got %d", len(full.Scope.RelevantCode))
+	}
+	if full.Scope.RelevantCode[0].Function != "Login" {
+		t.Errorf("expected function 'Login', got %q", full.Scope.RelevantCode[0].Function)
+	}
+	// Basic searcher should not populate enriched fields
+	if full.Scope.RelevantCode[0].IsDependencyHop {
+		t.Error("basic searcher result should not be dependency hop")
+	}
+}
+
+func TestAssembleScopePrompt_DependencyHopAnnotation(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: "/tmp/test", DataDir: "/tmp/test/data"},
+		Index:   config.Index{MaxRAGResults: 30},
+	}
+
+	searcher := &enrichedStubSearcher{
+		enrichedResults: []EnrichedRAGResult{
+			{
+				Function:    "Login",
+				File:        "internal/auth/service.go",
+				Description: "Handles user login",
+			},
+			{
+				Function:        "ValidateToken",
+				File:            "internal/auth/token.go",
+				Description:     "Validates JWT token",
+				IsDependencyHop: true,
+			},
+		},
+	}
+	assembler := NewAssembler(cfg, searcher)
+
+	wo := &models.WorkOrder{
+		Title:        "Add logout endpoint",
+		Type:         "new_feature",
+		TargetModule: "auth",
+	}
+
+	prompt, err := assembler.AssembleScopePrompt(context.Background(), wo)
+	if err != nil {
+		t.Fatalf("AssembleScopePrompt failed: %v", err)
+	}
+
+	if !strings.Contains(prompt, "[dependency-hop]") {
+		t.Error("expected prompt to contain [dependency-hop] marker")
+	}
+	// Non-hop entry should not have the marker
+	if strings.Contains(prompt, "Login [dependency-hop]") {
+		t.Error("Login should not have dependency-hop marker")
+	}
+	if !strings.Contains(prompt, "ValidateToken [dependency-hop]") {
+		t.Error("ValidateToken should have dependency-hop marker")
 	}
 }

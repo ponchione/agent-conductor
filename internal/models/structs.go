@@ -90,3 +90,56 @@ type PatternConsistency struct {
 	FollowsConventions bool     `json:"follows_conventions"`
 	Issues             []string `json:"issues"`
 }
+
+// FullContextPackage is the structured JSON context handed to the build agent.
+// It combines work order data, scope LLM output, and orchestrator directives.
+type FullContextPackage struct {
+	WorkOrder  WorkOrderContext `json:"work_order"`
+	Scope      ScopeContext     `json:"scope"`
+	Directives Directives       `json:"directives"`
+}
+
+// WorkOrderContext is the work order fields relevant to the build agent.
+type WorkOrderContext struct {
+	Title              string   `json:"title"`
+	Type               string   `json:"type"`
+	TargetModule       string   `json:"target_module"`
+	ReferenceModule    string   `json:"reference_module,omitempty"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	Constraints        []string `json:"constraints"`
+	KnownFiles         []string `json:"known_files"`
+}
+
+// ScopeContext holds the scope LLM's analysis enriched with RAG results.
+type ScopeContext struct {
+	FilesToModify       []FileRef      `json:"files_to_modify"`
+	FilesToReference    []FileRef      `json:"files_to_reference"`
+	RelevantCode        []RelevantCode `json:"relevant_code"`
+	Summary             string         `json:"summary"`
+	EstimatedComplexity string         `json:"estimated_complexity"`
+}
+
+// CodeRef identifies a function or method in the codebase.
+// JSON-facing equivalent of rag.FuncRef (lives in models to avoid import cycles).
+type CodeRef struct {
+	Name    string `json:"name"`
+	Package string `json:"package,omitempty"`
+	File    string `json:"file,omitempty"`
+}
+
+// RelevantCode is a RAG search result mapped to structured data.
+type RelevantCode struct {
+	Function        string    `json:"function"`
+	File            string    `json:"file"`
+	Description     string    `json:"description"`
+	Calls           []CodeRef `json:"calls,omitempty"`
+	CalledBy        []CodeRef `json:"called_by,omitempty"`
+	IsDependencyHop bool      `json:"is_dependency_hop,omitempty"`
+	QueryHitCount   int       `json:"query_hit_count,omitempty"`
+}
+
+// Directives are orchestrator-provided instructions for the build agent.
+type Directives struct {
+	BranchName          string `json:"branch_name"`
+	ReferenceModuleNote string `json:"reference_module_note,omitempty"`
+}

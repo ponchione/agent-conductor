@@ -57,20 +57,7 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 			"build agent exited with code %d", result.ExitCode)
 	}
 
-	// 4a. Commit changes made by the build agent
-	hasChanges, err := w.git.HasUncommittedChanges(w.cfg.Project.Path)
-	if err != nil {
-		slog.Warn("Could not check for uncommitted changes", "error", err)
-	} else if hasChanges {
-		commitMsg := fmt.Sprintf("Build phase implementation [%s]", task.ID)
-		if err := w.git.Commit(w.cfg.Project.Path, commitMsg); err != nil {
-			return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "failed to commit build changes: %w", err)
-		}
-	} else {
-		slog.Warn("No changes to commit after build phase", "task", task.ID)
-	}
-
-	// 4b. Forbidden path check — fail if build agent touched a protected file
+	// 4. Forbidden path check — fail if build agent touched a protected file
 	if len(w.cfg.Safety.ForbiddenPaths) > 0 {
 		changedFiles, err := w.git.GetChangedFilesBetween(w.cfg.Project.Path, "main", wf.GitBranch)
 		if err != nil {

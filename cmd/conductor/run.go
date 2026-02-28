@@ -58,13 +58,12 @@ var runCmd = &cobra.Command{
 			return err
 		}
 
-		dataDir := cfg.Project.DataDir
-		if err := os.MkdirAll(dataDir, 0755); err != nil {
-			slog.Error("Failed to create data directory", "path", dataDir, "error", err)
+		if err := config.EnsureDataDirs(cfg); err != nil {
+			slog.Error("Failed to create data directories", "error", err)
 			return err
 		}
 
-		dbPath := filepath.Join(dataDir, "db", "conductor.db")
+		dbPath := filepath.Join(cfg.Project.DataDir, "db", "conductor.db")
 		slog.Info("Initializing database", "path", dbPath)
 
 		db, err := database.NewDB(dbPath)
@@ -80,7 +79,7 @@ var runCmd = &cobra.Command{
 
 		var ragSearcher condctx.RAGSearcher
 		if cfg.EmbedModel.Endpoint != "" {
-			lanceDir := filepath.Join(cfg.Project.DataDir, "lancedb")
+			lanceDir := filepath.Join(cfg.Project.DataDir, "rag")
 			store, err := rag.NewStore(context.Background(), lanceDir)
 			if err != nil {
 				slog.Warn("RAG store unavailable, proceeding without RAG", "error", err)
@@ -92,16 +91,16 @@ var runCmd = &cobra.Command{
 				ragSearcher = rag.NewSearcher(store, embedder)
 			}
 		}
-		assembler := condctx.NewAssembler(cfg, gitMgr, ragSearcher)
+		assembler := condctx.NewAssembler(cfg, ragSearcher)
 
 		w := worker.New("worker-1", q, db, cfg, assembler, llmClient, runner, gitMgr, prompts)
 
-		return runSync(absPath, wo, w, db, cfg, gitMgr)
+		return runSync(absPath, wo, w, db, cfg)
 	},
 }
 
 // runSync executes a work order synchronously.
-func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database.DB, cfg *config.ProjectConfig, gitMgr *git.GitManager) error {
+func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database.DB, cfg *config.ProjectConfig) error {
 	fmt.Printf("Starting synchronous execution for: %s\n\n", absPath)
 
 	ctx := context.Background()
@@ -110,11 +109,6 @@ func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database
 	wfID := uuid.New().String()
 	taskID := uuid.New().String()
 	branchName := fmt.Sprintf("%s-%s", cfg.Git.BranchPrefix, wfID[:8])
-
-	fmt.Printf("Creating git branch: %s\n", branchName)
-	if err := gitMgr.CreateBranch(cfg.Project.Path, branchName, "main"); err != nil {
-		return fmt.Errorf("git create branch failed: %w", err)
-	}
 
 	err := db.CreateWorkflow(ctx, database.CreateWorkflowParams{
 		ID:                     wfID,

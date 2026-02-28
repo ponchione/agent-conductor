@@ -17,6 +17,19 @@ type RawChunk struct {
 	ChunkType string // "function", "method", "type", "table", "section"
 	LineStart int
 	LineEnd   int
+
+	// Relationship metadata (Go AST parser only)
+	Calls      []FuncRef // functions invoked in body
+	TypesUsed  []string  // types referenced in definition
+	Implements []string  // interfaces this type satisfies
+	Imports    []string  // packages imported by containing file
+}
+
+// FuncRef identifies a function or method referenced in a call graph.
+type FuncRef struct {
+	Name    string `json:"name"`
+	Package string `json:"package"`
+	File    string `json:"file,omitempty"`
 }
 
 // MaxBodyLength is the maximum character length for a chunk body.
@@ -45,6 +58,13 @@ type Chunk struct {
 	LineEnd     int
 	ContentHash string // sha256 of Body for change detection
 	IndexedAt   time.Time
+
+	// Relationship metadata
+	Calls      []FuncRef `json:"calls,omitempty"`
+	CalledBy   []FuncRef `json:"called_by,omitempty"`
+	TypesUsed  []string  `json:"types_used,omitempty"`
+	Implements []string  `json:"implements,omitempty"`
+	Imports    []string  `json:"imports,omitempty"`
 }
 
 // ChunkID computes the deterministic ID for a chunk.
@@ -85,6 +105,10 @@ func NewChunk(raw RawChunk, projectName, filePath, language, description string)
 		LineEnd:     raw.LineEnd,
 		ContentHash: ContentHashOf(body),
 		IndexedAt:   time.Now(),
+		Calls:       raw.Calls,
+		TypesUsed:   raw.TypesUsed,
+		Implements:  raw.Implements,
+		Imports:     raw.Imports,
 	}
 }
 
@@ -92,6 +116,14 @@ func NewChunk(raw RawChunk, projectName, filePath, language, description string)
 type SearchResult struct {
 	Chunk Chunk
 	Score float32 // cosine similarity, 0.0–1.0
+}
+
+// EnrichedResult extends SearchResult with multi-query metadata.
+// Used internally within the searcher's query expansion pipeline.
+type EnrichedResult struct {
+	SearchResult
+	IsDependencyHop bool
+	QueryHitCount   int
 }
 
 // Filter constrains vector search results. All fields are optional;

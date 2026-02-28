@@ -3,8 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
+	"path/filepath"
 
+	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/rag"
 	"github.com/spf13/cobra"
@@ -23,18 +24,13 @@ var indexCmd = &cobra.Command{
 	Use:   "index",
 	Short: "Index the project repository into the RAG store",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		dataDir := cfg.Project.DataDir
-		if dataDir == "" {
-			dataDir = ".conductor"
-		}
-
-		if err := os.MkdirAll(dataDir, 0755); err != nil {
-			return fmt.Errorf("create data dir: %w", err)
+		if err := config.EnsureDataDirs(cfg); err != nil {
+			return fmt.Errorf("create data dirs: %w", err)
 		}
 
 		ctx := context.Background()
 
-		store, err := rag.NewStore(ctx, dataDir+"/rag.db")
+		store, err := rag.NewStore(ctx, filepath.Join(cfg.Project.DataDir, "rag"))
 		if err != nil {
 			return fmt.Errorf("open store: %w", err)
 		}

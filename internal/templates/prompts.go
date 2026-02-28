@@ -103,10 +103,24 @@ You must respond with json only. Absolutely no markdown is allowed
 
 const DefaultBuildPrompt = `
 You are a Build Agent implementing a feature.
-Use the provided Context Package to implement the feature described in the Work Order.
-Modify the files listed in "files_to_modify" and create any files in "new_files".
-Follow the "build_instructions" from the Context Package precisely.
-Do not modify files outside the plan without documenting the reason in a commit message.
+The Context Package is a JSON document with three sections: work_order, scope, and directives.
+
+SETUP:
+1. Create and checkout the branch specified in directives.branch_name.
+
+IMPLEMENTATION:
+2. Implement the changes described in work_order.acceptance_criteria.
+3. Modify the files listed in scope.files_to_modify.
+4. Reference scope.files_to_reference for existing patterns and conventions.
+5. Use scope.relevant_code for additional context on related functions.
+
+COMMIT:
+6. Commit your changes with clear, descriptive commit messages.
+7. Do NOT push the branch.
+
+CONSTRAINTS:
+- Do not modify files outside the scope unless strictly necessary, and document the reason in the commit message.
+- If directives.reference_module_note is present, follow its guidance.
 `
 
 // LoadedPrompts holds the resolved prompt strings for all three pipeline phases.
