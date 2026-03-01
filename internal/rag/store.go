@@ -16,7 +16,7 @@ import (
 
 // SchemaVersion tracks the LanceDB table schema. Bump when columns change
 // to trigger a full re-index with DropAndRecreateTable.
-const SchemaVersion = "2"
+const SchemaVersion = "3"
 
 const tableName = "chunks"
 

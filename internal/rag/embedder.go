@@ -12,14 +12,10 @@ import (
 
 const (
 	// QueryPrefix is prepended to search queries before embedding.
-	// Required by nomic-embed-code to distinguish queries from documents.
-	//QueryPrefix = "Represent this query for searching relevant code: "
-
-	QueryPrefix    = "search_query: "
-	DocumentPrefix = "search_document: "
+	QueryPrefix = "Represent this query for searching relevant code: "
 
 	// DefaultEmbeddingDims is the expected output dimensionality of nomic-embed-code.
-	DefaultEmbeddingDims = 768
+	DefaultEmbeddingDims = 3584
 
 	// DefaultEmbedBatchSize is the maximum number of texts per batch request.
 	DefaultEmbedBatchSize = 32
@@ -28,7 +24,6 @@ const (
 // EmbedderConfig holds configuration for the embedding HTTP client.
 type EmbedderConfig struct {
 	// Endpoint is the base URL for the llama.cpp embedding server.
-	// Example: "http://localhost:8081/v1"
 	Endpoint string
 
 	// TimeoutSeconds is the HTTP request timeout. Defaults to 30.
@@ -83,7 +78,7 @@ type embeddingData struct {
 // Embed produces a vector for a single text (document chunk).
 // No prefix is applied — this is for indexing, not querying.
 func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	resp, err := e.post(ctx, DocumentPrefix+text)
+	resp, err := e.post(ctx, text)
 	if err != nil {
 		return nil, fmt.Errorf("embed single: %w", err)
 	}
@@ -110,10 +105,10 @@ func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 		}
 		batch := texts[start:end]
 
-		prefixed := make([]string, len(batch))
-		for i, t := range batch {
-			prefixed[i] = DocumentPrefix + t
-		}
+		//prefixed := make([]string, len(batch))
+		//for i, t := range batch {
+		//	prefixed[i] = DocumentPrefix + t
+		//}
 
 		resp, err := e.post(ctx, batch)
 		if err != nil {

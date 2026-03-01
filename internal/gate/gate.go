@@ -6,11 +6,13 @@ import (
 	"log/slog"
 
 	"github.com/ponchione/agent-conductor/internal/database"
+	"github.com/ponchione/agent-conductor/internal/git"
 )
 
-// Approve transitions a workflow in human_review to completed.
-// Returns an error if the workflow is not in the human_review state.
-func Approve(ctx context.Context, db *database.DB, workflowID string) error {
+// Approve merges the workflow's branch into main and transitions the workflow
+// from human_review to completed. Returns an error if the workflow is not in
+// the human_review state or if the merge fails.
+func Approve(ctx context.Context, db *database.DB, gitMgr *git.GitManager, workflowID, repoPath string) error {
 	wf, err := db.GetWorkflow(ctx, workflowID)
 	if err != nil {
 		return fmt.Errorf("workflow not found: %w", err)
@@ -18,6 +20,16 @@ func Approve(ctx context.Context, db *database.DB, workflowID string) error {
 
 	if wf.CurrentState != "human_review" {
 		return fmt.Errorf("workflow %s is in state %q, expected human_review", workflowID, wf.CurrentState)
+	}
+
+	// Merge the conducted branch into main. On failure, bail out with no state change.
+	if err := gitMgr.MergeBranch(repoPath, "main", wf.GitBranch); err != nil {
+		return fmt.Errorf("merge branch %s into main: %w", wf.GitBranch, err)
+	}
+
+	// Best-effort branch cleanup.
+	if err := gitMgr.DeleteBranch(repoPath, wf.GitBranch); err != nil {
+		slog.Warn("Failed to delete conducted branch", "branch", wf.GitBranch, "error", err)
 	}
 
 	if err := db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
@@ -36,9 +48,11 @@ func Approve(ctx context.Context, db *database.DB, workflowID string) error {
 
 	db.LogEvent(workflowID, "", "human_approved", map[string]any{
 		"workflow_id": workflowID,
+		"merged_into": "main",
+		"branch":      wf.GitBranch,
 	})
 
-	slog.Info("Workflow approved", "workflow", workflowID)
+	slog.Info("Workflow approved and merged", "workflow", workflowID, "branch", wf.GitBranch)
 	return nil
 }
 

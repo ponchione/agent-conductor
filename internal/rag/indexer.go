@@ -315,9 +315,18 @@ func matchesAnyGlob(patterns []string, relPath string) bool {
 // matchesGlob returns true if relPath matches the given glob pattern.
 // Supports "**/" prefix for recursive matching.
 func matchesGlob(pattern, relPath string) bool {
+	if strings.HasSuffix(pattern, "/") {
+		dir := strings.TrimSuffix(pattern, "/")
+		if strings.HasPrefix(dir, "**/") {
+			dir = dir[3:]
+		}
+		return strings.HasPrefix(relPath, dir+"/") || strings.Contains(relPath, "/"+dir+"/")
+	}
+
 	if ok, _ := filepath.Match(pattern, relPath); ok {
 		return true
 	}
+
 	if strings.HasPrefix(pattern, "**/") {
 		suffix := pattern[3:]
 		if ok, _ := filepath.Match(suffix, filepath.Base(relPath)); ok {
@@ -334,6 +343,7 @@ func matchesGlob(pattern, relPath string) bool {
 			}
 		}
 	}
+
 	return false
 }
 

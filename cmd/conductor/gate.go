@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/gate"
+	"github.com/ponchione/agent-conductor/internal/git"
 	"github.com/spf13/cobra"
 )
 
@@ -40,10 +41,11 @@ The workflow ID must be a full UUID (e.g. from 'conductor list').`,
 		defer db.Close()
 
 		ctx := stdctx.Background()
-		if err := gate.Approve(ctx, db, workflowID); err != nil {
+		gitMgr := git.New(cfg)
+		if err := gate.Approve(ctx, db, gitMgr, workflowID, cfg.Project.Path); err != nil {
 			return fmt.Errorf("approve failed: %w", err)
 		}
-		fmt.Printf("Workflow %s approved. Merging branch...\n", workflowID)
+		fmt.Printf("Workflow %s approved and merged into main.\n", workflowID)
 		return nil
 	},
 }

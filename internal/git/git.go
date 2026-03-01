@@ -8,6 +8,64 @@ import (
 	gitconfig "github.com/ponchione/agent-conductor/internal/config"
 )
 
+// MergeBranch fast-forward merges target into base within the given repo.
+// Only fast-forward merges are supported; returns an error if branches have diverged.
+func (g *GitManager) MergeBranch(repoPath, base, target string) error {
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("open repo: %w", err)
+	}
+
+	wt, err := r.Worktree()
+	if err != nil {
+		return fmt.Errorf("get worktree: %w", err)
+	}
+
+	// Checkout the base branch.
+	if err := wt.Checkout(&git.CheckoutOptions{
+		Branch: plumbing.NewBranchReferenceName(base),
+	}); err != nil {
+		return fmt.Errorf("checkout %s: %w", base, err)
+	}
+
+	// Resolve the target branch ref.
+	targetRef, err := r.Reference(plumbing.NewBranchReferenceName(target), true)
+	if err != nil {
+		return fmt.Errorf("resolve branch %s: %w", target, err)
+	}
+
+	// Fast-forward merge (only updates the ref, not the worktree).
+	if err := r.Merge(*targetRef, git.MergeOptions{
+		Strategy: git.FastForwardMerge,
+	}); err != nil {
+		return fmt.Errorf("merge %s into %s: %w", target, base, err)
+	}
+
+	// Sync the working tree to the new HEAD.
+	head, err := r.Head()
+	if err != nil {
+		return fmt.Errorf("get HEAD after merge: %w", err)
+	}
+	if err := wt.Reset(&git.ResetOptions{
+		Commit: head.Hash(),
+		Mode:   git.HardReset,
+	}); err != nil {
+		return fmt.Errorf("reset worktree: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteBranch removes a local branch reference from the repository.
+func (g *GitManager) DeleteBranch(repoPath, branchName string) error {
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("open repo: %w", err)
+	}
+
+	return r.Storer.RemoveReference(plumbing.NewBranchReferenceName(branchName))
+}
+
 type GitManager struct {
 	cfg *gitconfig.ProjectConfig
 }
