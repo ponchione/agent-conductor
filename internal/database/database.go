@@ -24,12 +24,10 @@ func NewDB(dsn string) (*DB, error) {
 		return nil, err
 	}
 
-	// Enable foreign keys
 	if _, err := conn.Exec("PRAGMA foreign_keys = ON;"); err != nil {
 		return nil, err
 	}
 
-	// Run migration
 	if _, err := conn.Exec(ddl); err != nil {
 		return nil, fmt.Errorf("migration failed: %w", err)
 	}

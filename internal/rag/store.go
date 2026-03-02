@@ -111,10 +111,8 @@ func (s *Store) UpsertChunks(ctx context.Context, chunks []Chunk, embeddings [][
 		return nil
 	}
 
-	// Delete existing chunks by ID so this is an upsert.
 	for _, c := range chunks {
 		filter := fmt.Sprintf("id = '%s'", c.ID)
-		// Ignore errors — chunk may not exist yet.
 		_ = s.table.Delete(ctx, filter)
 	}
 
@@ -227,7 +225,6 @@ func (s *Store) chunksToRecord(chunks []Chunk, embeddings [][]float32) (arrow.Re
 	builder := array.NewRecordBuilder(s.pool, arrowSchema)
 	defer builder.Release()
 
-	// Field indices must match buildSchema order exactly.
 	fID := builder.Field(0).(*array.StringBuilder)
 	fProjectName := builder.Field(1).(*array.StringBuilder)
 	fFilePath := builder.Field(2).(*array.StringBuilder)
@@ -294,7 +291,6 @@ func buildFilterString(filters []Filter) string {
 			parts = append(parts, fmt.Sprintf("chunk_type = '%s'", f.ChunkType))
 		}
 		if f.FilePath != "" {
-			// Prefix match for file path filtering.
 			parts = append(parts, fmt.Sprintf("file_path LIKE '%s%%'", f.FilePath))
 		}
 	}
@@ -328,7 +324,6 @@ func rowToChunk(row map[string]interface{}) (Chunk, float32) {
 		ContentHash: mapStr(row, "content_hash"),
 	}
 
-	// Parse indexed_at if present.
 	if v, ok := row["indexed_at"]; ok {
 		switch t := v.(type) {
 		case time.Time:
@@ -338,15 +333,12 @@ func rowToChunk(row map[string]interface{}) (Chunk, float32) {
 		}
 	}
 
-	// Relationship fields (JSON-encoded strings).
 	c.Calls = unmarshalFuncRefs(mapStr(row, "calls"))
 	c.CalledBy = unmarshalFuncRefs(mapStr(row, "called_by"))
 	c.TypesUsed = unmarshalStrings(mapStr(row, "types_used"))
 	c.Implements = unmarshalStrings(mapStr(row, "implements_ifaces"))
 	c.Imports = unmarshalStrings(mapStr(row, "imports"))
 
-	// LanceDB returns distance as "_distance". Lower = more similar for cosine.
-	// Convert to a 0-1 similarity score.
 	var score float32
 	if v, ok := row["_distance"]; ok {
 		switch d := v.(type) {

@@ -25,7 +25,6 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 
 	scopeStartedAt := time.Now()
 
-	// 1. Read Work Order
 	woContent, err := os.ReadFile(task.InputArtifact)
 	if err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to read work order: %w", err)
@@ -36,13 +35,11 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to parse work order: %w", err)
 	}
 
-	// 2. Assemble scope prompt (minimal text for the scope LLM)
 	scopePrompt, err := w.assembler.AssembleScopePrompt(ctx, &wo)
 	if err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "context assembly failed: %w", err)
 	}
 
-	// 3. Call LLM with retry
 	maxAttempts := int(task.MaxAttempts)
 	if maxAttempts < 1 {
 		maxAttempts = 1
@@ -83,7 +80,6 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 			"llm failed after %d attempts: %w", maxAttempts, lastErr)
 	}
 
-	// 4. Fetch workflow for branch name, then build the full context package
 	wf, err := w.db.GetWorkflow(ctx, task.WorkflowID)
 	if err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to get workflow: %w", err)
@@ -94,7 +90,6 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "full context assembly failed: %w", err)
 	}
 
-	// 5. Write Full Context Package to Disk
 	pkgDir := filepath.Join(w.cfg.Project.DataDir, "artifacts", "context-packages")
 	if err := os.MkdirAll(pkgDir, 0755); err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to create context-packages dir: %w", err)
@@ -105,7 +100,6 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to write context package: %w", err)
 	}
 
-	// 6. Record scope metrics in pipeline_run
 	if err := w.db.UpdatePipelineRunScope(ctx, database.UpdatePipelineRunScopeParams{
 		WorkflowID:       task.WorkflowID,
 		ScopeStartedAt:   sql.NullString{String: scopeStartedAt.UTC().Format(time.RFC3339), Valid: true},
@@ -117,7 +111,6 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		slog.Warn("Failed to update pipeline run scope metrics", "error", err)
 	}
 
-	// 7. Update Workflow
 	if err := w.db.UpdateWorkflowContext(ctx, database.UpdateWorkflowContextParams{
 		ID:                 task.WorkflowID,
 		ContextPackagePath: sql.NullString{String: pkgPath, Valid: true},
@@ -143,13 +136,11 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		"files_to_reference", len(fullPkg.Scope.FilesToReference),
 	)
 
-	// 8. Complete Task
 	w.q.CompleteTask(task.ID, &queue.TaskResult{
 		ExitCode:  0,
 		StdoutLog: "Scope completed successfully",
 	})
 
-	// 9. Queue Build Task
 	buildTaskID := uuid.New().String()
 	if err := w.db.CreateTask(ctx, database.CreateTaskParams{
 		ID:            buildTaskID,

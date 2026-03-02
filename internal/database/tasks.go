@@ -16,16 +16,14 @@ func (db *DB) AtomicClaimTask(ctx context.Context, workerID string) (*Task, erro
 
 	qtx := db.WithTx(tx)
 
-	// 1. Find candidate
 	taskID, err := qtx.GetPendingTask(ctx)
 	if err == sql.ErrNoRows {
-		return nil, nil // No tasks
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Claim it
 	err = qtx.ClaimTask(ctx, ClaimTaskParams{
 		ClaimedBy: sql.NullString{String: workerID, Valid: true},
 		ID:        taskID,
@@ -34,7 +32,6 @@ func (db *DB) AtomicClaimTask(ctx context.Context, workerID string) (*Task, erro
 		return nil, err
 	}
 
-	// 3. Return full task
 	task, err := qtx.GetTask(ctx, taskID)
 	if err != nil {
 		return nil, err
@@ -54,7 +51,6 @@ func (db *DB) LogEvent(workflowID, taskID, eventType string, data map[string]any
 		dataJson, _ = json.Marshal(data)
 	}
 
-	// CreateEvent expects sql.NullString for taskID and data
 	tID := sql.NullString{String: taskID, Valid: taskID != ""}
 	dStr := sql.NullString{String: string(dataJson), Valid: len(dataJson) > 0}
 	wID := sql.NullString{String: workflowID, Valid: workflowID != ""}

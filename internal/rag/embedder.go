@@ -105,11 +105,6 @@ func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 		}
 		batch := texts[start:end]
 
-		//prefixed := make([]string, len(batch))
-		//for i, t := range batch {
-		//	prefixed[i] = DocumentPrefix + t
-		//}
-
 		resp, err := e.post(ctx, batch)
 		if err != nil {
 			return nil, fmt.Errorf("embed batch [%d:%d]: %w", start, end, err)

@@ -29,7 +29,6 @@ var runCmd = &cobra.Command{
 	Short: "Execute a work order synchronously",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// 1. Parse and validate work order FIRST — before any side effects
 		absPath, err := filepath.Abs(args[0])
 		if err != nil {
 			return fmt.Errorf("invalid path: %w", err)
@@ -46,12 +45,10 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("work order validation failed: %w", err)
 		}
 
-		// 2. Validate config
 		if err := config.Validate(cfg); err != nil {
 			return fmt.Errorf("invalid config: %w", err)
 		}
 
-		// 3. Load prompts and set up infrastructure
 		prompts, err := templates.LoadPrompts(cfg)
 		if err != nil {
 			slog.Error("Failed to load prompts", "error", err)
@@ -105,7 +102,6 @@ func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database
 
 	ctx := context.Background()
 
-	// 1. Create Workflow and Task manually
 	wfID := uuid.New().String()
 	taskID := uuid.New().String()
 	branchName := fmt.Sprintf("%s-%s", cfg.Git.BranchPrefix, wfID[:8])
@@ -153,7 +149,6 @@ func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database
 		return fmt.Errorf("failed to create task: %w", err)
 	}
 
-	// 2. Poll until workflow is complete
 	fmt.Printf("Workflow %s created. Processing phases...\n", wfID)
 
 	for {

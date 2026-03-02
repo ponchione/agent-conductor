@@ -76,7 +76,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "workflow missing: %w", err)
 	}
 
-	// 1. Get Git Diff
 	diff, err := w.git.GetDiff(w.cfg.Project.Path, "main", wf.GitBranch)
 	if err != nil {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "git diff failed: %w", err)
@@ -87,7 +86,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		diff = "(No changes)"
 	}
 
-	// 3. Read work order and context package
 	woContent, err := os.ReadFile(wf.OriginalFile)
 	if err != nil {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to read work order: %w", err)
@@ -102,7 +100,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to read context package: %w", err)
 	}
 
-	// 4. Parse work order for acceptance criteria and run deterministic pre-checks
 	var wo models.WorkOrder
 	if err := yaml.Unmarshal(woContent, &wo); err != nil {
 		slog.Warn("Could not parse work order YAML for pre-checks", "error", err)
@@ -110,7 +107,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 
 	preChecks := w.runPreChecks(ctx, wo.AcceptanceCriteria)
 
-	// Separate remaining (LLM-only) criteria
 	preCheckedSet := make(map[string]bool, len(preChecks))
 	for _, r := range preChecks {
 		preCheckedSet[r.criterion] = true
@@ -122,7 +118,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		}
 	}
 
-	// Build prompt sections for pre-checked and remaining criteria
 	var preCheckedSection strings.Builder
 	if len(preChecks) > 0 {
 		preCheckedSection.WriteString("=== PRE-CHECKED CRITERIA (DO NOT RE-EVALUATE) ===\n")
@@ -145,7 +140,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		remainingSection.WriteString("\n")
 	}
 
-	// 5. Check if all pre-checked criteria failed — force FAIL without LLM
 	allPreFailed := len(preChecks) > 0
 	for _, r := range preChecks {
 		if r.met {
@@ -175,7 +169,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 			},
 		}
 	} else {
-		// 6. Build LLM prompt context
 		promptContext := fmt.Sprintf(`=== WORK ORDER ===
 %s
 
@@ -188,7 +181,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 %s%s`, string(woContent), string(cpContent), diff,
 			preCheckedSection.String(), remainingSection.String())
 
-		// 7. Call LLM with retry
 		maxAttempts := int(task.MaxAttempts)
 		if maxAttempts < 1 {
 			maxAttempts = 1
@@ -232,7 +224,7 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 				"llm failed after %d attempts: %w", maxAttempts, lastErr)
 		}
 
-		// 8. Merge pre-checked results into the report (prepend so they appear first)
+		// Merge pre-checked results into the report, prepending so they appear first.
 		if len(preChecks) > 0 {
 			preResults := make([]models.CriterionResult, len(preChecks))
 			for i, r := range preChecks {
@@ -242,8 +234,7 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 					Notes:     r.notes,
 				}
 			}
-			// Remove LLM entries for any criterion already pre-checked so there is
-			// exactly one entry per criterion and pre-checked results always win.
+			// De-duplicate: pre-checked results always win over LLM entries.
 			var filtered []models.CriterionResult
 			for _, cr := range report.Completeness.CriteriaResults {
 				if !preCheckedSet[cr.Criterion] {
@@ -252,7 +243,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 			}
 			report.Completeness.CriteriaResults = append(preResults, filtered...)
 
-			// Recompute all_criteria_met and force FAIL if any pre-check failed
 			allMet := true
 			for _, r := range report.Completeness.CriteriaResults {
 				if !r.Met {
@@ -271,7 +261,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		}
 	}
 
-	// 9. Record verify metrics in pipeline_run
 	if err := w.db.UpdatePipelineRunVerify(ctx, database.UpdatePipelineRunVerifyParams{
 		WorkflowID:        task.WorkflowID,
 		VerifyStartedAt:   sql.NullString{String: verifyStartedAt.UTC().Format(time.RFC3339), Valid: true},
@@ -284,7 +273,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		slog.Warn("Failed to update pipeline run verify metrics", "error", err)
 	}
 
-	// 10. Write Report
 	reportDir := filepath.Join(w.cfg.Project.DataDir, "artifacts", "verify-reports")
 	if err := os.MkdirAll(reportDir, 0755); err != nil {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to create verify-reports dir: %w", err)
@@ -295,7 +283,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to write verification report: %w", err)
 	}
 
-	// 11. Update Workflow State → HUMAN_REVIEW
 	if err := w.db.UpdateWorkflowVerification(ctx, database.UpdateWorkflowVerificationParams{
 		ID:                     task.WorkflowID,
 		VerificationReportPath: sql.NullString{String: reportPath, Valid: true},
@@ -304,7 +291,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to update workflow verification: %w", err)
 	}
 
-	// If all pre-checks failed, the report and workflow state are recorded; signal human review.
 	if allPreFailed {
 		return pipelineerrors.NeedsHumanf("verify", task.WorkflowID, task.ID,
 			"all pre-checks failed; skipping LLM evaluation")
@@ -325,7 +311,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		"hint", "run 'conductor approve/reject "+task.WorkflowID+"'",
 	)
 
-	// 12. Complete Task
 	return w.q.CompleteTask(task.ID, &queue.TaskResult{
 		ExitCode:  0,
 		StdoutLog: fmt.Sprintf("Verification Status: %s", report.Status),

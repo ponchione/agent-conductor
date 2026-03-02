@@ -85,7 +85,6 @@ func (w *Worker) ProcessNextTask(ctx stdctx.Context) {
 	if result != nil {
 		var pe *pipelineerrors.PipelineError
 		if !goerrors.As(result, &pe) {
-			// unknown phase or future error not yet wrapped — treat as Fatal
 			pe = pipelineerrors.Fatalf(task.Phase, task.WorkflowID, task.ID, "%v", result)
 		}
 
@@ -102,7 +101,6 @@ func (w *Worker) ProcessNextTask(ctx stdctx.Context) {
 				w.q.RetryTask(task.ID)
 				return
 			}
-			// retries exhausted — fall through to fail
 		case pipelineerrors.NeedsHuman:
 			w.q.FailTask(task.ID, result)
 			w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
@@ -110,7 +108,6 @@ func (w *Worker) ProcessNextTask(ctx stdctx.Context) {
 			})
 			return
 		}
-		// Fatal or Retryable-exhausted
 		w.q.FailTask(task.ID, result)
 		w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
 			ID: task.WorkflowID, CurrentState: "failed",

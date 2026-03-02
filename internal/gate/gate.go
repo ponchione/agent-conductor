@@ -22,12 +22,10 @@ func Approve(ctx context.Context, db *database.DB, gitMgr *git.GitManager, workf
 		return fmt.Errorf("workflow %s is in state %q, expected human_review", workflowID, wf.CurrentState)
 	}
 
-	// Merge the conducted branch into main. On failure, bail out with no state change.
 	if err := gitMgr.MergeBranch(repoPath, "main", wf.GitBranch); err != nil {
 		return fmt.Errorf("merge branch %s into main: %w", wf.GitBranch, err)
 	}
 
-	// Best-effort branch cleanup.
 	if err := gitMgr.DeleteBranch(repoPath, wf.GitBranch); err != nil {
 		slog.Warn("Failed to delete conducted branch", "branch", wf.GitBranch, "error", err)
 	}

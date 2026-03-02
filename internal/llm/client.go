@@ -59,9 +59,6 @@ func (c *Client) Complete(ctx context.Context, systemPrompt string, userMessage 
 		return "", Usage{}, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Construct URL: <endpoint>/chat/completions
-	// We handle potential double slashes by trimming the base endpoint in New()
-	// but let's be robust here too.
 	targetURL, err := url.JoinPath(c.endpoint, "chat", "completions")
 	if err != nil {
 		return "", Usage{}, fmt.Errorf("failed to construct URL: %w", err)

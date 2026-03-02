@@ -48,7 +48,6 @@ func NewGoASTParser(rootDir string) (*GoASTParser, error) {
 		return nil, fmt.Errorf("go/packages load: %w", err)
 	}
 
-	// Check for load errors but don't fail — partial results are still useful.
 	for _, pkg := range pkgs {
 		for _, e := range pkg.Errors {
 			slog.Warn("go/packages error", "pkg", pkg.PkgPath, "error", e)
@@ -63,7 +62,6 @@ func NewGoASTParser(rootDir string) (*GoASTParser, error) {
 			return true
 		}
 
-		// Index files.
 		for _, f := range pkg.GoFiles {
 			abs, err := filepath.Abs(f)
 			if err == nil {
@@ -71,7 +69,6 @@ func NewGoASTParser(rootDir string) (*GoASTParser, error) {
 			}
 		}
 
-		// Collect named interfaces for Implements checking.
 		scope := pkg.Types.Scope()
 		for _, name := range scope.Names() {
 			obj := scope.Lookup(name)
@@ -126,7 +123,6 @@ func (p *GoASTParser) ParseFile(filePath, language string, content []byte) ([]Ra
 		return p.treeSitter.ParseFile(filePath, language, content)
 	}
 
-	// Find the AST file that matches this path.
 	var astFile *ast.File
 	for _, f := range pkg.Syntax {
 		pos := p.fset.Position(f.Pos())
@@ -140,7 +136,6 @@ func (p *GoASTParser) ParseFile(filePath, language string, content []byte) ([]Ra
 		return p.treeSitter.ParseFile(filePath, language, content)
 	}
 
-	// Extract file-level imports.
 	fileImports := extractImports(astFile)
 
 	var chunks []RawChunk
@@ -187,7 +182,6 @@ func (p *GoASTParser) parseFuncDecl(
 
 	body := string(content[startOff:endOff])
 
-	// Extract signature: everything before the body block.
 	var sig string
 	if decl.Body != nil {
 		bodyOff := p.fset.Position(decl.Body.Pos()).Offset
@@ -200,7 +194,6 @@ func (p *GoASTParser) parseFuncDecl(
 		body = body[:MaxBodyLength]
 	}
 
-	// Extract calls from the function body.
 	calls := p.extractCalls(decl.Body, pkg)
 
 	startPos := p.fset.Position(decl.Pos())
@@ -284,7 +277,6 @@ func (p *GoASTParser) resolveIdent(ident *ast.Ident, pkg *packages.Package) *Fun
 
 // resolveSelector resolves a selector expression call (e.g., pkg.Func() or obj.Method()).
 func (p *GoASTParser) resolveSelector(sel *ast.SelectorExpr, pkg *packages.Package) *FuncRef {
-	// Check if X is a package name (qualified call like fmt.Println).
 	if xIdent, ok := sel.X.(*ast.Ident); ok {
 		if xObj, ok := pkg.TypesInfo.Uses[xIdent]; ok {
 			if pkgName, ok := xObj.(*goTypes.PkgName); ok {
@@ -296,7 +288,6 @@ func (p *GoASTParser) resolveSelector(sel *ast.SelectorExpr, pkg *packages.Packa
 		}
 	}
 
-	// Method call on a variable/receiver.
 	selObj, ok := pkg.TypesInfo.Uses[sel.Sel]
 	if !ok {
 		return nil
@@ -338,8 +329,6 @@ func (p *GoASTParser) parseGenDecl(
 			continue
 		}
 
-		// Use the spec's position for the start, and find the end.
-		// For single-spec GenDecls, use the GenDecl's positions.
 		startNode := ast.Node(decl)
 		if len(decl.Specs) > 1 {
 			startNode = ts
@@ -353,7 +342,6 @@ func (p *GoASTParser) parseGenDecl(
 
 		body := string(content[startOff:endOff])
 
-		// Signature: everything up to the opening brace or first newline.
 		sig := body
 		if idx := strings.Index(sig, "{"); idx != -1 {
 			sig = strings.TrimRight(sig[:idx], " \t\n\r")
@@ -365,10 +353,7 @@ func (p *GoASTParser) parseGenDecl(
 			body = body[:MaxBodyLength]
 		}
 
-		// Extract referenced types.
 		typesUsed := p.extractTypesUsed(ts, pkg)
-
-		// Check which interfaces this type implements.
 		implements := p.checkImplements(name, pkg)
 
 		startPos := p.fset.Position(startNode.Pos())
@@ -459,7 +444,6 @@ func (p *GoASTParser) checkImplements(typeName string, pkg *packages.Package) []
 func extractImports(f *ast.File) []string {
 	imports := make([]string, 0, len(f.Imports))
 	for _, imp := range f.Imports {
-		// imp.Path.Value includes quotes, strip them.
 		path := strings.Trim(imp.Path.Value, `"`)
 		imports = append(imports, path)
 	}

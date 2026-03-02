@@ -41,7 +41,6 @@ func New(cfg *config.ProjectConfig, db *database.DB) *Queue {
 func (q *Queue) ClaimNextTask(workerID string) (*database.Task, error) {
 	ctx := context.Background()
 
-	// Use the atomic helper we added to database.go
 	task, err := q.db.AtomicClaimTask(ctx, workerID)
 	if err != nil {
 		return nil, err

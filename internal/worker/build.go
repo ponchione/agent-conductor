@@ -22,13 +22,11 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 
 	buildStartedAt := time.Now()
 
-	// 1. Get Workflow
 	wf, err := w.db.GetWorkflow(ctx, task.WorkflowID)
 	if err != nil {
 		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "workflow missing: %w", err)
 	}
 
-	// 2. Validate context package path
 	contextPath := wf.ContextPackagePath.String
 	if !wf.ContextPackagePath.Valid {
 		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "context package path is missing")
@@ -36,7 +34,6 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 
 	workOrderPath := wf.OriginalFile
 
-	// 3. Execute OpenCode
 	runCfg := executor.RunConfig{
 		RepoPath:   w.cfg.Project.Path,
 		Agent:      "build",
@@ -57,7 +54,6 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 			"build agent exited with code %d", result.ExitCode)
 	}
 
-	// 4. Forbidden path check — fail if build agent touched a protected file
 	if len(w.cfg.Safety.ForbiddenPaths) > 0 {
 		changedFiles, err := w.git.GetChangedFilesBetween(w.cfg.Project.Path, "main", wf.GitBranch)
 		if err != nil {
@@ -73,7 +69,6 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		}
 	}
 
-	// 5. Update Workflow
 	if err := w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
 		ID:           task.WorkflowID,
 		CurrentState: "build_complete",
@@ -86,9 +81,6 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		"duration":  result.Duration.String(),
 	})
 
-	// Add Observability Printf
-	// We need to count actually changed files to print, we already fetched it potentially above
-	// Let's re-fetch or use if we have it
 	changedFilesCount := 0
 	changedFiles, err := w.git.GetChangedFilesBetween(w.cfg.Project.Path, "main", wf.GitBranch)
 	if err == nil {
@@ -109,14 +101,12 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		"files_changed", changedFilesCount,
 	)
 
-	// 6. Complete Task
 	w.q.CompleteTask(task.ID, &queue.TaskResult{
 		ExitCode:  result.ExitCode,
 		StdoutLog: result.StdoutPath,
 		StderrLog: result.StderrPath,
 	})
 
-	// 7. Queue Verify Task
 	verifyTaskID := uuid.New().String()
 	if err := w.db.CreateTask(ctx, database.CreateTaskParams{
 		ID:            verifyTaskID,

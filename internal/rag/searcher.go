@@ -60,7 +60,6 @@ func (s *DefaultSearcher) SearchForWorkOrder(
 ) ([]condctx.EnrichedRAGResult, error) {
 	queries := expandQueries(wo)
 
-	// Stage 1: Multi-query search + dedup
 	type scored struct {
 		result    SearchResult
 		hitCount  int
@@ -93,7 +92,6 @@ func (s *DefaultSearcher) SearchForWorkOrder(
 		}
 	}
 
-	// Stage 2: Re-rank by hit count desc, then best score desc
 	directHits := make([]*scored, 0, len(seen))
 	for _, s := range seen {
 		directHits = append(directHits, s)
@@ -105,14 +103,12 @@ func (s *DefaultSearcher) SearchForWorkOrder(
 		return directHits[i].bestScore > directHits[j].bestScore
 	})
 
-	// Budget: ~60% direct hits, ~40% dependency hops
 	directBudget := (maxResults * 60) / 100
 	if directBudget > len(directHits) {
 		directBudget = len(directHits)
 	}
 	hopBudget := maxResults - directBudget
 
-	// Stage 3: Build enriched results from direct hits
 	enriched := make([]EnrichedResult, 0, maxResults)
 	for i := 0; i < directBudget; i++ {
 		h := directHits[i]
@@ -122,7 +118,6 @@ func (s *DefaultSearcher) SearchForWorkOrder(
 		})
 	}
 
-	// Stage 4: One-hop dependency expansion
 	seenIDs := make(map[string]bool, len(enriched))
 	for _, e := range enriched {
 		seenIDs[e.Chunk.ID] = true
@@ -131,7 +126,6 @@ func (s *DefaultSearcher) SearchForWorkOrder(
 	hops := s.expandDependencies(ctx, enriched, seenIDs, hopBudget)
 	enriched = append(enriched, hops...)
 
-	// Stage 5: Map to EnrichedRAGResult
 	return toEnrichedResults(enriched, maxResults), nil
 }
 
@@ -191,7 +185,6 @@ func (s *DefaultSearcher) expandDependencies(
 			break
 		}
 
-		// Expand Calls
 		for _, ref := range hit.Chunk.Calls {
 			if len(hops) >= budget {
 				break
@@ -216,7 +209,6 @@ func (s *DefaultSearcher) expandDependencies(
 			}
 		}
 
-		// Expand CalledBy
 		for _, ref := range hit.Chunk.CalledBy {
 			if len(hops) >= budget {
 				break

@@ -52,7 +52,6 @@ func IndexRepo(
 		fileHashes = make(map[string]string)
 	}
 
-	// Schema migration: force full re-index when schema version changes.
 	if fileHashes["__schema_version"] != SchemaVersion {
 		slog.Info("schema version changed, forcing full re-index",
 			"old", fileHashes["__schema_version"],
@@ -64,7 +63,6 @@ func IndexRepo(
 		}
 	}
 
-	// Select parser based on project language.
 	var parser Parser
 	if cfg.Project.Language == "go" {
 		goParser, err := NewGoASTParser(absRoot)
@@ -118,7 +116,6 @@ func IndexRepo(
 
 		lang := langFromExt(filepath.Ext(relPath))
 
-		// GoASTParser needs absolute paths for pkgsByFile lookup.
 		rawChunks, err := parser.ParseFile(path, lang, content)
 		if err != nil {
 			slog.Warn("parse failed", "path", relPath, "err", err)
@@ -150,7 +147,6 @@ func IndexRepo(
 
 	// ── Pass 2: Reverse call graph — populate CalledBy ──
 
-	// Build index: "package.FuncName" → indices into a flat chunk slice.
 	type chunkRef struct {
 		fileIdx  int
 		chunkIdx int
@@ -162,11 +158,8 @@ func IndexRepo(
 			if chunk.Name == "" {
 				continue
 			}
-			// Key by qualified name for Go chunks, plain name otherwise.
 			var key string
 			if pf.language == "go" && len(chunk.Imports) > 0 {
-				// Use the chunk's package from the file path as a rough key.
-				// For reverse lookups within the same project this is sufficient.
 				key = pf.relPath + "." + chunk.Name
 			} else {
 				key = chunk.Name
@@ -175,21 +168,13 @@ func IndexRepo(
 		}
 	}
 
-	// Also build a package-qualified index for Go functions.
 	pkgIndex := make(map[string][]chunkRef)
 	for fi, pf := range parsed {
 		for ci, chunk := range pf.chunks {
 			if chunk.Name == "" {
 				continue
 			}
-			for _, call := range chunk.Calls {
-				// Register the caller's identity for looking up later.
-				_ = call // processed below
-			}
-			// Build package-based key from calls targets.
-			// We index by the chunk's own identity.
 			if pf.language == "go" {
-				// Derive package path from relPath: "internal/rag/types.go" → "internal/rag"
 				dir := filepath.Dir(pf.relPath)
 				key := dir + "." + chunk.Name
 				pkgIndex[key] = append(pkgIndex[key], chunkRef{fi, ci})
@@ -197,14 +182,10 @@ func IndexRepo(
 		}
 	}
 
-	// For each chunk's Calls, look up the target and append CalledBy.
 	for fi, pf := range parsed {
 		for ci, chunk := range pf.chunks {
 			for _, call := range chunk.Calls {
-				// Try to find the target chunk by package path.
-				var targets []chunkRef
-
-				// Match by package directory + name.
+					var targets []chunkRef
 				for _, pf2 := range parsed {
 					dir2 := filepath.Dir(pf2.relPath)
 					if strings.HasSuffix(call.Package, filepath.ToSlash(dir2)) || call.Package == dir2 {
@@ -213,7 +194,6 @@ func IndexRepo(
 					}
 				}
 
-				// Also try direct name match for same-package calls.
 				if call.Package == "" || strings.Contains(pf.relPath, call.Package) {
 					for _, pf2 := range parsed {
 						dir2 := filepath.Dir(pf2.relPath)
@@ -224,7 +204,7 @@ func IndexRepo(
 
 				callerRef := FuncRef{
 					Name:    chunk.Name,
-					Package: call.Package, // reuse the package context
+					Package: call.Package,
 					File:    pf.relPath,
 				}
 
@@ -234,7 +214,6 @@ func IndexRepo(
 						continue
 					}
 					seen[t] = true
-					// Don't add self-references.
 					if t.fileIdx == fi && t.chunkIdx == ci {
 						continue
 					}
@@ -264,7 +243,6 @@ func IndexRepo(
 			descriptions = make(map[string]string)
 		}
 
-		// Apply descriptions to chunks.
 		embedTexts := make([]string, len(pf.chunks))
 		for j := range pf.chunks {
 			desc := descriptions[pf.chunks[j].Name]

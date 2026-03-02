@@ -21,27 +21,23 @@ func (g *GitManager) MergeBranch(repoPath, base, target string) error {
 		return fmt.Errorf("get worktree: %w", err)
 	}
 
-	// Checkout the base branch.
 	if err := wt.Checkout(&git.CheckoutOptions{
 		Branch: plumbing.NewBranchReferenceName(base),
 	}); err != nil {
 		return fmt.Errorf("checkout %s: %w", base, err)
 	}
 
-	// Resolve the target branch ref.
 	targetRef, err := r.Reference(plumbing.NewBranchReferenceName(target), true)
 	if err != nil {
 		return fmt.Errorf("resolve branch %s: %w", target, err)
 	}
 
-	// Fast-forward merge (only updates the ref, not the worktree).
 	if err := r.Merge(*targetRef, git.MergeOptions{
 		Strategy: git.FastForwardMerge,
 	}); err != nil {
 		return fmt.Errorf("merge %s into %s: %w", target, base, err)
 	}
 
-	// Sync the working tree to the new HEAD.
 	head, err := r.Head()
 	if err != nil {
 		return fmt.Errorf("get HEAD after merge: %w", err)

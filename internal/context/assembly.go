@@ -64,7 +64,6 @@ func (a *Assembler) searchRelevantCode(ctx context.Context, wo *models.WorkOrder
 		return nil
 	}
 
-	// Prefer work-order-aware search if the searcher supports it.
 	if wos, ok := a.searcher.(RAGWorkOrderSearcher); ok {
 		maxResults := 30
 		if a.cfg.Index.MaxRAGResults > 0 {
@@ -90,7 +89,6 @@ func (a *Assembler) searchRelevantCode(ctx context.Context, wo *models.WorkOrder
 		}
 	}
 
-	// Fallback: basic title-only search.
 	results, err := a.searcher.SearchStructured(ctx, wo.Title, 10)
 	if err != nil {
 		slog.Warn("RAG search failed, continuing without", "error", err)
@@ -139,7 +137,6 @@ func (a *Assembler) AssembleScopePrompt(ctx context.Context, wo *models.WorkOrde
 	}
 	sb.WriteString("\n")
 
-	// RAG results
 	relevantCode := a.searchRelevantCode(ctx, wo)
 	if len(relevantCode) > 0 {
 		sb.WriteString("=== SEMANTICALLY RELEVANT CODE (via RAG) ===\n")
@@ -161,7 +158,6 @@ func (a *Assembler) AssembleScopePrompt(ctx context.Context, wo *models.WorkOrde
 func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder, scopePkg *models.ContextPackage, branchName string) (*models.FullContextPackage, error) {
 	relevantCode := a.searchRelevantCode(ctx, wo)
 
-	// Build reference module note
 	var refNote string
 	if wo.ReferenceModule != "" {
 		refNote = fmt.Sprintf(

@@ -9,8 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ProjectConfig replaces the old global Config.
-// It maps to the new project.yaml schema for a single-project orchestrator.
+// ProjectConfig maps to the project.yaml schema for a single-project orchestrator.
 type ProjectConfig struct {
 	Project     Project     `yaml:"project"`
 	Index       Index       `yaml:"index"`
@@ -99,7 +98,6 @@ func Load(projectPath string) (*ProjectConfig, error) {
 		return nil, fmt.Errorf("could not determine home directory: %w", err)
 	}
 
-	// 1. Hardcoded defaults
 	cfg := &ProjectConfig{
 		LocalModel: LocalModel{
 			Endpoint:       "http://localhost:8080/v1",
@@ -125,7 +123,6 @@ func Load(projectPath string) (*ProjectConfig, error) {
 		},
 	}
 
-	// 2. Global config — optional, missing file is not an error
 	globalPath := filepath.Join(home, "source", ".conductor", "config.yaml")
 	if globalData, err := os.ReadFile(globalPath); err == nil {
 		if err := yaml.Unmarshal(globalData, cfg); err != nil {
@@ -133,7 +130,6 @@ func Load(projectPath string) (*ProjectConfig, error) {
 		}
 	}
 
-	// 3. Project config — required
 	projectData, err := os.ReadFile(projectPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
@@ -142,12 +138,10 @@ func Load(projectPath string) (*ProjectConfig, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// 4. Apply zero-value defaults after YAML merge
 	if cfg.Index.MaxRAGResults == 0 {
 		cfg.Index.MaxRAGResults = 30
 	}
 
-	// 5. Compute DataDir — always derived, never configurable
 	cfg.Project.DataDir = filepath.Join(home, "source", ".conductor", "projects", cfg.Project.Name)
 
 	return cfg, nil

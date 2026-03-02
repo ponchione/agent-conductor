@@ -100,10 +100,6 @@ func runResult(ctx context.Context, err error, duration time.Duration, stderrFil
 	}, nil
 }
 
-// ---------------------------------------------------------------------------
-// OpenCodeExecutor
-// ---------------------------------------------------------------------------
-
 // OpenCodeExecutor runs work orders via the opencode CLI.
 type OpenCodeExecutor struct {
 	cfg *config.ProjectConfig
@@ -156,10 +152,6 @@ func (e *OpenCodeExecutor) Run(ctx context.Context, runCfg RunConfig) (*RunResul
 	return runResult(ctx, err, duration, stderrFile, stdoutPath, stderrPath)
 }
 
-// ---------------------------------------------------------------------------
-// ClaudeCodeExecutor
-// ---------------------------------------------------------------------------
-
 // ClaudeCodeExecutor runs work orders via the claude CLI in non-interactive mode.
 type ClaudeCodeExecutor struct {
 	cfg *config.ProjectConfig
@@ -180,7 +172,6 @@ func (e *ClaudeCodeExecutor) Run(ctx context.Context, runCfg RunConfig) (*RunRes
 	defer stdoutFile.Close()
 	defer stderrFile.Close()
 
-	// Build user message: embed each input file's contents then append the instruction.
 	var sb strings.Builder
 	for _, f := range runCfg.InputFiles {
 		contents, readErr := os.ReadFile(f)
