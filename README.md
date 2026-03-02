@@ -290,8 +290,7 @@ sql/                    SQL queries (sqlc source)
 
 ## Known Limitations
 
-- Approve does not auto-merge — manual `git merge` required after approval
-- Claude Code output does not stream in real-time to the console
+- Claude Code output does not stream in real-time to the console (yet)
 - No cross-repo coordination (single repo per work order)
 - No GitHub PR creation
 - go-git merge support is limited; complex merges may need manual intervention
