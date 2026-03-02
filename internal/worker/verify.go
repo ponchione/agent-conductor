@@ -118,28 +118,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		}
 	}
 
-	var preCheckedSection strings.Builder
-	if len(preChecks) > 0 {
-		preCheckedSection.WriteString("=== PRE-CHECKED CRITERIA (DO NOT RE-EVALUATE) ===\n")
-		for _, r := range preChecks {
-			tag := "[PASS]"
-			if !r.met {
-				tag = "[FAIL]"
-			}
-			preCheckedSection.WriteString(fmt.Sprintf("%s %s (%s)\n", tag, r.criterion, r.notes))
-		}
-		preCheckedSection.WriteString("\n")
-	}
-
-	var remainingSection strings.Builder
-	if len(remainingCriteria) > 0 {
-		remainingSection.WriteString("=== REMAINING CRITERIA FOR YOUR EVALUATION ===\n")
-		for _, c := range remainingCriteria {
-			remainingSection.WriteString(fmt.Sprintf("- %s\n", c))
-		}
-		remainingSection.WriteString("\n")
-	}
-
 	allPreFailed := len(preChecks) > 0
 	for _, r := range preChecks {
 		if r.met {
@@ -169,22 +147,9 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 			},
 		}
 	} else {
-		promptContext := fmt.Sprintf(`=== WORK ORDER ===
-%s
+		promptContext := buildVerifyPrompt(woContent, cpContent, diff, preChecks, remainingCriteria)
 
-=== CONTEXT PACKAGE ===
-%s
-
-=== IMPLEMENTATION DIFF ===
-%s
-
-%s%s`, string(woContent), string(cpContent), diff,
-			preCheckedSection.String(), remainingSection.String())
-
-		maxAttempts := int(task.MaxAttempts)
-		if maxAttempts < 1 {
-			maxAttempts = 1
-		}
+		maxAttempts := max(int(task.MaxAttempts), 1)
 
 		var lastErr error
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -224,41 +189,7 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 				"llm failed after %d attempts: %w", maxAttempts, lastErr)
 		}
 
-		// Merge pre-checked results into the report, prepending so they appear first.
-		if len(preChecks) > 0 {
-			preResults := make([]models.CriterionResult, len(preChecks))
-			for i, r := range preChecks {
-				preResults[i] = models.CriterionResult{
-					Criterion: r.criterion,
-					Met:       r.met,
-					Notes:     r.notes,
-				}
-			}
-			// De-duplicate: pre-checked results always win over LLM entries.
-			var filtered []models.CriterionResult
-			for _, cr := range report.Completeness.CriteriaResults {
-				if !preCheckedSet[cr.Criterion] {
-					filtered = append(filtered, cr)
-				}
-			}
-			report.Completeness.CriteriaResults = append(preResults, filtered...)
-
-			allMet := true
-			for _, r := range report.Completeness.CriteriaResults {
-				if !r.Met {
-					allMet = false
-					break
-				}
-			}
-			report.Completeness.AllCriteriaMet = allMet
-
-			for _, r := range preChecks {
-				if !r.met {
-					report.Status = "FAIL"
-					break
-				}
-			}
-		}
+		mergePreChecks(&report, preChecks, preCheckedSet)
 	}
 
 	if err := w.db.UpdatePipelineRunVerify(ctx, database.UpdatePipelineRunVerifyParams{
@@ -273,14 +204,10 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		slog.Warn("Failed to update pipeline run verify metrics", "error", err)
 	}
 
-	reportDir := filepath.Join(w.cfg.Project.DataDir, "artifacts", "verify-reports")
-	if err := os.MkdirAll(reportDir, 0755); err != nil {
-		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to create verify-reports dir: %w", err)
-	}
-	reportPath := filepath.Join(reportDir, task.WorkflowID+"-verify-report.json")
-	reportData, _ := json.MarshalIndent(report, "", "  ")
-	if err := os.WriteFile(reportPath, reportData, 0644); err != nil {
-		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to write verification report: %w", err)
+	dataDir := w.cfg.Project.DataDir
+	reportPath, err := writeVerifyReport(&report, dataDir, task.WorkflowID)
+	if err != nil {
+		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "%s", err)
 	}
 
 	if err := w.db.UpdateWorkflowVerification(ctx, database.UpdateWorkflowVerificationParams{
@@ -315,4 +242,96 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		ExitCode:  0,
 		StdoutLog: fmt.Sprintf("Verification Status: %s", report.Status),
 	})
+}
+
+// buildVerifyPrompt assembles the full prompt context for the verification LLM call.
+func buildVerifyPrompt(woContent, cpContent []byte, diff string, preChecks []criterionPreCheck, remainingCriteria []string) string {
+	var preCheckedSection strings.Builder
+	if len(preChecks) > 0 {
+		preCheckedSection.WriteString("=== PRE-CHECKED CRITERIA (DO NOT RE-EVALUATE) ===\n")
+		for _, r := range preChecks {
+			tag := "[PASS]"
+			if !r.met {
+				tag = "[FAIL]"
+			}
+			fmt.Fprintf(&preCheckedSection, "%s %s (%s)\n", tag, r.criterion, r.notes)
+		}
+		preCheckedSection.WriteString("\n")
+	}
+
+	var remainingSection strings.Builder
+	if len(remainingCriteria) > 0 {
+		remainingSection.WriteString("=== REMAINING CRITERIA FOR YOUR EVALUATION ===\n")
+		for _, c := range remainingCriteria {
+			fmt.Fprintf(&remainingSection, "- %s\n", c)
+		}
+		remainingSection.WriteString("\n")
+	}
+
+	return fmt.Sprintf(`=== WORK ORDER ===
+%s
+
+=== CONTEXT PACKAGE ===
+%s
+
+=== IMPLEMENTATION DIFF ===
+%s
+
+%s%s`, string(woContent), string(cpContent), diff,
+		preCheckedSection.String(), remainingSection.String())
+}
+
+// mergePreChecks prepends pre-checked results into the report, deduplicates
+// against LLM entries, and recomputes the overall status.
+func mergePreChecks(report *models.VerificationReport, preChecks []criterionPreCheck, preCheckedSet map[string]bool) {
+	if len(preChecks) == 0 {
+		return
+	}
+
+	preResults := make([]models.CriterionResult, len(preChecks))
+	for i, r := range preChecks {
+		preResults[i] = models.CriterionResult{
+			Criterion: r.criterion,
+			Met:       r.met,
+			Notes:     r.notes,
+		}
+	}
+
+	var filtered []models.CriterionResult
+	for _, cr := range report.Completeness.CriteriaResults {
+		if !preCheckedSet[cr.Criterion] {
+			filtered = append(filtered, cr)
+		}
+	}
+	report.Completeness.CriteriaResults = append(preResults, filtered...)
+
+	allMet := true
+	for _, r := range report.Completeness.CriteriaResults {
+		if !r.Met {
+			allMet = false
+			break
+		}
+	}
+	report.Completeness.AllCriteriaMet = allMet
+
+	for _, r := range preChecks {
+		if !r.met {
+			report.Status = "FAIL"
+			break
+		}
+	}
+}
+
+// writeVerifyReport serializes and writes the verification report to disk.
+func writeVerifyReport(report *models.VerificationReport, dataDir, workflowID string) (string, error) {
+	reportDir := filepath.Join(dataDir, "artifacts", "verify-reports")
+	if err := os.MkdirAll(reportDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create verify-reports dir: %w", err)
+	}
+	reportPath := filepath.Join(reportDir, workflowID+"-verify-report.json")
+	reportData, _ := json.MarshalIndent(report, "", "  ")
+	if err := os.WriteFile(reportPath, reportData, 0644); err != nil {
+		return "", fmt.Errorf("failed to write verification report: %w", err)
+	}
+	return reportPath, nil
 }

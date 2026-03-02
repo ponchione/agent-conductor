@@ -54,10 +54,11 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 			"build agent exited with code %d", result.ExitCode)
 	}
 
+	changedFiles, changedFilesErr := w.git.GetChangedFilesBetween(w.cfg.Project.Path, "main", wf.GitBranch)
+
 	if len(w.cfg.Safety.ForbiddenPaths) > 0 {
-		changedFiles, err := w.git.GetChangedFilesBetween(w.cfg.Project.Path, "main", wf.GitBranch)
-		if err != nil {
-			slog.Warn("Could not enumerate changed files for forbidden path check", "error", err)
+		if changedFilesErr != nil {
+			slog.Warn("Could not enumerate changed files for forbidden path check", "error", changedFilesErr)
 		} else {
 			for _, changed := range changedFiles {
 				for _, forbidden := range w.cfg.Safety.ForbiddenPaths {
@@ -82,8 +83,7 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	})
 
 	changedFilesCount := 0
-	changedFiles, err := w.git.GetChangedFilesBetween(w.cfg.Project.Path, "main", wf.GitBranch)
-	if err == nil {
+	if changedFilesErr == nil {
 		changedFilesCount = len(changedFiles)
 	}
 

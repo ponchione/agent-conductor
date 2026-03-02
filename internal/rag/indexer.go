@@ -20,6 +20,12 @@ type parsedFile struct {
 	chunks   []Chunk
 }
 
+// chunkRef identifies a chunk by its position within the parsed file list.
+type chunkRef struct {
+	fileIdx  int
+	chunkIdx int
+}
+
 // IndexRepo walks the project directory and indexes all matching files into the
 // RAG store using a three-pass pipeline:
 //
@@ -76,12 +82,35 @@ func IndexRepo(
 		parser = NewTreeSitterParser()
 	}
 
-	// ── Pass 1: Walk all files, parse, collect chunks ──
+	parsed, filesVisited, walkErr := walkAndParse(absRoot, cfg, parser, fileHashes)
+	if walkErr != nil {
+		return walkErr
+	}
 
+	buildReverseCallGraph(parsed)
+
+	filesIndexed, totalChunks := describeEmbedStore(ctx, parsed, store, embedder, describer, fileHashes)
+
+	slog.Info("indexing complete",
+		"files_visited", filesVisited,
+		"files_indexed", filesIndexed,
+		"total_chunks", totalChunks,
+	)
+
+	if saveErr := saveFileHashes(hashFile, fileHashes); saveErr != nil {
+		slog.Warn("could not save file hashes", "error", saveErr)
+	}
+
+	return nil
+}
+
+// walkAndParse walks the project directory and parses all matching files into
+// chunks (Pass 1). Returns the parsed files, total files visited, and any error.
+func walkAndParse(absRoot string, cfg *config.ProjectConfig, parser Parser, fileHashes map[string]string) ([]parsedFile, int, error) {
 	var filesVisited int
 	var parsed []parsedFile
 
-	walkErr := filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -141,34 +170,19 @@ func IndexRepo(
 
 		return nil
 	})
-	if walkErr != nil {
-		return walkErr
-	}
 
-	// ── Pass 2: Reverse call graph — populate CalledBy ──
+	return parsed, filesVisited, err
+}
 
-	type chunkRef struct {
-		fileIdx  int
-		chunkIdx int
-	}
-	callIndex := make(map[string][]chunkRef)
-
-	for fi, pf := range parsed {
-		for ci, chunk := range pf.chunks {
-			if chunk.Name == "" {
-				continue
-			}
-			var key string
-			if pf.language == "go" && len(chunk.Imports) > 0 {
-				key = pf.relPath + "." + chunk.Name
-			} else {
-				key = chunk.Name
-			}
-			callIndex[key] = append(callIndex[key], chunkRef{fi, ci})
-		}
-	}
-
+// buildReverseCallGraph populates CalledBy on target chunks by resolving
+// forward Calls references against pre-computed indexes (Pass 2).
+//
+// Uses O(n) lookups via suffixToDir and pkgIndex instead of iterating
+// all parsed files for each call reference.
+func buildReverseCallGraph(parsed []parsedFile) {
+	// pkgIndex maps "dir.FuncName" → chunk references for O(1) lookup.
 	pkgIndex := make(map[string][]chunkRef)
+	dirSet := make(map[string]bool)
 	for fi, pf := range parsed {
 		for ci, chunk := range pf.chunks {
 			if chunk.Name == "" {
@@ -178,27 +192,50 @@ func IndexRepo(
 				dir := filepath.Dir(pf.relPath)
 				key := dir + "." + chunk.Name
 				pkgIndex[key] = append(pkgIndex[key], chunkRef{fi, ci})
+				dirSet[dir] = true
 			}
+		}
+	}
+
+	// allDirs is the deduplicated list of directories for fallback resolution.
+	allDirs := make([]string, 0, len(dirSet))
+	for d := range dirSet {
+		allDirs = append(allDirs, d)
+	}
+
+	// suffixToDir maps each directory path (and its slash-separated suffixes)
+	// to the full directories that end with that suffix. This replaces the
+	// inner O(n) loop over all parsed files with an O(1) map lookup.
+	suffixToDir := make(map[string][]string)
+	for d := range dirSet {
+		slashDir := filepath.ToSlash(d)
+		suffixToDir[slashDir] = append(suffixToDir[slashDir], d)
+		suffixToDir[d] = append(suffixToDir[d], d)
+		parts := strings.Split(slashDir, "/")
+		for i := 1; i < len(parts); i++ {
+			suffix := strings.Join(parts[i:], "/")
+			suffixToDir[suffix] = append(suffixToDir[suffix], d)
 		}
 	}
 
 	for fi, pf := range parsed {
 		for ci, chunk := range pf.chunks {
 			for _, call := range chunk.Calls {
-					var targets []chunkRef
-				for _, pf2 := range parsed {
-					dir2 := filepath.Dir(pf2.relPath)
-					if strings.HasSuffix(call.Package, filepath.ToSlash(dir2)) || call.Package == dir2 {
-						key := dir2 + "." + call.Name
-						targets = append(targets, pkgIndex[key]...)
+				var targets []chunkRef
+
+				// Resolve by package suffix match.
+				if call.Package != "" {
+					if dirs, ok := suffixToDir[call.Package]; ok {
+						for _, d := range dirs {
+							targets = append(targets, pkgIndex[d+"."+call.Name]...)
+						}
 					}
 				}
 
+				// Fallback: empty package or caller path contains the package.
 				if call.Package == "" || strings.Contains(pf.relPath, call.Package) {
-					for _, pf2 := range parsed {
-						dir2 := filepath.Dir(pf2.relPath)
-						key := dir2 + "." + call.Name
-						targets = append(targets, pkgIndex[key]...)
+					for _, d := range allDirs {
+						targets = append(targets, pkgIndex[d+"."+call.Name]...)
 					}
 				}
 
@@ -225,9 +262,18 @@ func IndexRepo(
 			}
 		}
 	}
+}
 
-	// ── Pass 3: Describe, embed, store ──
-
+// describeEmbedStore enriches parsed chunks with descriptions and embeddings,
+// then upserts them into the store (Pass 3). Returns files indexed and total chunks.
+func describeEmbedStore(
+	ctx context.Context,
+	parsed []parsedFile,
+	store *Store,
+	embedder *Embedder,
+	describer *Describer,
+	fileHashes map[string]string,
+) (int, int) {
 	var filesIndexed, totalChunks int
 
 	for i := range parsed {
@@ -267,17 +313,7 @@ func IndexRepo(
 		slog.Info("indexed file", "path", pf.relPath, "chunks", len(pf.chunks))
 	}
 
-	slog.Info("indexing complete",
-		"files_visited", filesVisited,
-		"files_indexed", filesIndexed,
-		"total_chunks", totalChunks,
-	)
-
-	if saveErr := saveFileHashes(hashFile, fileHashes); saveErr != nil {
-		slog.Warn("could not save file hashes", "error", saveErr)
-	}
-
-	return nil
+	return filesIndexed, totalChunks
 }
 
 // matchesAnyGlob returns true if relPath matches at least one of the patterns.

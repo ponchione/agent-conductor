@@ -111,28 +111,28 @@ func (a *Assembler) AssembleScopePrompt(ctx context.Context, wo *models.WorkOrde
 	var sb strings.Builder
 
 	sb.WriteString("=== WORK ORDER ===\n")
-	sb.WriteString(fmt.Sprintf("Title: %s\n", wo.Title))
-	sb.WriteString(fmt.Sprintf("Target module: %s\n", wo.TargetModule))
+	fmt.Fprintf(&sb, "Title: %s\n", wo.Title)
+	fmt.Fprintf(&sb, "Target module: %s\n", wo.TargetModule)
 	if wo.ReferenceModule != "" {
-		sb.WriteString(fmt.Sprintf("Reference module: %s\n", wo.ReferenceModule))
+		fmt.Fprintf(&sb, "Reference module: %s\n", wo.ReferenceModule)
 	}
-	sb.WriteString(fmt.Sprintf("Type: %s\n", wo.Type))
+	fmt.Fprintf(&sb, "Type: %s\n", wo.Type)
 	if len(wo.AcceptanceCriteria) > 0 {
 		sb.WriteString("\nAcceptance criteria:\n")
 		for _, ac := range wo.AcceptanceCriteria {
-			sb.WriteString(fmt.Sprintf("  - %s\n", ac))
+			fmt.Fprintf(&sb, "  - %s\n", ac)
 		}
 	}
 	if len(wo.Constraints) > 0 {
 		sb.WriteString("\nConstraints:\n")
 		for _, c := range wo.Constraints {
-			sb.WriteString(fmt.Sprintf("  - %s\n", c))
+			fmt.Fprintf(&sb, "  - %s\n", c)
 		}
 	}
 	if len(wo.KnownFiles) > 0 {
 		sb.WriteString("\nKnown files:\n")
 		for _, kf := range wo.KnownFiles {
-			sb.WriteString(fmt.Sprintf("  - %s\n", kf))
+			fmt.Fprintf(&sb, "  - %s\n", kf)
 		}
 	}
 	sb.WriteString("\n")
@@ -145,7 +145,7 @@ func (a *Assembler) AssembleScopePrompt(ctx context.Context, wo *models.WorkOrde
 			if r.IsDependencyHop {
 				marker = " [dependency-hop]"
 			}
-			sb.WriteString(fmt.Sprintf("  %s — %s%s\n    %s\n", r.File, r.Function, marker, r.Description))
+			fmt.Fprintf(&sb, "  %s — %s%s\n    %s\n", r.File, r.Function, marker, r.Description)
 		}
 		sb.WriteString("\n")
 	}

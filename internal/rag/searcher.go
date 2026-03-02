@@ -103,10 +103,7 @@ func (s *DefaultSearcher) SearchForWorkOrder(
 		return directHits[i].bestScore > directHits[j].bestScore
 	})
 
-	directBudget := (maxResults * 60) / 100
-	if directBudget > len(directHits) {
-		directBudget = len(directHits)
-	}
+	directBudget := min((maxResults*60)/100, len(directHits))
 	hopBudget := maxResults - directBudget
 
 	enriched := make([]EnrichedResult, 0, maxResults)

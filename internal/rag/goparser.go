@@ -175,10 +175,7 @@ func (p *GoASTParser) parseFuncDecl(
 	}
 
 	startOff := p.fset.Position(decl.Pos()).Offset
-	endOff := p.fset.Position(decl.End()).Offset
-	if endOff > len(content) {
-		endOff = len(content)
-	}
+	endOff := min(p.fset.Position(decl.End()).Offset, len(content))
 
 	body := string(content[startOff:endOff])
 
@@ -335,10 +332,7 @@ func (p *GoASTParser) parseGenDecl(
 		}
 
 		startOff := p.fset.Position(startNode.Pos()).Offset
-		endOff := p.fset.Position(startNode.End()).Offset
-		if endOff > len(content) {
-			endOff = len(content)
-		}
+		endOff := min(p.fset.Position(startNode.End()).Offset, len(content))
 
 		body := string(content[startOff:endOff])
 

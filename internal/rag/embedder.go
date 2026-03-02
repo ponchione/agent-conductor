@@ -99,10 +99,7 @@ func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 	embeddings := make([][]float32, len(texts))
 
 	for start := 0; start < len(texts); start += e.batchSize {
-		end := start + e.batchSize
-		if end > len(texts) {
-			end = len(texts)
-		}
+		end := min(start+e.batchSize, len(texts))
 		batch := texts[start:end]
 
 		resp, err := e.post(ctx, batch)

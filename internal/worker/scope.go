@@ -40,10 +40,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "context assembly failed: %w", err)
 	}
 
-	maxAttempts := int(task.MaxAttempts)
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
+	maxAttempts := max(int(task.MaxAttempts), 1)
 
 	var pkg models.ContextPackage
 	var lastErr error

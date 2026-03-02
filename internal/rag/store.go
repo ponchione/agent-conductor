@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/apache/arrow/go/v17/arrow"
@@ -57,10 +59,8 @@ func (s *Store) openOrCreateTable(ctx context.Context) (contracts.ITable, error)
 		return nil, fmt.Errorf("failed to list tables: %w", err)
 	}
 
-	for _, name := range names {
-		if name == tableName {
-			return s.conn.OpenTable(ctx, tableName)
-		}
+	if slices.Contains(names, tableName) {
+		return s.conn.OpenTable(ctx, tableName)
 	}
 
 	schema, err := buildSchema()
@@ -143,7 +143,7 @@ func (s *Store) DeleteByFilePath(ctx context.Context, filePath string) error {
 func (s *Store) VectorSearch(ctx context.Context, queryVec []float32, topK int, filters ...Filter) ([]SearchResult, error) {
 	filterStr := buildFilterString(filters)
 
-	var rows []map[string]interface{}
+	var rows []map[string]any
 	var err error
 
 	if filterStr != "" {
@@ -299,16 +299,12 @@ func buildFilterString(filters []Filter) string {
 		return ""
 	}
 
-	result := parts[0]
-	for _, p := range parts[1:] {
-		result += " AND " + p
-	}
-	return result
+	return strings.Join(parts, " AND ")
 }
 
 // rowToChunk converts a LanceDB result row (map) to a Chunk and extracts the
 // distance score. LanceDB vector search returns a "_distance" key.
-func rowToChunk(row map[string]interface{}) (Chunk, float32) {
+func rowToChunk(row map[string]any) (Chunk, float32) {
 	c := Chunk{
 		ID:          mapStr(row, "id"),
 		ProjectName: mapStr(row, "project_name"),
@@ -353,7 +349,7 @@ func rowToChunk(row map[string]interface{}) (Chunk, float32) {
 }
 
 // mapStr safely extracts a string from a map.
-func mapStr(m map[string]interface{}, key string) string {
+func mapStr(m map[string]any, key string) string {
 	if v, ok := m[key]; ok {
 		if s, ok := v.(string); ok {
 			return s
@@ -363,7 +359,7 @@ func mapStr(m map[string]interface{}, key string) string {
 }
 
 // mapInt safely extracts an int from a map.
-func mapInt(m map[string]interface{}, key string) int {
+func mapInt(m map[string]any, key string) int {
 	if v, ok := m[key]; ok {
 		switch n := v.(type) {
 		case int:
