@@ -41,6 +41,7 @@ type PipelineRun struct {
 	ScopePathsReclassified   sql.NullInt64  `json:"scope_paths_reclassified"`
 	VerifyResult             sql.NullString `json:"verify_result"`
 	HumanResult              sql.NullString `json:"human_result"`
+	WorkOrderContent         sql.NullString `json:"work_order_content"`
 	ScopeTokensIn            sql.NullInt64  `json:"scope_tokens_in"`
 	ScopeTokensOut           sql.NullInt64  `json:"scope_tokens_out"`
 	BuildTokensIn            sql.NullInt64  `json:"build_tokens_in"`

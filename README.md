@@ -230,6 +230,8 @@ conductor approve --project project.yaml <full-uuid>
 conductor reject --project project.yaml <full-uuid> "reason"
 ```
 
+On approve, the original work order YAML is automatically archived: a copy is saved to `artifacts/work-orders/<id>.yaml` and the raw content is stored in the `pipeline_runs` database row. Both steps are best-effort — failures log a warning but never block the approval.
+
 After approving, manually merge the branch:
 
 ```bash
@@ -248,6 +250,7 @@ rag/chunks.lance/                            # LanceDB — vector embeddings for
 rag_file_hashes.json                         # Change detection for incremental re-indexing
 artifacts/context-packages/<wf-id>-*.json    # Scope phase output
 artifacts/verify-reports/<wf-id>-*.json      # Verify phase verdict
+artifacts/work-orders/<wf-id>.yaml           # Archived work order (copied on approve)
 logs/<task-id>/stdout.log                    # Claude Code output
 logs/<task-id>/stderr.log
 ```

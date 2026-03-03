@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     scope_paths_reclassified   INTEGER,
     verify_result           TEXT,
     human_result            TEXT,
+    work_order_content      TEXT,
 
     -- Token tracking (NULL if unavailable)
     scope_tokens_in         INTEGER,

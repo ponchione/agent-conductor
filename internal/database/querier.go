@@ -32,6 +32,7 @@ type Querier interface {
 	UpdatePipelineRunHumanResult(ctx context.Context, arg UpdatePipelineRunHumanResultParams) error
 	UpdatePipelineRunScope(ctx context.Context, arg UpdatePipelineRunScopeParams) error
 	UpdatePipelineRunVerify(ctx context.Context, arg UpdatePipelineRunVerifyParams) error
+	UpdatePipelineRunWorkOrderContent(ctx context.Context, arg UpdatePipelineRunWorkOrderContentParams) error
 	UpdateWorkflowBudget(ctx context.Context, arg UpdateWorkflowBudgetParams) error
 	UpdateWorkflowContext(ctx context.Context, arg UpdateWorkflowContextParams) error
 	UpdateWorkflowState(ctx context.Context, arg UpdateWorkflowStateParams) error

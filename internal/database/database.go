@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -30,6 +31,12 @@ func NewDB(dsn string) (*DB, error) {
 
 	if _, err := conn.Exec(ddl); err != nil {
 		return nil, fmt.Errorf("migration failed: %w", err)
+	}
+
+	// Migration: add work_order_content column for existing databases.
+	_, migErr := conn.Exec("ALTER TABLE pipeline_runs ADD COLUMN work_order_content TEXT")
+	if migErr != nil && !strings.Contains(migErr.Error(), "duplicate column") {
+		return nil, fmt.Errorf("migration failed: %w", migErr)
 	}
 
 	return &DB{

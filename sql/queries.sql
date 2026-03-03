@@ -191,6 +191,11 @@ FROM pipeline_runs
 WHERE work_order_type IS NOT NULL
 GROUP BY work_order_type;
 
+-- name: UpdatePipelineRunWorkOrderContent :exec
+UPDATE pipeline_runs
+SET work_order_content = ?, updated_at = datetime('now')
+WHERE workflow_id = ?;
+
 -- name: GetScopeQualityStats :one
 SELECT
     AVG(scope_paths_stripped) AS avg_paths_stripped,

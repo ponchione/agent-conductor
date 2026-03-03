@@ -4,6 +4,7 @@ import (
 	stdctx "context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 
 	"github.com/google/uuid"
@@ -48,6 +49,8 @@ The workflow ID must be a full UUID (e.g. from 'conductor list').`,
 			return fmt.Errorf("approve failed: %w", err)
 		}
 		fmt.Printf("Workflow %s approved and merged into main.\n", workflowID)
+
+		archiveWorkOrder(ctx, db, workflowID, cfg.Project.DataDir)
 
 		if cfg.Index.AutoReindex {
 			fmt.Println("Re-indexing RAG store...")
@@ -105,4 +108,32 @@ An optional reason can be provided as the second argument.`,
 		fmt.Printf("Workflow %s rejected: %s\n", workflowID, reason)
 		return nil
 	},
+}
+
+func archiveWorkOrder(ctx stdctx.Context, db *database.DB, workflowID, dataDir string) {
+	wf, err := db.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		slog.Warn("archive: could not fetch workflow", "id", workflowID, "error", err)
+		return
+	}
+
+	content, err := os.ReadFile(wf.OriginalFile)
+	if err != nil {
+		slog.Warn("archive: could not read work order file", "path", wf.OriginalFile, "error", err)
+		return
+	}
+
+	// File copy to artifacts directory.
+	destPath := filepath.Join(dataDir, "artifacts", "work-orders", workflowID+".yaml")
+	if err := os.WriteFile(destPath, content, 0644); err != nil {
+		slog.Warn("archive: could not copy work order file", "dest", destPath, "error", err)
+	}
+
+	// Store content in DB.
+	if err := db.UpdatePipelineRunWorkOrderContent(ctx, database.UpdatePipelineRunWorkOrderContentParams{
+		WorkOrderContent: database.String(string(content)),
+		WorkflowID:       workflowID,
+	}); err != nil {
+		slog.Warn("archive: could not store work order content in DB", "error", err)
+	}
 }

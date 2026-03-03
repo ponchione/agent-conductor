@@ -706,6 +706,22 @@ func (q *Queries) UpdatePipelineRunVerify(ctx context.Context, arg UpdatePipelin
 	return err
 }
 
+const updatePipelineRunWorkOrderContent = `-- name: UpdatePipelineRunWorkOrderContent :exec
+UPDATE pipeline_runs
+SET work_order_content = ?, updated_at = datetime('now')
+WHERE workflow_id = ?
+`
+
+type UpdatePipelineRunWorkOrderContentParams struct {
+	WorkOrderContent sql.NullString `json:"work_order_content"`
+	WorkflowID       string         `json:"workflow_id"`
+}
+
+func (q *Queries) UpdatePipelineRunWorkOrderContent(ctx context.Context, arg UpdatePipelineRunWorkOrderContentParams) error {
+	_, err := q.db.ExecContext(ctx, updatePipelineRunWorkOrderContent, arg.WorkOrderContent, arg.WorkflowID)
+	return err
+}
+
 const updateWorkflowBudget = `-- name: UpdateWorkflowBudget :exec
 UPDATE workflows
 SET current_depth = ?, files_changed = ?, updated_at = datetime('now')
