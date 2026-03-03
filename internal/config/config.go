@@ -34,6 +34,7 @@ type Index struct {
 	Include       []string `yaml:"include"`
 	Exclude       []string `yaml:"exclude"`
 	MaxRAGResults int      `yaml:"max_rag_results"`
+	MaxTreeLines  int      `yaml:"max_tree_lines"`
 }
 
 type Conventions struct {
@@ -140,6 +141,9 @@ func Load(projectPath string) (*ProjectConfig, error) {
 
 	if cfg.Index.MaxRAGResults == 0 {
 		cfg.Index.MaxRAGResults = 30
+	}
+	if cfg.Index.MaxTreeLines == 0 {
+		cfg.Index.MaxTreeLines = 200
 	}
 
 	cfg.Project.DataDir = filepath.Join(home, "source", ".conductor", "projects", cfg.Project.Name)

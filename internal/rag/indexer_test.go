@@ -2,6 +2,8 @@ package rag
 
 import (
 	"testing"
+
+	"github.com/ponchione/agent-conductor/internal/util"
 )
 
 func TestReverseCallGraph(t *testing.T) {
@@ -115,9 +117,9 @@ func TestMatchesAnyGlob(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := matchesAnyGlob(tt.patterns, tt.relPath)
+		got := util.MatchesAnyGlob(tt.patterns, tt.relPath)
 		if got != tt.want {
-			t.Errorf("matchesAnyGlob(%v, %q) = %v, want %v",
+			t.Errorf("MatchesAnyGlob(%v, %q) = %v, want %v",
 				tt.patterns, tt.relPath, got, tt.want)
 		}
 	}

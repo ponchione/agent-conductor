@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/models"
+	"github.com/ponchione/agent-conductor/internal/util"
 )
 
 // RAGResult is a single structured search result from the RAG index.
@@ -137,6 +141,25 @@ func (a *Assembler) AssembleScopePrompt(ctx context.Context, wo *models.WorkOrde
 	}
 	sb.WriteString("\n")
 
+	if convSection := buildConventions(a.cfg.Conventions); convSection != "" {
+		sb.WriteString("=== PROJECT CONVENTIONS ===\n")
+		sb.WriteString(convSection)
+		sb.WriteString("\n")
+	}
+
+	treeStr, totalFiles := a.buildFileTree()
+	sb.WriteString("=== PROJECT FILE TREE ===\n")
+	if treeStr != "" {
+		sb.WriteString(treeStr)
+		treeLines := strings.Count(treeStr, "\n")
+		if totalFiles > treeLines {
+			fmt.Fprintf(&sb, "... (%d more files not shown)\n", totalFiles-treeLines)
+		}
+	} else {
+		sb.WriteString("(no matching files)\n")
+	}
+	sb.WriteString("\n")
+
 	relevantCode := a.searchRelevantCode(ctx, wo)
 	if len(relevantCode) > 0 {
 		sb.WriteString("=== SEMANTICALLY RELEVANT CODE (via RAG) ===\n")
@@ -190,4 +213,105 @@ func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder, scopePkg
 	}
 
 	return full, nil
+}
+
+// buildFileTree walks the project directory and returns an indented file tree
+// string filtered by the configured include/exclude globs, plus the total
+// number of matching files (which may exceed the tree lines if capped).
+func (a *Assembler) buildFileTree() (string, int) {
+	root := a.cfg.Project.Path
+	if _, err := os.Stat(root); err != nil {
+		slog.Warn("project path not accessible for file tree", "path", root, "error", err)
+		return "", 0
+	}
+
+	var matched []string
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		relPath = filepath.ToSlash(relPath)
+
+		if !util.MatchesAnyGlob(a.cfg.Index.Include, relPath) {
+			return nil
+		}
+		if util.MatchesAnyGlob(a.cfg.Index.Exclude, relPath) {
+			return nil
+		}
+		matched = append(matched, relPath)
+		return nil
+	})
+
+	sort.Strings(matched)
+	totalFiles := len(matched)
+	if totalFiles == 0 {
+		return "", 0
+	}
+
+	cap := a.cfg.Index.MaxTreeLines
+	if cap <= 0 {
+		cap = 200
+	}
+
+	var sb strings.Builder
+	emittedDirs := make(map[string]bool)
+	fileLines := 0
+
+	for _, rel := range matched {
+		if fileLines >= cap {
+			break
+		}
+
+		parts := strings.Split(rel, "/")
+		// Emit directory lines for any new parent directories.
+		for depth := 0; depth < len(parts)-1; depth++ {
+			dirKey := strings.Join(parts[:depth+1], "/")
+			if !emittedDirs[dirKey] {
+				emittedDirs[dirKey] = true
+				indent := strings.Repeat("  ", depth)
+				fmt.Fprintf(&sb, "%s%s/\n", indent, parts[depth])
+			}
+		}
+
+		// Emit the file line.
+		indent := strings.Repeat("  ", len(parts)-1)
+		fmt.Fprintf(&sb, "%s%s\n", indent, parts[len(parts)-1])
+		fileLines++
+	}
+
+	return sb.String(), totalFiles
+}
+
+// buildConventions formats the project conventions into labeled lines.
+// Returns an empty string if no conventions are configured.
+func buildConventions(conv config.Conventions) string {
+	if conv.ModulePath == "" && len(conv.ModuleStructure) == 0 &&
+		conv.SharedPath == "" && conv.SQLPath == "" && conv.DocsPath == "" {
+		return ""
+	}
+
+	var sb strings.Builder
+	if conv.ModulePath != "" {
+		fmt.Fprintf(&sb, "Module path: %s\n", conv.ModulePath)
+	}
+	if len(conv.ModuleStructure) > 0 {
+		fmt.Fprintf(&sb, "Module structure: %s\n", strings.Join(conv.ModuleStructure, ", "))
+	}
+	if conv.SharedPath != "" {
+		fmt.Fprintf(&sb, "Shared path: %s\n", conv.SharedPath)
+	}
+	if conv.SQLPath != "" {
+		fmt.Fprintf(&sb, "SQL path: %s\n", conv.SQLPath)
+	}
+	if conv.DocsPath != "" {
+		fmt.Fprintf(&sb, "Docs path: %s\n", conv.DocsPath)
+	}
+	return sb.String()
 }
