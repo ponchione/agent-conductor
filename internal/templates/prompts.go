@@ -2,6 +2,7 @@ package templates
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -132,32 +133,42 @@ type LoadedPrompts struct {
 
 // LoadPrompts resolves each prompt from disk (if configured) or falls back to the compiled defaults.
 func LoadPrompts(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
-	scope, err := loadPrompt(cfg.Project.Path, cfg.Prompts.Scope, DefaultScopePrompt)
+	scope, err := loadPrompt(cfg.Project.Path, "scope", cfg.Prompts.Scope, DefaultScopePrompt)
 	if err != nil {
 		return nil, fmt.Errorf("scope prompt: %w", err)
 	}
-	verify, err := loadPrompt(cfg.Project.Path, cfg.Prompts.Verify, DefaultVerifyPrompt)
+	verify, err := loadPrompt(cfg.Project.Path, "verify", cfg.Prompts.Verify, DefaultVerifyPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("verify prompt: %w", err)
 	}
-	build, err := loadPrompt(cfg.Project.Path, cfg.Prompts.Build, DefaultBuildPrompt)
+	build, err := loadPrompt(cfg.Project.Path, "build", cfg.Prompts.Build, DefaultBuildPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("build prompt: %w", err)
 	}
 	return &LoadedPrompts{Scope: scope, Verify: verify, Build: build}, nil
 }
 
-func loadPrompt(projectPath, filePath, fallback string) (string, error) {
-	if filePath == "" {
-		return fallback, nil
+func loadPrompt(projectPath, phase, filePath, fallback string) (string, error) {
+	// Tier 1: repo-local .prompts/<phase>-prompt.md override
+	overridePath := filepath.Join(projectPath, ".prompts", phase+"-prompt.md")
+	if data, err := os.ReadFile(overridePath); err == nil {
+		slog.Debug("Using .prompts override", "phase", phase, "path", overridePath)
+		return string(data), nil
 	}
-	absPath := filepath.Join(projectPath, filePath)
-	data, err := os.ReadFile(absPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("prompt file not found: %s", absPath)
+
+	// Tier 2: explicit path from project.yaml
+	if filePath != "" {
+		absPath := filepath.Join(projectPath, filePath)
+		data, err := os.ReadFile(absPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "", fmt.Errorf("prompt file not found: %s", absPath)
+			}
+			return "", fmt.Errorf("failed to read prompt file %s: %w", absPath, err)
 		}
-		return "", fmt.Errorf("failed to read prompt file %s: %w", absPath, err)
+		return string(data), nil
 	}
-	return string(data), nil
+
+	// Tier 3: compiled default
+	return fallback, nil
 }
