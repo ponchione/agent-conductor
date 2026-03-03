@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +19,78 @@ import (
 	"github.com/ponchione/agent-conductor/internal/queue"
 	"gopkg.in/yaml.v3"
 )
+
+const stripThreshold = 0.50
+
+type scopeValidationResult struct {
+	pkg               *models.ContextPackage
+	strippedPaths     []string
+	reclassifiedPaths []string
+	pathsChecked      int
+	thresholdExceeded bool
+}
+
+// validateScopeOutput checks every path in the ContextPackage against the
+// filesystem, strips non-existent files from existing-file arrays, reclassifies
+// NewFiles that already exist into FilesToModify, and reports whether the
+// fraction of invalid paths exceeds stripThreshold.
+func validateScopeOutput(repoRoot string, pkg *models.ContextPackage) *scopeValidationResult {
+	result := &scopeValidationResult{pkg: pkg}
+
+	// Filter existing-file arrays: FilesToModify, FilesToReference, SQLFiles.
+	filterFileRefs := func(refs []models.FileRef, source string) []models.FileRef {
+		result.pathsChecked += len(refs)
+		filtered := make([]models.FileRef, 0, len(refs))
+		for _, ref := range refs {
+			if _, err := os.Stat(filepath.Join(repoRoot, ref.Path)); err != nil {
+				result.strippedPaths = append(result.strippedPaths, ref.Path+" ("+source+")")
+				slog.Warn("Scope validation: path does not exist", "path", ref.Path, "source", source)
+				continue
+			}
+			filtered = append(filtered, ref)
+		}
+		return filtered
+	}
+
+	pkg.FilesToModify = filterFileRefs(pkg.FilesToModify, "files_to_modify")
+	pkg.FilesToReference = filterFileRefs(pkg.FilesToReference, "files_to_reference")
+	pkg.SQLFiles = filterFileRefs(pkg.SQLFiles, "sql_files")
+
+	// Reclassify NewFiles that already exist on disk into FilesToModify.
+	keptNew := make([]models.NewFile, 0, len(pkg.NewFiles))
+	for _, nf := range pkg.NewFiles {
+		if _, err := os.Stat(filepath.Join(repoRoot, nf.Path)); err == nil {
+			pkg.FilesToModify = append(pkg.FilesToModify, models.FileRef{
+				Path:   nf.Path,
+				Reason: nf.Purpose,
+			})
+			result.reclassifiedPaths = append(result.reclassifiedPaths, nf.Path)
+			slog.Warn("Scope validation: new_file already exists, reclassified to files_to_modify", "path", nf.Path)
+		} else {
+			keptNew = append(keptNew, nf)
+		}
+	}
+	pkg.NewFiles = keptNew
+
+	// Threshold check.
+	if result.pathsChecked > 0 {
+		result.thresholdExceeded = float64(len(result.strippedPaths))/float64(result.pathsChecked) > stripThreshold
+	}
+
+	return result
+}
+
+// buildCorrectionSection returns a prompt section listing paths the LLM
+// hallucinated so a retry can avoid them.
+func buildCorrectionSection(strippedPaths []string) string {
+	var b strings.Builder
+	b.WriteString("\n=== CORRECTION ===\nThe following paths do not exist in the repository. Do not include them:")
+	for _, p := range strippedPaths {
+		b.WriteString("\n  - ")
+		b.WriteString(p)
+	}
+	return b.String()
+}
 
 func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	slog.Info("Starting Scope Phase", "task", task.ID)
@@ -67,6 +140,27 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 			continue
 		}
 
+		// Path validation
+		result := validateScopeOutput(w.cfg.Project.Path, &pkg)
+
+		if result.thresholdExceeded {
+			lastErr = fmt.Errorf("scope validation: %d of %d paths do not exist (exceeds %.0f%% threshold)",
+				len(result.strippedPaths), result.pathsChecked, stripThreshold*100)
+			scopePrompt = scopePrompt + "\n\n" + buildCorrectionSection(result.strippedPaths)
+			w.db.LogEvent(task.WorkflowID, task.ID, "scope_validation_retry", map[string]any{
+				"attempt":        attempt,
+				"stripped_paths": result.strippedPaths,
+			})
+			continue
+		}
+
+		// Validation passed
+		w.db.LogEvent(task.WorkflowID, task.ID, "scope_validated", map[string]any{
+			"paths_checked":      result.pathsChecked,
+			"paths_stripped":     len(result.strippedPaths),
+			"paths_reclassified": len(result.reclassifiedPaths),
+		})
+		pkg = *result.pkg
 		lastUsage = usage
 		lastErr = nil
 		break
