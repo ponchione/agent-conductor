@@ -35,6 +35,7 @@ type Index struct {
 	Exclude       []string `yaml:"exclude"`
 	MaxRAGResults int      `yaml:"max_rag_results"`
 	MaxTreeLines  int      `yaml:"max_tree_lines"`
+	AutoReindex   bool     `yaml:"auto_reindex"`
 }
 
 type Conventions struct {
