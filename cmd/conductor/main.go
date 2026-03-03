@@ -46,7 +46,7 @@ func init() {
 }
 
 func main() {
-	rootCmd.AddCommand(runCmd, approveCmd, rejectCmd, statusCmd, statsCmd, indexCmd, listCmd, initGlobalCmd)
+	rootCmd.AddCommand(runCmd, approveCmd, rejectCmd, statusCmd, statsCmd, indexCmd, listCmd, initGlobalCmd, planCmd)
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}

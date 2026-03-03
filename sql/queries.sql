@@ -94,7 +94,12 @@ VALUES (?, ?, ?, ?);
 UPDATE pipeline_runs
 SET scope_started_at = ?, scope_completed_at = ?,
     scope_tokens_in = ?, scope_tokens_out = ?,
-    scope_model = ?, updated_at = datetime('now')
+    scope_model = ?,
+    scope_files_suggested = ?,
+    scope_estimated_complexity = ?,
+    scope_rag_direct = ?, scope_rag_hops = ?,
+    scope_paths_stripped = ?, scope_paths_reclassified = ?,
+    updated_at = datetime('now')
 WHERE workflow_id = ?;
 
 -- name: UpdatePipelineRunBuild :exec
@@ -107,7 +112,9 @@ WHERE workflow_id = ?;
 UPDATE pipeline_runs
 SET verify_started_at = ?, verify_completed_at = ?,
     verify_tokens_in = ?, verify_tokens_out = ?,
-    verify_model = ?, verify_result = ?, updated_at = datetime('now')
+    verify_model = ?, verify_result = ?,
+    build_scope_drift = ?,
+    updated_at = datetime('now')
 WHERE workflow_id = ?;
 
 -- name: UpdatePipelineRunHumanResult :exec
@@ -144,8 +151,51 @@ SELECT
     work_order_type,
     verify_result,
     human_result,
+    scope_estimated_complexity,
+    CASE
+        WHEN verify_result IS NULL OR human_result IS NULL THEN ''
+        WHEN verify_result = 'PASS' AND human_result = 'approved' THEN 'match'
+        WHEN verify_result = 'WARN' THEN 'match'
+        WHEN verify_result = 'FAIL' AND human_result = 'rejected' THEN 'match'
+        ELSE 'mismatch'
+    END AS agreement,
     COALESCE(scope_tokens_in, 0) + COALESCE(scope_tokens_out, 0) +
     COALESCE(verify_tokens_in, 0) + COALESCE(verify_tokens_out, 0) AS total_tokens
 FROM pipeline_runs
 ORDER BY created_at DESC
 LIMIT 5;
+
+-- name: GetVerifyHumanAgreement :many
+SELECT
+    verify_result,
+    human_result,
+    COUNT(*) AS count
+FROM pipeline_runs
+WHERE verify_result IS NOT NULL AND human_result IS NOT NULL
+GROUP BY verify_result, human_result;
+
+-- name: GetStatsByWorkOrderType :many
+SELECT
+    work_order_type,
+    COUNT(*) AS total,
+    SUM(CASE WHEN verify_result = 'PASS' THEN 1 ELSE 0 END) AS verify_pass,
+    SUM(CASE WHEN verify_result = 'WARN' THEN 1 ELSE 0 END) AS verify_warn,
+    SUM(CASE WHEN verify_result = 'FAIL' THEN 1 ELSE 0 END) AS verify_fail,
+    SUM(CASE WHEN human_result = 'approved' THEN 1 ELSE 0 END) AS human_approved,
+    SUM(CASE WHEN human_result = 'rejected' THEN 1 ELSE 0 END) AS human_rejected,
+    AVG(CASE
+        WHEN scope_started_at IS NOT NULL AND scope_completed_at IS NOT NULL
+        THEN CAST(strftime('%s', scope_completed_at) AS INTEGER) - CAST(strftime('%s', scope_started_at) AS INTEGER)
+    END) AS avg_scope_secs
+FROM pipeline_runs
+WHERE work_order_type IS NOT NULL
+GROUP BY work_order_type;
+
+-- name: GetScopeQualityStats :one
+SELECT
+    AVG(scope_paths_stripped) AS avg_paths_stripped,
+    AVG(scope_paths_reclassified) AS avg_paths_reclassified,
+    SUM(CASE WHEN scope_estimated_complexity = 'low' THEN 1 ELSE 0 END) AS complexity_low,
+    SUM(CASE WHEN scope_estimated_complexity = 'medium' THEN 1 ELSE 0 END) AS complexity_medium,
+    SUM(CASE WHEN scope_estimated_complexity = 'high' THEN 1 ELSE 0 END) AS complexity_high
+FROM pipeline_runs;

@@ -103,6 +103,11 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     scope_files_suggested   INTEGER,
     build_files_changed     INTEGER,
     build_scope_drift       INTEGER NOT NULL DEFAULT 0,
+    scope_estimated_complexity TEXT,
+    scope_rag_direct           INTEGER,
+    scope_rag_hops             INTEGER,
+    scope_paths_stripped        INTEGER,
+    scope_paths_reclassified   INTEGER,
     verify_result           TEXT,
     human_result            TEXT,
 

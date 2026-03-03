@@ -273,6 +273,14 @@ SELECT
     work_order_type,
     verify_result,
     human_result,
+    scope_estimated_complexity,
+    CASE
+        WHEN verify_result IS NULL OR human_result IS NULL THEN ''
+        WHEN verify_result = 'PASS' AND human_result = 'approved' THEN 'match'
+        WHEN verify_result = 'WARN' THEN 'match'
+        WHEN verify_result = 'FAIL' AND human_result = 'rejected' THEN 'match'
+        ELSE 'mismatch'
+    END AS agreement,
     COALESCE(scope_tokens_in, 0) + COALESCE(scope_tokens_out, 0) +
     COALESCE(verify_tokens_in, 0) + COALESCE(verify_tokens_out, 0) AS total_tokens
 FROM pipeline_runs
@@ -281,11 +289,13 @@ LIMIT 5
 `
 
 type GetRecentPipelineRunsRow struct {
-	WorkflowID    string         `json:"workflow_id"`
-	WorkOrderType sql.NullString `json:"work_order_type"`
-	VerifyResult  sql.NullString `json:"verify_result"`
-	HumanResult   sql.NullString `json:"human_result"`
-	TotalTokens   int64          `json:"total_tokens"`
+	WorkflowID               string         `json:"workflow_id"`
+	WorkOrderType            sql.NullString `json:"work_order_type"`
+	VerifyResult             sql.NullString `json:"verify_result"`
+	HumanResult              sql.NullString `json:"human_result"`
+	ScopeEstimatedComplexity sql.NullString `json:"scope_estimated_complexity"`
+	Agreement                string         `json:"agreement"`
+	TotalTokens              int64          `json:"total_tokens"`
 }
 
 func (q *Queries) GetRecentPipelineRuns(ctx context.Context) ([]GetRecentPipelineRunsRow, error) {
@@ -302,7 +312,101 @@ func (q *Queries) GetRecentPipelineRuns(ctx context.Context) ([]GetRecentPipelin
 			&i.WorkOrderType,
 			&i.VerifyResult,
 			&i.HumanResult,
+			&i.ScopeEstimatedComplexity,
+			&i.Agreement,
 			&i.TotalTokens,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getScopeQualityStats = `-- name: GetScopeQualityStats :one
+SELECT
+    AVG(scope_paths_stripped) AS avg_paths_stripped,
+    AVG(scope_paths_reclassified) AS avg_paths_reclassified,
+    SUM(CASE WHEN scope_estimated_complexity = 'low' THEN 1 ELSE 0 END) AS complexity_low,
+    SUM(CASE WHEN scope_estimated_complexity = 'medium' THEN 1 ELSE 0 END) AS complexity_medium,
+    SUM(CASE WHEN scope_estimated_complexity = 'high' THEN 1 ELSE 0 END) AS complexity_high
+FROM pipeline_runs
+`
+
+type GetScopeQualityStatsRow struct {
+	AvgPathsStripped     sql.NullFloat64 `json:"avg_paths_stripped"`
+	AvgPathsReclassified sql.NullFloat64 `json:"avg_paths_reclassified"`
+	ComplexityLow        sql.NullFloat64 `json:"complexity_low"`
+	ComplexityMedium     sql.NullFloat64 `json:"complexity_medium"`
+	ComplexityHigh       sql.NullFloat64 `json:"complexity_high"`
+}
+
+func (q *Queries) GetScopeQualityStats(ctx context.Context) (GetScopeQualityStatsRow, error) {
+	row := q.db.QueryRowContext(ctx, getScopeQualityStats)
+	var i GetScopeQualityStatsRow
+	err := row.Scan(
+		&i.AvgPathsStripped,
+		&i.AvgPathsReclassified,
+		&i.ComplexityLow,
+		&i.ComplexityMedium,
+		&i.ComplexityHigh,
+	)
+	return i, err
+}
+
+const getStatsByWorkOrderType = `-- name: GetStatsByWorkOrderType :many
+SELECT
+    work_order_type,
+    COUNT(*) AS total,
+    SUM(CASE WHEN verify_result = 'PASS' THEN 1 ELSE 0 END) AS verify_pass,
+    SUM(CASE WHEN verify_result = 'WARN' THEN 1 ELSE 0 END) AS verify_warn,
+    SUM(CASE WHEN verify_result = 'FAIL' THEN 1 ELSE 0 END) AS verify_fail,
+    SUM(CASE WHEN human_result = 'approved' THEN 1 ELSE 0 END) AS human_approved,
+    SUM(CASE WHEN human_result = 'rejected' THEN 1 ELSE 0 END) AS human_rejected,
+    AVG(CASE
+        WHEN scope_started_at IS NOT NULL AND scope_completed_at IS NOT NULL
+        THEN CAST(strftime('%s', scope_completed_at) AS INTEGER) - CAST(strftime('%s', scope_started_at) AS INTEGER)
+    END) AS avg_scope_secs
+FROM pipeline_runs
+WHERE work_order_type IS NOT NULL
+GROUP BY work_order_type
+`
+
+type GetStatsByWorkOrderTypeRow struct {
+	WorkOrderType sql.NullString  `json:"work_order_type"`
+	Total         int64           `json:"total"`
+	VerifyPass    sql.NullFloat64 `json:"verify_pass"`
+	VerifyWarn    sql.NullFloat64 `json:"verify_warn"`
+	VerifyFail    sql.NullFloat64 `json:"verify_fail"`
+	HumanApproved sql.NullFloat64 `json:"human_approved"`
+	HumanRejected sql.NullFloat64 `json:"human_rejected"`
+	AvgScopeSecs  sql.NullFloat64 `json:"avg_scope_secs"`
+}
+
+func (q *Queries) GetStatsByWorkOrderType(ctx context.Context) ([]GetStatsByWorkOrderTypeRow, error) {
+	rows, err := q.db.QueryContext(ctx, getStatsByWorkOrderType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetStatsByWorkOrderTypeRow
+	for rows.Next() {
+		var i GetStatsByWorkOrderTypeRow
+		if err := rows.Scan(
+			&i.WorkOrderType,
+			&i.Total,
+			&i.VerifyPass,
+			&i.VerifyWarn,
+			&i.VerifyFail,
+			&i.HumanApproved,
+			&i.HumanRejected,
+			&i.AvgScopeSecs,
 		); err != nil {
 			return nil, err
 		}
@@ -349,6 +453,45 @@ func (q *Queries) GetTask(ctx context.Context, id string) (Task, error) {
 		&i.ErrorMessage,
 	)
 	return i, err
+}
+
+const getVerifyHumanAgreement = `-- name: GetVerifyHumanAgreement :many
+SELECT
+    verify_result,
+    human_result,
+    COUNT(*) AS count
+FROM pipeline_runs
+WHERE verify_result IS NOT NULL AND human_result IS NOT NULL
+GROUP BY verify_result, human_result
+`
+
+type GetVerifyHumanAgreementRow struct {
+	VerifyResult sql.NullString `json:"verify_result"`
+	HumanResult  sql.NullString `json:"human_result"`
+	Count        int64          `json:"count"`
+}
+
+func (q *Queries) GetVerifyHumanAgreement(ctx context.Context) ([]GetVerifyHumanAgreementRow, error) {
+	rows, err := q.db.QueryContext(ctx, getVerifyHumanAgreement)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetVerifyHumanAgreementRow
+	for rows.Next() {
+		var i GetVerifyHumanAgreementRow
+		if err := rows.Scan(&i.VerifyResult, &i.HumanResult, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getWorkflow = `-- name: GetWorkflow :one
@@ -486,17 +629,28 @@ const updatePipelineRunScope = `-- name: UpdatePipelineRunScope :exec
 UPDATE pipeline_runs
 SET scope_started_at = ?, scope_completed_at = ?,
     scope_tokens_in = ?, scope_tokens_out = ?,
-    scope_model = ?, updated_at = datetime('now')
+    scope_model = ?,
+    scope_files_suggested = ?,
+    scope_estimated_complexity = ?,
+    scope_rag_direct = ?, scope_rag_hops = ?,
+    scope_paths_stripped = ?, scope_paths_reclassified = ?,
+    updated_at = datetime('now')
 WHERE workflow_id = ?
 `
 
 type UpdatePipelineRunScopeParams struct {
-	ScopeStartedAt   sql.NullString `json:"scope_started_at"`
-	ScopeCompletedAt sql.NullString `json:"scope_completed_at"`
-	ScopeTokensIn    sql.NullInt64  `json:"scope_tokens_in"`
-	ScopeTokensOut   sql.NullInt64  `json:"scope_tokens_out"`
-	ScopeModel       sql.NullString `json:"scope_model"`
-	WorkflowID       string         `json:"workflow_id"`
+	ScopeStartedAt           sql.NullString `json:"scope_started_at"`
+	ScopeCompletedAt         sql.NullString `json:"scope_completed_at"`
+	ScopeTokensIn            sql.NullInt64  `json:"scope_tokens_in"`
+	ScopeTokensOut           sql.NullInt64  `json:"scope_tokens_out"`
+	ScopeModel               sql.NullString `json:"scope_model"`
+	ScopeFilesSuggested      sql.NullInt64  `json:"scope_files_suggested"`
+	ScopeEstimatedComplexity sql.NullString `json:"scope_estimated_complexity"`
+	ScopeRagDirect           sql.NullInt64  `json:"scope_rag_direct"`
+	ScopeRagHops             sql.NullInt64  `json:"scope_rag_hops"`
+	ScopePathsStripped       sql.NullInt64  `json:"scope_paths_stripped"`
+	ScopePathsReclassified   sql.NullInt64  `json:"scope_paths_reclassified"`
+	WorkflowID               string         `json:"workflow_id"`
 }
 
 func (q *Queries) UpdatePipelineRunScope(ctx context.Context, arg UpdatePipelineRunScopeParams) error {
@@ -506,6 +660,12 @@ func (q *Queries) UpdatePipelineRunScope(ctx context.Context, arg UpdatePipeline
 		arg.ScopeTokensIn,
 		arg.ScopeTokensOut,
 		arg.ScopeModel,
+		arg.ScopeFilesSuggested,
+		arg.ScopeEstimatedComplexity,
+		arg.ScopeRagDirect,
+		arg.ScopeRagHops,
+		arg.ScopePathsStripped,
+		arg.ScopePathsReclassified,
 		arg.WorkflowID,
 	)
 	return err
@@ -515,7 +675,9 @@ const updatePipelineRunVerify = `-- name: UpdatePipelineRunVerify :exec
 UPDATE pipeline_runs
 SET verify_started_at = ?, verify_completed_at = ?,
     verify_tokens_in = ?, verify_tokens_out = ?,
-    verify_model = ?, verify_result = ?, updated_at = datetime('now')
+    verify_model = ?, verify_result = ?,
+    build_scope_drift = ?,
+    updated_at = datetime('now')
 WHERE workflow_id = ?
 `
 
@@ -526,6 +688,7 @@ type UpdatePipelineRunVerifyParams struct {
 	VerifyTokensOut   sql.NullInt64  `json:"verify_tokens_out"`
 	VerifyModel       sql.NullString `json:"verify_model"`
 	VerifyResult      sql.NullString `json:"verify_result"`
+	BuildScopeDrift   int64          `json:"build_scope_drift"`
 	WorkflowID        string         `json:"workflow_id"`
 }
 
@@ -537,6 +700,7 @@ func (q *Queries) UpdatePipelineRunVerify(ctx context.Context, arg UpdatePipelin
 		arg.VerifyTokensOut,
 		arg.VerifyModel,
 		arg.VerifyResult,
+		arg.BuildScopeDrift,
 		arg.WorkflowID,
 	)
 	return err

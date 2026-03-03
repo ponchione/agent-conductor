@@ -20,7 +20,10 @@ type Querier interface {
 	GetPendingTask(ctx context.Context) (string, error)
 	GetPipelineStats(ctx context.Context) (GetPipelineStatsRow, error)
 	GetRecentPipelineRuns(ctx context.Context) ([]GetRecentPipelineRunsRow, error)
+	GetScopeQualityStats(ctx context.Context) (GetScopeQualityStatsRow, error)
+	GetStatsByWorkOrderType(ctx context.Context) ([]GetStatsByWorkOrderTypeRow, error)
 	GetTask(ctx context.Context, id string) (Task, error)
+	GetVerifyHumanAgreement(ctx context.Context) ([]GetVerifyHumanAgreementRow, error)
 	GetWorkflow(ctx context.Context, id string) (Workflow, error)
 	ListEvents(ctx context.Context, workflowID sql.NullString) ([]Event, error)
 	ReleaseTask(ctx context.Context, id string) error

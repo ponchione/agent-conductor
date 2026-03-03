@@ -21,6 +21,13 @@ import (
 	"github.com/ponchione/agent-conductor/internal/queue"
 )
 
+func boolToInt(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 type criterionPreCheck struct {
 	criterion string
 	met       bool
@@ -200,6 +207,7 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		VerifyTokensOut:   sql.NullInt64{Int64: int64(lastVerifyUsage.CompletionTokens), Valid: true},
 		VerifyModel:       sql.NullString{String: w.cfg.LocalModel.ModelName, Valid: true},
 		VerifyResult:      sql.NullString{String: report.Status, Valid: true},
+		BuildScopeDrift:   boolToInt(report.ScopeDrift.Detected),
 	}); err != nil {
 		slog.Warn("Failed to update pipeline run verify metrics", "error", err)
 	}

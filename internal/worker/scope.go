@@ -118,6 +118,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	var pkg models.ContextPackage
 	var lastErr error
 	var lastUsage llm.Usage
+	var valResult *scopeValidationResult
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
 			slog.Warn("Retrying scope LLM call", "task", task.ID, "attempt", attempt)
@@ -141,26 +142,26 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		}
 
 		// Path validation
-		result := validateScopeOutput(w.cfg.Project.Path, &pkg)
+		valResult = validateScopeOutput(w.cfg.Project.Path, &pkg)
 
-		if result.thresholdExceeded {
+		if valResult.thresholdExceeded {
 			lastErr = fmt.Errorf("scope validation: %d of %d paths do not exist (exceeds %.0f%% threshold)",
-				len(result.strippedPaths), result.pathsChecked, stripThreshold*100)
-			scopePrompt = scopePrompt + "\n\n" + buildCorrectionSection(result.strippedPaths)
+				len(valResult.strippedPaths), valResult.pathsChecked, stripThreshold*100)
+			scopePrompt = scopePrompt + "\n\n" + buildCorrectionSection(valResult.strippedPaths)
 			w.db.LogEvent(task.WorkflowID, task.ID, "scope_validation_retry", map[string]any{
 				"attempt":        attempt,
-				"stripped_paths": result.strippedPaths,
+				"stripped_paths": valResult.strippedPaths,
 			})
 			continue
 		}
 
 		// Validation passed
 		w.db.LogEvent(task.WorkflowID, task.ID, "scope_validated", map[string]any{
-			"paths_checked":      result.pathsChecked,
-			"paths_stripped":     len(result.strippedPaths),
-			"paths_reclassified": len(result.reclassifiedPaths),
+			"paths_checked":      valResult.pathsChecked,
+			"paths_stripped":     len(valResult.strippedPaths),
+			"paths_reclassified": len(valResult.reclassifiedPaths),
 		})
-		pkg = *result.pkg
+		pkg = *valResult.pkg
 		lastUsage = usage
 		lastErr = nil
 		break
@@ -181,6 +182,21 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "full context assembly failed: %w", err)
 	}
 
+	var ragDirect, ragHops int
+	for _, rc := range fullPkg.Scope.RelevantCode {
+		if rc.IsDependencyHop {
+			ragHops++
+		} else {
+			ragDirect++
+		}
+	}
+
+	var pathsStripped, pathsReclassified int
+	if valResult != nil {
+		pathsStripped = len(valResult.strippedPaths)
+		pathsReclassified = len(valResult.reclassifiedPaths)
+	}
+
 	pkgDir := filepath.Join(w.cfg.Project.DataDir, "artifacts", "context-packages")
 	if err := os.MkdirAll(pkgDir, 0755); err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to create context-packages dir: %w", err)
@@ -192,12 +208,18 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	}
 
 	if err := w.db.UpdatePipelineRunScope(ctx, database.UpdatePipelineRunScopeParams{
-		WorkflowID:       task.WorkflowID,
-		ScopeStartedAt:   sql.NullString{String: scopeStartedAt.UTC().Format(time.RFC3339), Valid: true},
-		ScopeCompletedAt: sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
-		ScopeTokensIn:    sql.NullInt64{Int64: int64(lastUsage.PromptTokens), Valid: true},
-		ScopeTokensOut:   sql.NullInt64{Int64: int64(lastUsage.CompletionTokens), Valid: true},
-		ScopeModel:       sql.NullString{String: w.cfg.LocalModel.ModelName, Valid: true},
+		WorkflowID:               task.WorkflowID,
+		ScopeStartedAt:           sql.NullString{String: scopeStartedAt.UTC().Format(time.RFC3339), Valid: true},
+		ScopeCompletedAt:         sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
+		ScopeTokensIn:            sql.NullInt64{Int64: int64(lastUsage.PromptTokens), Valid: true},
+		ScopeTokensOut:           sql.NullInt64{Int64: int64(lastUsage.CompletionTokens), Valid: true},
+		ScopeModel:               sql.NullString{String: w.cfg.LocalModel.ModelName, Valid: true},
+		ScopeFilesSuggested:      sql.NullInt64{Int64: int64(len(pkg.FilesToModify) + len(pkg.NewFiles)), Valid: true},
+		ScopeEstimatedComplexity: sql.NullString{String: pkg.EstimatedComplexity, Valid: pkg.EstimatedComplexity != ""},
+		ScopeRagDirect:           sql.NullInt64{Int64: int64(ragDirect), Valid: true},
+		ScopeRagHops:             sql.NullInt64{Int64: int64(ragHops), Valid: true},
+		ScopePathsStripped:       sql.NullInt64{Int64: int64(pathsStripped), Valid: true},
+		ScopePathsReclassified:   sql.NullInt64{Int64: int64(pathsReclassified), Valid: true},
 	}); err != nil {
 		slog.Warn("Failed to update pipeline run scope metrics", "error", err)
 	}

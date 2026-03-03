@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"path/filepath"
 
 	"github.com/ponchione/agent-conductor/internal/database"
@@ -81,7 +82,7 @@ var statsCmd = &cobra.Command{
 
 		fmt.Println()
 		fmt.Println("--- RECENT RUNS ---")
-		fmt.Printf("%-10s  %-14s  %-6s  %-10s  %s\n", "ID", "TYPE", "VERIFY", "HUMAN", "TOKENS")
+		fmt.Printf("%-10s  %-14s  %-6s  %-10s  %-8s  %-10s  %s\n", "ID", "TYPE", "VERIFY", "HUMAN", "CMPLX", "AGREE", "TOKENS")
 		for _, r := range recent {
 			id := r.WorkflowID
 			if len(id) > 8 {
@@ -90,7 +91,36 @@ var statsCmd = &cobra.Command{
 			wot := nullStr(r.WorkOrderType)
 			vr := nullStr(r.VerifyResult)
 			hr := nullStr(r.HumanResult)
-			fmt.Printf("%-10s  %-14s  %-6s  %-10s  %s\n", id, wot, vr, hr, fmtInt(r.TotalTokens))
+			cmplx := nullStr(r.ScopeEstimatedComplexity)
+			agree := r.Agreement
+			if agree == "" {
+				agree = "-"
+			}
+			fmt.Printf("%-10s  %-14s  %-6s  %-10s  %-8s  %-10s  %s\n", id, wot, vr, hr, cmplx, agree, fmtInt(r.TotalTokens))
+		}
+
+		// --- VERIFY vs HUMAN AGREEMENT ---
+		agreementRows, err := db.GetVerifyHumanAgreement(ctx)
+		if err != nil {
+			log.Printf("warning: failed to fetch agreement data: %v", err)
+		} else {
+			printAgreementSection(agreementRows)
+		}
+
+		// --- BY WORK ORDER TYPE ---
+		typeRows, err := db.GetStatsByWorkOrderType(ctx)
+		if err != nil {
+			log.Printf("warning: failed to fetch work order type stats: %v", err)
+		} else {
+			printTypeBreakdownSection(typeRows)
+		}
+
+		// --- SCOPE QUALITY ---
+		sqStats, err := db.GetScopeQualityStats(ctx)
+		if err != nil {
+			log.Printf("warning: failed to fetch scope quality stats: %v", err)
+		} else {
+			printScopeQualitySection(sqStats)
 		}
 
 		return nil
@@ -116,6 +146,79 @@ func pct(part, total int64) int64 {
 		return 0
 	}
 	return part * 100 / total
+}
+
+func printAgreementSection(rows []database.GetVerifyHumanAgreementRow) {
+	// Build (verify_result, human_result) → count map.
+	type key struct{ v, h string }
+	m := make(map[key]int64)
+	for _, r := range rows {
+		m[key{r.VerifyResult.String, r.HumanResult.String}] = r.Count
+	}
+
+	fmt.Println()
+	fmt.Println("--- VERIFY vs HUMAN AGREEMENT ---")
+	fmt.Printf("%-8s  %8s  %8s\n", "", "approved", "rejected")
+	for _, v := range []string{"PASS", "WARN", "FAIL"} {
+		fmt.Printf("%-8s  %8d  %8d\n", v,
+			m[key{v, "approved"}], m[key{v, "rejected"}])
+	}
+
+	agreed := m[key{"PASS", "approved"}] +
+		m[key{"WARN", "approved"}] + m[key{"WARN", "rejected"}] +
+		m[key{"FAIL", "rejected"}]
+	var total int64
+	for _, c := range m {
+		total += c
+	}
+	if total > 0 {
+		fmt.Printf("Agreement: %d/%d (%d%%)\n", agreed, total, agreed*100/total)
+	} else {
+		fmt.Printf("Agreement: 0/0 (0%%)\n")
+	}
+}
+
+func printTypeBreakdownSection(rows []database.GetStatsByWorkOrderTypeRow) {
+	fmt.Println()
+	fmt.Println("--- BY WORK ORDER TYPE ---")
+	fmt.Printf("%-16s  %5s  %4s  %4s  %4s  %8s  %8s  %9s\n",
+		"TYPE", "TOTAL", "PASS", "WARN", "FAIL", "APPROVED", "REJECTED", "AVG SCOPE")
+	for _, r := range rows {
+		wot := nullStr(r.WorkOrderType)
+		avgScope := "-"
+		if r.AvgScopeSecs.Valid {
+			avgScope = fmt.Sprintf("%ds", int64(r.AvgScopeSecs.Float64))
+		}
+		fmt.Printf("%-16s  %5d  %4d  %4d  %4d  %8d  %8d  %9s\n",
+			wot, r.Total,
+			nullF64ToInt(r.VerifyPass),
+			nullF64ToInt(r.VerifyWarn),
+			nullF64ToInt(r.VerifyFail),
+			nullF64ToInt(r.HumanApproved),
+			nullF64ToInt(r.HumanRejected),
+			avgScope,
+		)
+	}
+}
+
+func printScopeQualitySection(s database.GetScopeQualityStatsRow) {
+	fmt.Println()
+	fmt.Println("--- SCOPE QUALITY ---")
+	if s.AvgPathsStripped.Valid {
+		fmt.Printf("Avg paths stripped:      %.1f\n", s.AvgPathsStripped.Float64)
+	} else {
+		fmt.Printf("Avg paths stripped:      0.0\n")
+	}
+	if s.AvgPathsReclassified.Valid {
+		fmt.Printf("Avg paths reclassified:  %.1f\n", s.AvgPathsReclassified.Float64)
+	} else {
+		fmt.Printf("Avg paths reclassified:  0.0\n")
+	}
+	fmt.Printf("Complexity distribution: low %d  medium %d  high %d\n",
+		nullF64ToInt(s.ComplexityLow),
+		nullF64ToInt(s.ComplexityMedium),
+		nullF64ToInt(s.ComplexityHigh),
+	)
 }
 
 // fmtInt formats an int64 with comma separators (e.g. 1234567 → "1,234,567").
