@@ -2,6 +2,8 @@ package context
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -313,5 +315,192 @@ func TestAssembleScopePrompt_DependencyHopAnnotation(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "ValidateToken [dependency-hop]") {
 		t.Error("ValidateToken should have dependency-hop marker")
+	}
+}
+
+func TestGatherPreScope_ReturnsFileTreeAndConventions(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Create a Go file so the tree is non-empty.
+	if err := os.MkdirAll(filepath.Join(tmpDir, "internal", "auth"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "internal", "auth", "handler.go"), []byte("package auth\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: tmpDir, DataDir: t.TempDir()},
+		Index: config.Index{
+			Include: []string{"**/*.go"},
+		},
+		Conventions: config.Conventions{
+			ModulePath: "github.com/example/project",
+		},
+	}
+	assembler := NewAssembler(cfg, nil)
+
+	bundle, err := assembler.GatherPreScope(context.Background(), &models.WorkOrder{
+		Title: "test", Type: "new_feature", TargetModule: "auth",
+	})
+	if err != nil {
+		t.Fatalf("GatherPreScope failed: %v", err)
+	}
+
+	if bundle.FileTree == "" {
+		t.Error("expected non-empty FileTree")
+	}
+	if !strings.Contains(bundle.Conventions, "github.com/example/project") {
+		t.Errorf("expected conventions to contain module path, got %q", bundle.Conventions)
+	}
+	if bundle.RecallSummary != "" {
+		t.Errorf("expected empty RecallSummary, got %q", bundle.RecallSummary)
+	}
+}
+
+func TestGatherPreScope_EmptyConventions(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: t.TempDir(), DataDir: t.TempDir()},
+	}
+	assembler := NewAssembler(cfg, nil)
+
+	bundle, err := assembler.GatherPreScope(context.Background(), &models.WorkOrder{
+		Title: "test", Type: "new_feature", TargetModule: "auth",
+	})
+	if err != nil {
+		t.Fatalf("GatherPreScope failed: %v", err)
+	}
+	if bundle.Conventions != "" {
+		t.Errorf("expected empty Conventions, got %q", bundle.Conventions)
+	}
+}
+
+func TestGatherForTarget_RAGFiltering(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: t.TempDir(), DataDir: t.TempDir()},
+	}
+
+	searcher := &stubSearcher{results: []RAGResult{
+		{Function: "Login", File: "internal/auth/service.go", Description: "handles login"},
+		{Function: "ListUsers", File: "internal/users/service.go", Description: "lists users"},
+		{Function: "Middleware", File: "internal/auth/middleware.go", Description: "auth middleware"},
+	}}
+	assembler := NewAssembler(cfg, searcher)
+
+	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "auth"}
+	target := Target{Path: "internal/auth", Rationale: "auth changes"}
+
+	bundle, err := assembler.GatherForTarget(context.Background(), wo, target)
+	if err != nil {
+		t.Fatalf("GatherForTarget failed: %v", err)
+	}
+
+	if len(bundle.RAGChunks) != 2 {
+		t.Fatalf("expected 2 RAG chunks after filtering, got %d", len(bundle.RAGChunks))
+	}
+	for _, chunk := range bundle.RAGChunks {
+		if !strings.HasPrefix(chunk.File, "internal/auth") {
+			t.Errorf("expected chunk file to start with internal/auth, got %q", chunk.File)
+		}
+	}
+}
+
+func TestGatherForTarget_NilSearcher(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: t.TempDir(), DataDir: t.TempDir()},
+	}
+	assembler := NewAssembler(cfg, nil)
+
+	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "auth"}
+	target := Target{Path: "internal/auth", Rationale: "auth changes"}
+
+	bundle, err := assembler.GatherForTarget(context.Background(), wo, target)
+	if err != nil {
+		t.Fatalf("GatherForTarget failed: %v", err)
+	}
+
+	if len(bundle.RAGChunks) != 0 {
+		t.Errorf("expected empty RAGChunks with nil searcher, got %d", len(bundle.RAGChunks))
+	}
+}
+
+func TestGatherForTarget_FilesAndSignatures(t *testing.T) {
+	tmpDir := t.TempDir()
+	targetDir := filepath.Join(tmpDir, "internal", "auth")
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	goContent := `package auth
+
+func Login(user string) error {
+	return nil
+}
+
+type Service struct {
+	db *DB
+}
+
+func (s *Service) Logout() error {
+	return nil
+}
+`
+	if err := os.WriteFile(filepath.Join(targetDir, "service.go"), []byte(goContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: tmpDir, DataDir: t.TempDir()},
+		Index: config.Index{
+			Include: []string{"**/*.go"},
+		},
+	}
+	assembler := NewAssembler(cfg, nil)
+
+	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "auth"}
+	target := Target{Path: "internal/auth", Rationale: "auth changes"}
+
+	bundle, err := assembler.GatherForTarget(context.Background(), wo, target)
+	if err != nil {
+		t.Fatalf("GatherForTarget failed: %v", err)
+	}
+
+	if len(bundle.Files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(bundle.Files))
+	}
+	if bundle.Files[0].Path != "internal/auth/service.go" {
+		t.Errorf("expected path internal/auth/service.go, got %q", bundle.Files[0].Path)
+	}
+	if !strings.Contains(bundle.Files[0].Content, "func Login") {
+		t.Error("expected file content to contain func Login")
+	}
+
+	// Check signatures extracted
+	if len(bundle.Signatures) < 3 {
+		t.Fatalf("expected at least 3 signatures (func Login, type Service, func (s *Service) Logout), got %d: %v",
+			len(bundle.Signatures), bundle.Signatures)
+	}
+
+	foundFunc := false
+	foundType := false
+	foundMethod := false
+	for _, sig := range bundle.Signatures {
+		if strings.HasPrefix(sig, "func Login") {
+			foundFunc = true
+		}
+		if strings.HasPrefix(sig, "type Service") {
+			foundType = true
+		}
+		if strings.HasPrefix(sig, "func (s *Service) Logout") {
+			foundMethod = true
+		}
+	}
+	if !foundFunc {
+		t.Error("expected signature for func Login")
+	}
+	if !foundType {
+		t.Error("expected signature for type Service")
+	}
+	if !foundMethod {
+		t.Error("expected signature for method Logout")
 	}
 }
