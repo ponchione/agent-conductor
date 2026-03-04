@@ -9,45 +9,81 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/ponchione/agent-conductor/internal/config"
 )
 
-// Client handles communication with a local LLM via an OpenAI-compatible API.
-type Client struct {
-	endpoint       string
-	modelName      string
-	temperature    float64
-	timeoutSeconds int
-	httpClient     *http.Client
+// Client is the interface for all LLM completion providers.
+type Client interface {
+	Complete(ctx context.Context, systemPrompt string, userMessage string) (*CompletionResult, error)
 }
 
-// New creates a new LLM client using the provided configuration.
-func New(cfg config.LocalModel) *Client {
-	return &Client{
-		endpoint:       strings.TrimRight(cfg.Endpoint, "/"),
-		modelName:      cfg.ModelName,
-		temperature:    cfg.Temperature,
-		timeoutSeconds: cfg.TimeoutSeconds,
+// CompletionResult holds the output and metadata from an LLM completion call.
+type CompletionResult struct {
+	Content   string
+	TokensIn  int
+	TokensOut int
+	LatencyMs int64
+	Provider  string
+	Model     string
+}
+
+// Provider holds the configuration for a single LLM provider endpoint.
+type Provider struct {
+	Endpoint         string
+	Model            string
+	APIKey           string
+	TimeoutSeconds   int
+	MaxContextTokens int
+	Temperature      float64
+}
+
+// ProviderClient handles communication with an LLM via an OpenAI-compatible API.
+type ProviderClient struct {
+	provider   Provider
+	httpClient *http.Client
+}
+
+// NewProviderClient creates a new ProviderClient from the given Provider config.
+func NewProviderClient(p Provider) *ProviderClient {
+	timeout := p.TimeoutSeconds
+	if timeout == 0 {
+		timeout = 60
+	}
+	return &ProviderClient{
+		provider: p,
 		httpClient: &http.Client{
-			Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second,
+			Timeout: time.Duration(timeout) * time.Second,
 		},
 	}
 }
 
+// New creates a new ProviderClient using the provided configuration.
+// This is a backward-compatible shim that delegates to NewProviderClient.
+func New(cfg config.LocalModel) *ProviderClient {
+	return NewProviderClient(Provider{
+		Endpoint:       cfg.Endpoint,
+		Model:          cfg.ModelName,
+		Temperature:    cfg.Temperature,
+		TimeoutSeconds: cfg.TimeoutSeconds,
+	})
+}
+
 // Usage holds token counts returned by the LLM API.
+// Used internally for JSON deserialization of OpenAI-compatible responses.
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 }
 
 // Complete sends a chat completion request to the LLM.
-func (c *Client) Complete(ctx context.Context, systemPrompt string, userMessage string) (string, Usage, error) {
+func (c *ProviderClient) Complete(ctx context.Context, systemPrompt string, userMessage string) (*CompletionResult, error) {
 	reqBody := chatCompletionRequest{
-		Model:       c.modelName,
-		Temperature: c.temperature,
+		Model:       c.provider.Model,
+		Temperature: c.provider.Temperature,
 		Messages: []message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userMessage},
@@ -56,45 +92,113 @@ func (c *Client) Complete(ctx context.Context, systemPrompt string, userMessage 
 
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", Usage{}, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	targetURL, err := url.JoinPath(c.endpoint, "chat", "completions")
+	endpoint := strings.TrimRight(c.provider.Endpoint, "/")
+	targetURL, err := url.JoinPath(endpoint, "chat", "completions")
 	if err != nil {
-		return "", Usage{}, fmt.Errorf("failed to construct URL: %w", err)
+		return nil, fmt.Errorf("failed to construct URL: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
-		return "", Usage{}, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+
+	if c.provider.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.provider.APIKey)
+	}
 
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", Usage{}, fmt.Errorf("http request failed: %w", err)
+		return nil, fmt.Errorf("http request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	duration := time.Since(start)
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", Usage{}, fmt.Errorf("api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, fmt.Errorf("api returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var respBody chatCompletionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
-		return "", Usage{}, fmt.Errorf("failed to decode response: %w", err)
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	slog.Debug("LLM call complete", "model", c.modelName, "duration_ms", duration.Milliseconds())
+	slog.Debug("LLM call complete", "model", c.provider.Model, "duration_ms", duration.Milliseconds())
 
 	if len(respBody.Choices) == 0 {
-		return "", Usage{}, fmt.Errorf("api returned no choices")
+		return nil, fmt.Errorf("api returned no choices")
 	}
 
-	return respBody.Choices[0].Message.Content, respBody.Usage, nil
+	return &CompletionResult{
+		Content:   respBody.Choices[0].Message.Content,
+		TokensIn:  respBody.Usage.PromptTokens,
+		TokensOut: respBody.Usage.CompletionTokens,
+		LatencyMs: duration.Milliseconds(),
+		Provider:  endpoint,
+		Model:     c.provider.Model,
+	}, nil
+}
+
+// RoleResolver maps role names to LLM Client implementations.
+type RoleResolver struct {
+	clients map[string]Client
+	roles   map[string]string
+}
+
+// NewRoleResolver creates a RoleResolver. providers maps provider names to Client
+// implementations, and roles maps role names to provider names.
+func NewRoleResolver(providers map[string]Client, roles map[string]string) *RoleResolver {
+	return &RoleResolver{
+		clients: providers,
+		roles:   roles,
+	}
+}
+
+// ForRole returns the Client for the given role.
+func (r *RoleResolver) ForRole(role string) (Client, error) {
+	providerName, ok := r.roles[role]
+	if !ok {
+		return nil, fmt.Errorf("unknown role %q; available roles: %s", role, joinKeys(r.roles))
+	}
+
+	client, ok := r.clients[providerName]
+	if !ok {
+		return nil, fmt.Errorf("role %q maps to provider %q, but provider not found; available providers: %s",
+			role, providerName, joinKeys(r.clients))
+	}
+
+	return client, nil
+}
+
+// joinKeys returns sorted keys of a map as a comma-separated string.
+func joinKeys[M ~map[string]V, V any](m M) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
+}
+
+// RAGCompleterAdapter bridges a Client (which returns *CompletionResult) to the
+// rag.LLMCompleter interface (which expects (string, error)).
+type RAGCompleterAdapter struct {
+	Client Client
+}
+
+// Complete satisfies rag.LLMCompleter by discarding CompletionResult metadata.
+func (a *RAGCompleterAdapter) Complete(ctx context.Context, systemPrompt string, userMessage string) (string, error) {
+	result, err := a.Client.Complete(ctx, systemPrompt, userMessage)
+	if err != nil {
+		return "", err
+	}
+	return result.Content, nil
 }
 
 // internal structs for JSON marshaling

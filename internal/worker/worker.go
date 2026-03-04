@@ -24,7 +24,7 @@ type Worker struct {
 	db        *database.DB
 	cfg       *config.ProjectConfig
 	assembler *context.Assembler
-	llm       *llm.Client
+	llm       *llm.ProviderClient
 	runner    executor.BuildExecutor
 	git       *git.GitManager
 	prompts   *templates.LoadedPrompts
@@ -36,7 +36,7 @@ func New(
 	db *database.DB,
 	cfg *config.ProjectConfig,
 	assembler *context.Assembler,
-	llmClient *llm.Client,
+	llmClient *llm.ProviderClient,
 	runner executor.BuildExecutor,
 	gitMgr *git.GitManager,
 	prompts *templates.LoadedPrompts,

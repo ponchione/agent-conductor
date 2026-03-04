@@ -14,17 +14,7 @@ import (
 )
 
 func TestClient_Complete(t *testing.T) {
-	// Mock server setup
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify URL path
-		if r.URL.Path != "/chat/completions" {
-			// Note: Endpoint in New() trims trailing slash.
-			// JoinPath adds /chat/completions.
-			// If Endpoint is http://server/v1, path is /v1/chat/completions
-			// Let's debug this in the test body.
-		}
-
-		// Read request body
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatal(err)
@@ -36,7 +26,6 @@ func TestClient_Complete(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Verify model and messages
 		if req.Model != "qwen-local" {
 			t.Errorf("expected model qwen-local, got %s", req.Model)
 		}
@@ -50,24 +39,17 @@ func TestClient_Complete(t *testing.T) {
 			t.Errorf("incorrect user message")
 		}
 
-		// Return success response
 		resp := chatCompletionResponse{
 			Choices: []choice{
-				{
-					Message: message{
-						Role:    "assistant",
-						Content: "Success!",
-					},
-				},
+				{Message: message{Role: "assistant", Content: "Success!"}},
 			},
+			Usage: Usage{PromptTokens: 10, CompletionTokens: 5},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
-	// Client setup
-	// server.URL includes http://ip:port
 	cfg := config.LocalModel{
 		Endpoint:       server.URL,
 		ModelName:      "qwen-local",
@@ -76,19 +58,26 @@ func TestClient_Complete(t *testing.T) {
 	}
 	client := New(cfg)
 
-	// Test successful completion
 	ctx := context.Background()
-	result, _, err := client.Complete(ctx, "System Prompt", "User Message")
+	result, err := client.Complete(ctx, "System Prompt", "User Message")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != "Success!" {
-		t.Errorf("expected result 'Success!', got %s", result)
+	if result.Content != "Success!" {
+		t.Errorf("expected content 'Success!', got %s", result.Content)
+	}
+	if result.TokensIn != 10 {
+		t.Errorf("expected TokensIn 10, got %d", result.TokensIn)
+	}
+	if result.TokensOut != 5 {
+		t.Errorf("expected TokensOut 5, got %d", result.TokensOut)
+	}
+	if result.LatencyMs < 0 {
+		t.Errorf("expected non-negative LatencyMs, got %d", result.LatencyMs)
 	}
 }
 
 func TestClient_Errors(t *testing.T) {
-	// 1. Test Server Error
 	t.Run("server_error", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -97,7 +86,7 @@ func TestClient_Errors(t *testing.T) {
 		defer server.Close()
 
 		client := New(config.LocalModel{Endpoint: server.URL, TimeoutSeconds: 1})
-		_, _, err := client.Complete(context.Background(), "sys", "user")
+		_, err := client.Complete(context.Background(), "sys", "user")
 		if err == nil {
 			t.Error("expected error, got nil")
 		}
@@ -106,22 +95,20 @@ func TestClient_Errors(t *testing.T) {
 		}
 	})
 
-	// 2. Test Malformed JSON
 	t.Run("malformed_json", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"choices": [{"message": {"content": "broken"`)) // incomplete json
+			w.Write([]byte(`{"choices": [{"message": {"content": "broken"`))
 		}))
 		defer server.Close()
 
 		client := New(config.LocalModel{Endpoint: server.URL, TimeoutSeconds: 1})
-		_, _, err := client.Complete(context.Background(), "sys", "user")
+		_, err := client.Complete(context.Background(), "sys", "user")
 		if err == nil {
 			t.Error("expected error, got nil")
 		}
 	})
 
-	// 3. Test Empty Choices
 	t.Run("empty_choices", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -130,7 +117,7 @@ func TestClient_Errors(t *testing.T) {
 		defer server.Close()
 
 		client := New(config.LocalModel{Endpoint: server.URL, TimeoutSeconds: 1})
-		_, _, err := client.Complete(context.Background(), "sys", "user")
+		_, err := client.Complete(context.Background(), "sys", "user")
 		if err == nil {
 			t.Error("expected error, got nil")
 		}
@@ -147,24 +134,169 @@ func TestClient_Timeout(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Set client timeout very low
-	client := New(config.LocalModel{Endpoint: server.URL, TimeoutSeconds: 1}) // 1 sec is too long for test
+	client := New(config.LocalModel{Endpoint: server.URL, TimeoutSeconds: 1})
 
-	// Create context with very short timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, _, err := client.Complete(ctx, "sys", "user")
+	_, err := client.Complete(ctx, "sys", "user")
 	if err == nil {
 		t.Error("expected timeout error, got nil")
 	}
 
-	// Error usually wraps context.DeadlineExceeded
 	if !strings.Contains(err.Error(), "context deadline exceeded") && !strings.Contains(err.Error(), "Client.Timeout exceeded") {
-		// depending on go version and http client setup, error might vary slightly
-		// but checking context error is safer
 		if ctx.Err() != context.DeadlineExceeded {
 			t.Errorf("expected deadline exceeded, got %v", err)
 		}
 	}
+}
+
+func TestProviderClient_AuthorizationHeader(t *testing.T) {
+	t.Run("with_api_key", func(t *testing.T) {
+		var gotAuth string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			resp := chatCompletionResponse{
+				Choices: []choice{{Message: message{Role: "assistant", Content: "ok"}}},
+				Usage:   Usage{PromptTokens: 1, CompletionTokens: 1},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		}))
+		defer server.Close()
+
+		client := NewProviderClient(Provider{
+			Endpoint: server.URL,
+			Model:    "test-model",
+			APIKey:   "sk-secret-123",
+		})
+
+		_, err := client.Complete(context.Background(), "sys", "user")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if gotAuth != "Bearer sk-secret-123" {
+			t.Errorf("expected 'Bearer sk-secret-123', got %q", gotAuth)
+		}
+	})
+
+	t.Run("without_api_key", func(t *testing.T) {
+		var gotAuth string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			resp := chatCompletionResponse{
+				Choices: []choice{{Message: message{Role: "assistant", Content: "ok"}}},
+				Usage:   Usage{PromptTokens: 1, CompletionTokens: 1},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		}))
+		defer server.Close()
+
+		client := NewProviderClient(Provider{
+			Endpoint: server.URL,
+			Model:    "test-model",
+		})
+
+		_, err := client.Complete(context.Background(), "sys", "user")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if gotAuth != "" {
+			t.Errorf("expected no Authorization header, got %q", gotAuth)
+		}
+	})
+}
+
+type mockClient struct {
+	content string
+	err     error
+}
+
+func (m *mockClient) Complete(_ context.Context, _, _ string) (*CompletionResult, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &CompletionResult{Content: m.content, TokensIn: 10, TokensOut: 5}, nil
+}
+
+func TestRoleResolver_ForRole(t *testing.T) {
+	clientA := &mockClient{content: "from-a"}
+	clientB := &mockClient{content: "from-b"}
+
+	providers := map[string]Client{
+		"provider-a": clientA,
+		"provider-b": clientB,
+	}
+	roles := map[string]string{
+		"scope":  "provider-a",
+		"verify": "provider-b",
+	}
+
+	resolver := NewRoleResolver(providers, roles)
+
+	t.Run("happy_path", func(t *testing.T) {
+		c, err := resolver.ForRole("scope")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		result, err := c.Complete(context.Background(), "sys", "user")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Content != "from-a" {
+			t.Errorf("expected 'from-a', got %q", result.Content)
+		}
+	})
+
+	t.Run("unknown_role", func(t *testing.T) {
+		_, err := resolver.ForRole("build")
+		if err == nil {
+			t.Fatal("expected error for unknown role")
+		}
+		if !strings.Contains(err.Error(), "unknown role") {
+			t.Errorf("expected 'unknown role' error, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "scope") {
+			t.Errorf("expected error to list available roles, got %v", err)
+		}
+	})
+
+	t.Run("dangling_provider", func(t *testing.T) {
+		danglingRoles := map[string]string{
+			"scope": "provider-missing",
+		}
+		r := NewRoleResolver(providers, danglingRoles)
+		_, err := r.ForRole("scope")
+		if err == nil {
+			t.Fatal("expected error for dangling provider")
+		}
+		if !strings.Contains(err.Error(), "provider-missing") {
+			t.Errorf("expected error to mention missing provider, got %v", err)
+		}
+	})
+}
+
+func TestRAGCompleterAdapter(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		adapter := &RAGCompleterAdapter{Client: &mockClient{content: "hello"}}
+		text, err := adapter.Complete(context.Background(), "sys", "user")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if text != "hello" {
+			t.Errorf("expected 'hello', got %q", text)
+		}
+	})
+
+	t.Run("error", func(t *testing.T) {
+		adapter := &RAGCompleterAdapter{Client: &mockClient{err: io.EOF}}
+		_, err := adapter.Complete(context.Background(), "sys", "user")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if err != io.EOF {
+			t.Errorf("expected io.EOF, got %v", err)
+		}
+	})
 }

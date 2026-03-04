@@ -117,7 +117,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 
 	var pkg models.ContextPackage
 	var lastErr error
-	var lastUsage llm.Usage
+	var lastResult *llm.CompletionResult
 	var valResult *scopeValidationResult
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
@@ -128,13 +128,13 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 			})
 		}
 
-		jsonStr, usage, err := w.llm.Complete(ctx, w.prompts.Scope, scopePrompt)
+		result, err := w.llm.Complete(ctx, w.prompts.Scope, scopePrompt)
 		if err != nil {
 			lastErr = fmt.Errorf("llm completion failed (attempt %d): %w", attempt, err)
 			continue
 		}
 
-		cleanedJSON := llm.CleanLLMResponse(jsonStr)
+		cleanedJSON := llm.CleanLLMResponse(result.Content)
 
 		if err := json.Unmarshal([]byte(cleanedJSON), &pkg); err != nil {
 			lastErr = fmt.Errorf("invalid json from llm (attempt %d): %w", attempt, err)
@@ -162,7 +162,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 			"paths_reclassified": len(valResult.reclassifiedPaths),
 		})
 		pkg = *valResult.pkg
-		lastUsage = usage
+		lastResult = result
 		lastErr = nil
 		break
 	}
@@ -211,8 +211,8 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		WorkflowID:               task.WorkflowID,
 		ScopeStartedAt:           sql.NullString{String: scopeStartedAt.UTC().Format(time.RFC3339), Valid: true},
 		ScopeCompletedAt:         sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
-		ScopeTokensIn:            sql.NullInt64{Int64: int64(lastUsage.PromptTokens), Valid: true},
-		ScopeTokensOut:           sql.NullInt64{Int64: int64(lastUsage.CompletionTokens), Valid: true},
+		ScopeTokensIn:            sql.NullInt64{Int64: int64(lastResult.TokensIn), Valid: true},
+		ScopeTokensOut:           sql.NullInt64{Int64: int64(lastResult.TokensOut), Valid: true},
 		ScopeModel:               sql.NullString{String: w.cfg.LocalModel.ModelName, Valid: true},
 		ScopeFilesSuggested:      sql.NullInt64{Int64: int64(len(pkg.FilesToModify) + len(pkg.NewFiles)), Valid: true},
 		ScopeEstimatedComplexity: sql.NullString{String: pkg.EstimatedComplexity, Valid: pkg.EstimatedComplexity != ""},

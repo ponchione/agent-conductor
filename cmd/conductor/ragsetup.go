@@ -9,15 +9,6 @@ import (
 	"github.com/ponchione/agent-conductor/internal/rag"
 )
 
-// llmAdapter bridges llm.Client (which returns (string, Usage, error)) to the
-// rag.LLMCompleter interface (which expects (string, error)).
-type llmAdapter struct{ c *llm.Client }
-
-func (a *llmAdapter) Complete(ctx context.Context, sys, user string) (string, error) {
-	text, _, err := a.c.Complete(ctx, sys, user)
-	return text, err
-}
-
 // buildRAGStack initialises the RAG store, embedder, and describer from the
 // project config. The caller owns store.Close().
 func buildRAGStack(ctx context.Context, cfg *config.ProjectConfig) (*rag.Store, *rag.Embedder, *rag.Describer, error) {
@@ -36,7 +27,7 @@ func buildRAGStack(ctx context.Context, cfg *config.ProjectConfig) (*rag.Store, 
 	})
 
 	llmClient := llm.New(cfg.LocalModel)
-	describer := rag.NewDescriber(&llmAdapter{llmClient})
+	describer := rag.NewDescriber(&llm.RAGCompleterAdapter{Client: llmClient})
 
 	return store, embedder, describer, nil
 }

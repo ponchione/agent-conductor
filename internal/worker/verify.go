@@ -76,7 +76,7 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 	w.db.LogEvent(task.WorkflowID, task.ID, "verify_started", nil)
 
 	verifyStartedAt := time.Now()
-	var lastVerifyUsage llm.Usage
+	var lastVerifyResult *llm.CompletionResult
 
 	wf, err := w.db.GetWorkflow(ctx, task.WorkflowID)
 	if err != nil {
@@ -168,15 +168,15 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 				})
 			}
 
-			jsonStr, usage, err := w.llm.Complete(ctx, w.prompts.Verify, promptContext)
+			result, err := w.llm.Complete(ctx, w.prompts.Verify, promptContext)
 			if err != nil {
 				lastErr = fmt.Errorf("llm verification failed (attempt %d): %w", attempt, err)
 				continue
 			}
 
-			slog.Debug("Raw LLM response", "attempt", attempt, "response", jsonStr)
+			slog.Debug("Raw LLM response", "attempt", attempt, "response", result.Content)
 
-			cleanedJSON := llm.CleanLLMResponse(jsonStr)
+			cleanedJSON := llm.CleanLLMResponse(result.Content)
 
 			slog.Debug("Cleaned JSON for parsing", "json", cleanedJSON)
 
@@ -186,7 +186,7 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 				continue
 			}
 
-			lastVerifyUsage = usage
+			lastVerifyResult = result
 			lastErr = nil
 			break
 		}
@@ -203,8 +203,8 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		WorkflowID:        task.WorkflowID,
 		VerifyStartedAt:   sql.NullString{String: verifyStartedAt.UTC().Format(time.RFC3339), Valid: true},
 		VerifyCompletedAt: sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
-		VerifyTokensIn:    sql.NullInt64{Int64: int64(lastVerifyUsage.PromptTokens), Valid: true},
-		VerifyTokensOut:   sql.NullInt64{Int64: int64(lastVerifyUsage.CompletionTokens), Valid: true},
+		VerifyTokensIn:    sql.NullInt64{Int64: int64(lastVerifyResult.TokensIn), Valid: true},
+		VerifyTokensOut:   sql.NullInt64{Int64: int64(lastVerifyResult.TokensOut), Valid: true},
 		VerifyModel:       sql.NullString{String: w.cfg.LocalModel.ModelName, Valid: true},
 		VerifyResult:      sql.NullString{String: report.Status, Valid: true},
 		BuildScopeDrift:   boolToInt(report.ScopeDrift.Detected),
