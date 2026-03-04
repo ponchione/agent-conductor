@@ -38,6 +38,8 @@ func ParseFile(filePath string, language string, content []byte) ([]RawChunk, er
 		return parseTypeScript(content, false)
 	case "tsx":
 		return parseTypeScript(content, true)
+	case "python":
+		return parsePython(content)
 	default:
 		return parseFallback(filePath, content), nil
 	}
