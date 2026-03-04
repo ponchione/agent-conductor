@@ -18,11 +18,14 @@ type Querier interface {
 	CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) error
 	FailTask(ctx context.Context, arg FailTaskParams) error
 	GetPendingTask(ctx context.Context) (string, error)
+	GetPipelineRunIDByWorkflowID(ctx context.Context, workflowID string) (string, error)
 	GetPipelineStats(ctx context.Context) (GetPipelineStatsRow, error)
 	GetRecentPipelineRuns(ctx context.Context) ([]GetRecentPipelineRunsRow, error)
 	GetScopeQualityStats(ctx context.Context) (GetScopeQualityStatsRow, error)
 	GetStatsByWorkOrderType(ctx context.Context) ([]GetStatsByWorkOrderTypeRow, error)
 	GetSubCallAggregatesByProvider(ctx context.Context, pipelineRunID string) ([]GetSubCallAggregatesByProviderRow, error)
+	GetSubCallGlobalStatsByProvider(ctx context.Context) ([]GetSubCallGlobalStatsByProviderRow, error)
+	GetSubCallPhaseAverages(ctx context.Context) ([]GetSubCallPhaseAveragesRow, error)
 	GetSubCallsByPipelineRun(ctx context.Context, pipelineRunID string) ([]SubCall, error)
 	GetTask(ctx context.Context, id string) (Task, error)
 	GetVerifyHumanAgreement(ctx context.Context) ([]GetVerifyHumanAgreementRow, error)

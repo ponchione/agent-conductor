@@ -16,9 +16,10 @@ import (
 
 	"github.com/ponchione/agent-conductor/internal/database"
 	pipelineerrors "github.com/ponchione/agent-conductor/internal/errors"
-	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
+	"github.com/ponchione/agent-conductor/internal/scope"
+	"github.com/ponchione/agent-conductor/internal/verify"
 )
 
 func boolToInt(b bool) int64 {
@@ -76,7 +77,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 	w.db.LogEvent(task.WorkflowID, task.ID, "verify_started", nil)
 
 	verifyStartedAt := time.Now()
-	var lastVerifyResult *llm.CompletionResult
 
 	wf, err := w.db.GetWorkflow(ctx, task.WorkflowID)
 	if err != nil {
@@ -98,15 +98,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to read work order: %w", err)
 	}
 
-	cpPath := wf.ContextPackagePath.String
-	if !wf.ContextPackagePath.Valid {
-		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "missing context package path")
-	}
-	cpContent, err := os.ReadFile(cpPath)
-	if err != nil {
-		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to read context package: %w", err)
-	}
-
 	var wo models.WorkOrder
 	if err := yaml.Unmarshal(woContent, &wo); err != nil {
 		slog.Warn("Could not parse work order YAML for pre-checks", "error", err)
@@ -118,12 +109,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 	for _, r := range preChecks {
 		preCheckedSet[r.criterion] = true
 	}
-	var remainingCriteria []string
-	for _, c := range wo.AcceptanceCriteria {
-		if !preCheckedSet[c] {
-			remainingCriteria = append(remainingCriteria, c)
-		}
-	}
 
 	allPreFailed := len(preChecks) > 0
 	for _, r := range preChecks {
@@ -133,7 +118,8 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		}
 	}
 
-	var report models.VerificationReport
+	var report *models.VerificationReport
+	var records []scope.SubCallRecord
 
 	if allPreFailed {
 		slog.Warn("All pre-checked criteria failed; skipping LLM evaluation", "task", task.ID)
@@ -145,7 +131,7 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 				Notes:     r.notes,
 			}
 		}
-		report = models.VerificationReport{
+		report = &models.VerificationReport{
 			Status:  "FAIL",
 			Summary: "All pre-checked criteria failed (go build/test/vet). Skipping LLM evaluation.",
 			Completeness: models.Completeness{
@@ -154,66 +140,53 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 			},
 		}
 	} else {
-		promptContext := buildVerifyPrompt(woContent, cpContent, diff, preChecks, remainingCriteria)
-
-		maxAttempts := max(int(task.MaxAttempts), 1)
-
-		var lastErr error
-		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			if attempt > 1 {
-				slog.Warn("Retrying verify LLM call", "task", task.ID, "attempt", attempt)
-				w.db.LogEvent(task.WorkflowID, task.ID, "verify_retry", map[string]any{
-					"attempt": attempt,
-					"error":   lastErr.Error(),
-				})
+		// Convert pre-checks to orchestrator type.
+		verifyPreChecks := make([]verify.PreCheckResult, len(preChecks))
+		for i, r := range preChecks {
+			verifyPreChecks[i] = verify.PreCheckResult{
+				Criterion: r.criterion,
+				Met:       r.met,
+				Notes:     r.notes,
 			}
-
-			result, err := w.llm.Complete(ctx, w.prompts.Verify, promptContext)
-			if err != nil {
-				lastErr = fmt.Errorf("llm verification failed (attempt %d): %w", attempt, err)
-				continue
-			}
-
-			slog.Debug("Raw LLM response", "attempt", attempt, "response", result.Content)
-
-			cleanedJSON := llm.CleanLLMResponse(result.Content)
-
-			slog.Debug("Cleaned JSON for parsing", "json", cleanedJSON)
-
-			if err := json.Unmarshal([]byte(cleanedJSON), &report); err != nil {
-				slog.Error("JSON parse failed", "task", task.ID, "cleaned_body", cleanedJSON)
-				lastErr = fmt.Errorf("invalid json from llm (attempt %d): %w", attempt, err)
-				continue
-			}
-
-			lastVerifyResult = result
-			lastErr = nil
-			break
 		}
 
-		if lastErr != nil {
+		orch := verify.NewVerifyOrchestrator(
+			w.models, w.cfg, w.guardrails,
+			verify.VerifyPrompts{
+				Analyze:    w.prompts.VerifyAnalyze,
+				Synthesize: w.prompts.VerifySynthesize,
+			},
+		)
+
+		var orchErr error
+		report, records, orchErr = orch.Execute(ctx, &wo, diff, verifyPreChecks)
+		if orchErr != nil {
 			return pipelineerrors.Retryablef("verify", task.WorkflowID, task.ID,
-				"llm failed after %d attempts: %w", maxAttempts, lastErr)
+				"verify orchestrator failed: %w", orchErr)
 		}
 
-		mergePreChecks(&report, preChecks, preCheckedSet)
+		mergePreChecks(report, preChecks, preCheckedSet)
 	}
+
+	agg := aggregateTokens(records, "synthesize")
 
 	if err := w.db.UpdatePipelineRunVerify(ctx, database.UpdatePipelineRunVerifyParams{
 		WorkflowID:        task.WorkflowID,
 		VerifyStartedAt:   sql.NullString{String: verifyStartedAt.UTC().Format(time.RFC3339), Valid: true},
 		VerifyCompletedAt: sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
-		VerifyTokensIn:    sql.NullInt64{Int64: int64(lastVerifyResult.TokensIn), Valid: true},
-		VerifyTokensOut:   sql.NullInt64{Int64: int64(lastVerifyResult.TokensOut), Valid: true},
-		VerifyModel:       sql.NullString{String: w.cfg.LocalModel.ModelName, Valid: true},
+		VerifyTokensIn:    sql.NullInt64{Int64: int64(agg.tokensIn), Valid: true},
+		VerifyTokensOut:   sql.NullInt64{Int64: int64(agg.tokensOut), Valid: true},
+		VerifyModel:       sql.NullString{String: agg.model, Valid: agg.model != ""},
 		VerifyResult:      sql.NullString{String: report.Status, Valid: true},
 		BuildScopeDrift:   boolToInt(report.ScopeDrift.Detected),
 	}); err != nil {
 		slog.Warn("Failed to update pipeline run verify metrics", "error", err)
 	}
 
+	w.persistSubCalls(ctx, task.WorkflowID, records)
+
 	dataDir := w.cfg.Project.DataDir
-	reportPath, err := writeVerifyReport(&report, dataDir, task.WorkflowID)
+	reportPath, err := writeVerifyReport(report, dataDir, task.WorkflowID)
 	if err != nil {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "%s", err)
 	}
@@ -250,43 +223,6 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		ExitCode:  0,
 		StdoutLog: fmt.Sprintf("Verification Status: %s", report.Status),
 	})
-}
-
-// buildVerifyPrompt assembles the full prompt context for the verification LLM call.
-func buildVerifyPrompt(woContent, cpContent []byte, diff string, preChecks []criterionPreCheck, remainingCriteria []string) string {
-	var preCheckedSection strings.Builder
-	if len(preChecks) > 0 {
-		preCheckedSection.WriteString("=== PRE-CHECKED CRITERIA (DO NOT RE-EVALUATE) ===\n")
-		for _, r := range preChecks {
-			tag := "[PASS]"
-			if !r.met {
-				tag = "[FAIL]"
-			}
-			fmt.Fprintf(&preCheckedSection, "%s %s (%s)\n", tag, r.criterion, r.notes)
-		}
-		preCheckedSection.WriteString("\n")
-	}
-
-	var remainingSection strings.Builder
-	if len(remainingCriteria) > 0 {
-		remainingSection.WriteString("=== REMAINING CRITERIA FOR YOUR EVALUATION ===\n")
-		for _, c := range remainingCriteria {
-			fmt.Fprintf(&remainingSection, "- %s\n", c)
-		}
-		remainingSection.WriteString("\n")
-	}
-
-	return fmt.Sprintf(`=== WORK ORDER ===
-%s
-
-=== CONTEXT PACKAGE ===
-%s
-
-=== IMPLEMENTATION DIFF ===
-%s
-
-%s%s`, string(woContent), string(cpContent), diff,
-		preCheckedSection.String(), remainingSection.String())
 }
 
 // mergePreChecks prepends pre-checked results into the report, deduplicates

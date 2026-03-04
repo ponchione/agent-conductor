@@ -220,6 +220,9 @@ FROM sub_calls
 WHERE pipeline_run_id = ?
 ORDER BY created_at;
 
+-- name: GetPipelineRunIDByWorkflowID :one
+SELECT id FROM pipeline_runs WHERE workflow_id = ? LIMIT 1;
+
 -- name: GetSubCallAggregatesByProvider :many
 SELECT
     provider,
@@ -230,3 +233,21 @@ SELECT
 FROM sub_calls
 WHERE pipeline_run_id = ?
 GROUP BY provider;
+
+-- name: GetSubCallGlobalStatsByProvider :many
+SELECT
+    provider,
+    SUM(tokens_in) AS total_tokens_in,
+    SUM(tokens_out) AS total_tokens_out,
+    SUM(estimated_cost_usd) AS total_estimated_cost_usd,
+    COUNT(*) AS call_count
+FROM sub_calls
+GROUP BY provider;
+
+-- name: GetSubCallPhaseAverages :many
+SELECT
+    phase,
+    COUNT(*) AS total_calls,
+    COUNT(DISTINCT pipeline_run_id) AS run_count
+FROM sub_calls
+GROUP BY phase;

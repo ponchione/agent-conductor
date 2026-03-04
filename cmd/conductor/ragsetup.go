@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/ponchione/agent-conductor/internal/config"
@@ -33,8 +34,23 @@ func buildRAGStack(ctx context.Context, cfg *config.ProjectConfig) (*rag.Store, 
 		return nil, nil, nil, fmt.Errorf("load prompts: %w", err)
 	}
 
-	llmClient := llm.New(cfg.LocalModel)
-	describer := rag.NewDescriber(&llm.RAGCompleterAdapter{Client: llmClient}, prompts.Describe)
+	var describeClient llm.Client
+	if provName, ok := cfg.Models.Roles["describe"]; ok {
+		if pc, ok := cfg.Models.Providers[provName]; ok {
+			describeClient = llm.NewProviderClient(llm.Provider{
+				Endpoint:         pc.Endpoint,
+				Model:            pc.Model,
+				APIKey:           os.ExpandEnv(pc.APIKey),
+				TimeoutSeconds:   pc.TimeoutSeconds,
+				MaxContextTokens: pc.MaxContextTokens,
+				Temperature:      pc.Temperature,
+			})
+		}
+	}
+	if describeClient == nil {
+		describeClient = llm.New(cfg.LocalModel)
+	}
+	describer := rag.NewDescriber(&llm.RAGCompleterAdapter{Client: describeClient}, prompts.Describe)
 
 	return store, embedder, describer, nil
 }

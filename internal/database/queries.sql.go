@@ -206,6 +206,17 @@ func (q *Queries) GetPendingTask(ctx context.Context) (string, error) {
 	return id, err
 }
 
+const getPipelineRunIDByWorkflowID = `-- name: GetPipelineRunIDByWorkflowID :one
+SELECT id FROM pipeline_runs WHERE workflow_id = ? LIMIT 1
+`
+
+func (q *Queries) GetPipelineRunIDByWorkflowID(ctx context.Context, workflowID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getPipelineRunIDByWorkflowID, workflowID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getPipelineStats = `-- name: GetPipelineStats :one
 SELECT
     COUNT(*)                                                                AS total_runs,
@@ -457,6 +468,92 @@ func (q *Queries) GetSubCallAggregatesByProvider(ctx context.Context, pipelineRu
 			&i.TotalEstimatedCostUsd,
 			&i.CallCount,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getSubCallGlobalStatsByProvider = `-- name: GetSubCallGlobalStatsByProvider :many
+SELECT
+    provider,
+    SUM(tokens_in) AS total_tokens_in,
+    SUM(tokens_out) AS total_tokens_out,
+    SUM(estimated_cost_usd) AS total_estimated_cost_usd,
+    COUNT(*) AS call_count
+FROM sub_calls
+GROUP BY provider
+`
+
+type GetSubCallGlobalStatsByProviderRow struct {
+	Provider              string          `json:"provider"`
+	TotalTokensIn         sql.NullFloat64 `json:"total_tokens_in"`
+	TotalTokensOut        sql.NullFloat64 `json:"total_tokens_out"`
+	TotalEstimatedCostUsd sql.NullFloat64 `json:"total_estimated_cost_usd"`
+	CallCount             int64           `json:"call_count"`
+}
+
+func (q *Queries) GetSubCallGlobalStatsByProvider(ctx context.Context) ([]GetSubCallGlobalStatsByProviderRow, error) {
+	rows, err := q.db.QueryContext(ctx, getSubCallGlobalStatsByProvider)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetSubCallGlobalStatsByProviderRow
+	for rows.Next() {
+		var i GetSubCallGlobalStatsByProviderRow
+		if err := rows.Scan(
+			&i.Provider,
+			&i.TotalTokensIn,
+			&i.TotalTokensOut,
+			&i.TotalEstimatedCostUsd,
+			&i.CallCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getSubCallPhaseAverages = `-- name: GetSubCallPhaseAverages :many
+SELECT
+    phase,
+    COUNT(*) AS total_calls,
+    COUNT(DISTINCT pipeline_run_id) AS run_count
+FROM sub_calls
+GROUP BY phase
+`
+
+type GetSubCallPhaseAveragesRow struct {
+	Phase      string `json:"phase"`
+	TotalCalls int64  `json:"total_calls"`
+	RunCount   int64  `json:"run_count"`
+}
+
+func (q *Queries) GetSubCallPhaseAverages(ctx context.Context) ([]GetSubCallPhaseAveragesRow, error) {
+	rows, err := q.db.QueryContext(ctx, getSubCallPhaseAverages)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetSubCallPhaseAveragesRow
+	for rows.Next() {
+		var i GetSubCallPhaseAveragesRow
+		if err := rows.Scan(&i.Phase, &i.TotalCalls, &i.RunCount); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
