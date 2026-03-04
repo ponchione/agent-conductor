@@ -49,9 +49,16 @@ type Conventions struct {
 }
 
 type Prompts struct {
-	Scope  string `yaml:"scope"`
-	Verify string `yaml:"verify"`
-	Build  string `yaml:"build"`
+	Scope            string `yaml:"scope"`
+	Verify           string `yaml:"verify"`
+	Build            string `yaml:"build"`
+	ScopeDecompose   string `yaml:"scope_decompose"`
+	ScopeAnalyze     string `yaml:"scope_analyze"`
+	ScopeCrosscut    string `yaml:"scope_crosscut"`
+	ScopeSynthesize  string `yaml:"scope_synthesize"`
+	VerifyAnalyze    string `yaml:"verify_analyze"`
+	VerifySynthesize string `yaml:"verify_synthesize"`
+	Describe         string `yaml:"describe"`
 }
 
 type EmbedModel struct {

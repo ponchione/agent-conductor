@@ -125,3 +125,23 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_workflow ON pipeline_runs(workflow_id);
+
+CREATE TABLE IF NOT EXISTS sub_calls (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    pipeline_run_id     TEXT NOT NULL REFERENCES pipeline_runs(id),
+    phase               TEXT NOT NULL,
+    step                TEXT NOT NULL,
+    target_path         TEXT,
+    provider            TEXT NOT NULL,
+    model               TEXT NOT NULL,
+    tokens_in           INTEGER NOT NULL DEFAULT 0,
+    tokens_out          INTEGER NOT NULL DEFAULT 0,
+    latency_ms          INTEGER NOT NULL DEFAULT 0,
+    estimated_cost_usd  REAL NOT NULL DEFAULT 0.0,
+    success             INTEGER NOT NULL DEFAULT 1,
+    error_message       TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_sub_calls_pipeline_run ON sub_calls(pipeline_run_id);
+CREATE INDEX IF NOT EXISTS idx_sub_calls_phase_step ON sub_calls(phase, step);

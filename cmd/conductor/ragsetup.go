@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/rag"
+	"github.com/ponchione/agent-conductor/internal/templates"
 )
 
 // buildRAGStack initialises the RAG store, embedder, and describer from the
@@ -26,8 +28,13 @@ func buildRAGStack(ctx context.Context, cfg *config.ProjectConfig) (*rag.Store, 
 		TimeoutSeconds: cfg.EmbedModel.TimeoutSeconds,
 	})
 
+	prompts, err := templates.LoadPrompts(cfg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("load prompts: %w", err)
+	}
+
 	llmClient := llm.New(cfg.LocalModel)
-	describer := rag.NewDescriber(&llm.RAGCompleterAdapter{Client: llmClient})
+	describer := rag.NewDescriber(&llm.RAGCompleterAdapter{Client: llmClient}, prompts.Describe)
 
 	return store, embedder, describer, nil
 }

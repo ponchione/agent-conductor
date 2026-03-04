@@ -204,3 +204,29 @@ SELECT
     SUM(CASE WHEN scope_estimated_complexity = 'medium' THEN 1 ELSE 0 END) AS complexity_medium,
     SUM(CASE WHEN scope_estimated_complexity = 'high' THEN 1 ELSE 0 END) AS complexity_high
 FROM pipeline_runs;
+
+-- name: InsertSubCall :exec
+INSERT INTO sub_calls (
+    pipeline_run_id, phase, step, target_path,
+    provider, model, tokens_in, tokens_out,
+    latency_ms, estimated_cost_usd, success, error_message
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: GetSubCallsByPipelineRun :many
+SELECT id, pipeline_run_id, phase, step, target_path,
+       provider, model, tokens_in, tokens_out,
+       latency_ms, estimated_cost_usd, success, error_message, created_at
+FROM sub_calls
+WHERE pipeline_run_id = ?
+ORDER BY created_at;
+
+-- name: GetSubCallAggregatesByProvider :many
+SELECT
+    provider,
+    SUM(tokens_in) AS total_tokens_in,
+    SUM(tokens_out) AS total_tokens_out,
+    SUM(estimated_cost_usd) AS total_estimated_cost_usd,
+    COUNT(*) AS call_count
+FROM sub_calls
+WHERE pipeline_run_id = ?
+GROUP BY provider;

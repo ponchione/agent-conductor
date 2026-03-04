@@ -421,6 +421,102 @@ func (q *Queries) GetStatsByWorkOrderType(ctx context.Context) ([]GetStatsByWork
 	return items, nil
 }
 
+const getSubCallAggregatesByProvider = `-- name: GetSubCallAggregatesByProvider :many
+SELECT
+    provider,
+    SUM(tokens_in) AS total_tokens_in,
+    SUM(tokens_out) AS total_tokens_out,
+    SUM(estimated_cost_usd) AS total_estimated_cost_usd,
+    COUNT(*) AS call_count
+FROM sub_calls
+WHERE pipeline_run_id = ?
+GROUP BY provider
+`
+
+type GetSubCallAggregatesByProviderRow struct {
+	Provider              string          `json:"provider"`
+	TotalTokensIn         sql.NullFloat64 `json:"total_tokens_in"`
+	TotalTokensOut        sql.NullFloat64 `json:"total_tokens_out"`
+	TotalEstimatedCostUsd sql.NullFloat64 `json:"total_estimated_cost_usd"`
+	CallCount             int64           `json:"call_count"`
+}
+
+func (q *Queries) GetSubCallAggregatesByProvider(ctx context.Context, pipelineRunID string) ([]GetSubCallAggregatesByProviderRow, error) {
+	rows, err := q.db.QueryContext(ctx, getSubCallAggregatesByProvider, pipelineRunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetSubCallAggregatesByProviderRow
+	for rows.Next() {
+		var i GetSubCallAggregatesByProviderRow
+		if err := rows.Scan(
+			&i.Provider,
+			&i.TotalTokensIn,
+			&i.TotalTokensOut,
+			&i.TotalEstimatedCostUsd,
+			&i.CallCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getSubCallsByPipelineRun = `-- name: GetSubCallsByPipelineRun :many
+SELECT id, pipeline_run_id, phase, step, target_path,
+       provider, model, tokens_in, tokens_out,
+       latency_ms, estimated_cost_usd, success, error_message, created_at
+FROM sub_calls
+WHERE pipeline_run_id = ?
+ORDER BY created_at
+`
+
+func (q *Queries) GetSubCallsByPipelineRun(ctx context.Context, pipelineRunID string) ([]SubCall, error) {
+	rows, err := q.db.QueryContext(ctx, getSubCallsByPipelineRun, pipelineRunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SubCall
+	for rows.Next() {
+		var i SubCall
+		if err := rows.Scan(
+			&i.ID,
+			&i.PipelineRunID,
+			&i.Phase,
+			&i.Step,
+			&i.TargetPath,
+			&i.Provider,
+			&i.Model,
+			&i.TokensIn,
+			&i.TokensOut,
+			&i.LatencyMs,
+			&i.EstimatedCostUsd,
+			&i.Success,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getTask = `-- name: GetTask :one
 SELECT id, workflow_id, sequence_num, task_type, agent_type, target_repo, phase, input_artifact, output_artifact, state, claimed_by, claimed_at, attempts, max_attempts, exit_code, stdout_log, stderr_log, files_changed, created_at, started_at, completed_at, error_message FROM tasks WHERE id = ? LIMIT 1
 `
@@ -522,6 +618,47 @@ func (q *Queries) GetWorkflow(ctx context.Context, id string) (Workflow, error) 
 		&i.ErrorMessage,
 	)
 	return i, err
+}
+
+const insertSubCall = `-- name: InsertSubCall :exec
+INSERT INTO sub_calls (
+    pipeline_run_id, phase, step, target_path,
+    provider, model, tokens_in, tokens_out,
+    latency_ms, estimated_cost_usd, success, error_message
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertSubCallParams struct {
+	PipelineRunID    string         `json:"pipeline_run_id"`
+	Phase            string         `json:"phase"`
+	Step             string         `json:"step"`
+	TargetPath       sql.NullString `json:"target_path"`
+	Provider         string         `json:"provider"`
+	Model            string         `json:"model"`
+	TokensIn         int64          `json:"tokens_in"`
+	TokensOut        int64          `json:"tokens_out"`
+	LatencyMs        int64          `json:"latency_ms"`
+	EstimatedCostUsd float64        `json:"estimated_cost_usd"`
+	Success          int64          `json:"success"`
+	ErrorMessage     sql.NullString `json:"error_message"`
+}
+
+func (q *Queries) InsertSubCall(ctx context.Context, arg InsertSubCallParams) error {
+	_, err := q.db.ExecContext(ctx, insertSubCall,
+		arg.PipelineRunID,
+		arg.Phase,
+		arg.Step,
+		arg.TargetPath,
+		arg.Provider,
+		arg.Model,
+		arg.TokensIn,
+		arg.TokensOut,
+		arg.LatencyMs,
+		arg.EstimatedCostUsd,
+		arg.Success,
+		arg.ErrorMessage,
+	)
+	return err
 }
 
 const listEvents = `-- name: ListEvents :many
