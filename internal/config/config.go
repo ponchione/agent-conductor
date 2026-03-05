@@ -20,6 +20,8 @@ type ProjectConfig struct {
 	Safety      Safety      `yaml:"safety"`
 	Git         Git         `yaml:"git"`
 	Executor    Executor    `yaml:"executor"`
+	Models      Models      `yaml:"models"`
+	Guardrails  Guardrails  `yaml:"guardrails"`
 }
 
 type Project struct {
@@ -47,9 +49,16 @@ type Conventions struct {
 }
 
 type Prompts struct {
-	Scope  string `yaml:"scope"`
-	Verify string `yaml:"verify"`
-	Build  string `yaml:"build"`
+	Scope            string `yaml:"scope"`
+	Verify           string `yaml:"verify"`
+	Build            string `yaml:"build"`
+	ScopeDecompose   string `yaml:"scope_decompose"`
+	ScopeAnalyze     string `yaml:"scope_analyze"`
+	ScopeCrosscut    string `yaml:"scope_crosscut"`
+	ScopeSynthesize  string `yaml:"scope_synthesize"`
+	VerifyAnalyze    string `yaml:"verify_analyze"`
+	VerifySynthesize string `yaml:"verify_synthesize"`
+	Describe         string `yaml:"describe"`
 }
 
 type EmbedModel struct {
@@ -78,8 +87,10 @@ type Executor struct {
 	OpenCode       OpenCodeConfig   `yaml:"opencode"`
 }
 
-// ClaudeCodeConfig is reserved for future tool-specific config.
-type ClaudeCodeConfig struct{}
+// ClaudeCodeConfig holds tool-specific config for the Claude Code executor.
+type ClaudeCodeConfig struct {
+	Model string `yaml:"model"`
+}
 
 type OpenCodeConfig struct {
 	Agent string `yaml:"agent"`
@@ -89,6 +100,36 @@ type Git struct {
 	BranchPrefix      string `yaml:"branch_prefix"`
 	CommitAuthorName  string `yaml:"commit_author_name"`
 	CommitAuthorEmail string `yaml:"commit_author_email"`
+}
+
+type Models struct {
+	Providers map[string]ProviderConfig `yaml:"providers"`
+	Roles     map[string]string         `yaml:"roles"`
+}
+
+type ProviderConfig struct {
+	Type             string   `yaml:"type"`
+	Endpoint         string   `yaml:"endpoint"`
+	Model            string   `yaml:"model"`
+	APIKey           string   `yaml:"api_key"`
+	TimeoutSeconds   int      `yaml:"timeout_seconds"`
+	MaxContextTokens int      `yaml:"max_context_tokens"`
+	Temperature      float64  `yaml:"temperature"`
+	Pricing          *Pricing `yaml:"pricing,omitempty"`
+}
+
+type Pricing struct {
+	InputPerMillion       float64 `yaml:"input_per_million"`
+	OutputPerMillion      float64 `yaml:"output_per_million"`
+	CachedInputPerMillion float64 `yaml:"cached_input_per_million"`
+}
+
+type Guardrails struct {
+	MaxInvestigationTargets int     `yaml:"max_investigation_targets"`
+	MaxSubCallsTotal        int     `yaml:"max_sub_calls_total"`
+	PhaseTimeoutSeconds     int     `yaml:"phase_timeout_seconds"`
+	MaxCostPerPhaseUSD      float64 `yaml:"max_cost_per_phase_usd"`
+	WarnCostPerPhaseUSD     float64 `yaml:"warn_cost_per_phase_usd"`
 }
 
 // Load reads and merges the global and project config files.
@@ -147,6 +188,24 @@ func Load(projectPath string) (*ProjectConfig, error) {
 		cfg.Index.MaxTreeLines = 200
 	}
 
+	if cfg.Guardrails.MaxInvestigationTargets == 0 {
+		cfg.Guardrails.MaxInvestigationTargets = 6
+	}
+	if cfg.Guardrails.MaxSubCallsTotal == 0 {
+		cfg.Guardrails.MaxSubCallsTotal = 12
+	}
+	if cfg.Guardrails.PhaseTimeoutSeconds == 0 {
+		cfg.Guardrails.PhaseTimeoutSeconds = 300
+	}
+	if cfg.Guardrails.MaxCostPerPhaseUSD == 0 {
+		cfg.Guardrails.MaxCostPerPhaseUSD = 0.50
+	}
+	if cfg.Guardrails.WarnCostPerPhaseUSD == 0 {
+		cfg.Guardrails.WarnCostPerPhaseUSD = 0.10
+	}
+
+	expandProviderEnvVars(&cfg.Models)
+
 	cfg.Project.DataDir = filepath.Join(home, "source", ".conductor", "projects", cfg.Project.Name)
 
 	return cfg, nil
@@ -155,6 +214,21 @@ func Load(projectPath string) (*ProjectConfig, error) {
 // GetTimeout returns the configured timeout as a duration.
 func (lm LocalModel) GetTimeout() time.Duration {
 	return time.Duration(lm.TimeoutSeconds) * time.Second
+}
+
+// expandProviderEnvVars expands environment variables in provider string fields.
+func expandProviderEnvVars(m *Models) {
+	for name, p := range m.Providers {
+		p.Endpoint = expandEnv(p.Endpoint)
+		p.Model = expandEnv(p.Model)
+		p.APIKey = expandEnv(p.APIKey)
+		m.Providers[name] = p
+	}
+}
+
+// expandEnv expands ${VAR} and $VAR references using the process environment.
+func expandEnv(s string) string {
+	return os.Expand(s, os.Getenv)
 }
 
 // Validate checks that required fields are present.

@@ -1,8 +1,10 @@
 package context
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -287,6 +289,167 @@ func (a *Assembler) buildFileTree() (string, int) {
 	}
 
 	return sb.String(), totalFiles
+}
+
+// Target describes an investigation target for context gathering.
+// Defined here to avoid importing the scope package.
+type Target struct {
+	Path      string
+	Rationale string
+}
+
+// PreScopeBundle holds pre-computed context gathered before any LLM calls.
+// Used as input to the decompose step.
+type PreScopeBundle struct {
+	FileTree      string `json:"file_tree"`
+	Conventions   string `json:"conventions"`
+	RecallSummary string `json:"recall_summary"`
+}
+
+// TargetBundle holds context gathered for a specific investigation target.
+// Used as input to the analyze step.
+type TargetBundle struct {
+	Files      []FileContent `json:"files"`
+	RAGChunks  []RAGResult   `json:"rag_chunks"`
+	Signatures []string      `json:"signatures"`
+}
+
+// FileContent pairs a file path with its content.
+type FileContent struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// GatherPreScope collects project-level context needed before any LLM calls.
+// It reuses the file tree and convention logic from AssembleScopePrompt.
+func (a *Assembler) GatherPreScope(ctx context.Context, wo *models.WorkOrder) (*PreScopeBundle, error) {
+	treeStr, _ := a.buildFileTree()
+	conventions := buildConventions(a.cfg.Conventions)
+	return &PreScopeBundle{
+		FileTree:    treeStr,
+		Conventions: conventions,
+	}, nil
+}
+
+// GatherForTarget collects context for a specific investigation target.
+// It reads files from the target's directory, extracts function signatures,
+// and queries RAG filtered to that path prefix.
+func (a *Assembler) GatherForTarget(ctx context.Context, wo *models.WorkOrder, target Target) (*TargetBundle, error) {
+	files := a.readTargetFiles(target.Path)
+	signatures := extractSignatures(files)
+	chunks := a.searchForTarget(ctx, target)
+
+	return &TargetBundle{
+		Files:      files,
+		RAGChunks:  chunks,
+		Signatures: signatures,
+	}, nil
+}
+
+// maxTargetBytes caps total file content read per target to avoid unbounded memory.
+const maxTargetBytes = 512 * 1024 // 512 KiB
+
+// readTargetFiles walks the target directory and returns file paths with content,
+// filtered by the project's include/exclude globs.
+func (a *Assembler) readTargetFiles(targetPath string) []FileContent {
+	root := filepath.Join(a.cfg.Project.Path, targetPath)
+	if _, err := os.Stat(root); err != nil {
+		slog.Warn("target path not accessible", "path", root, "error", err)
+		return nil
+	}
+
+	var files []FileContent
+	totalBytes := 0
+
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(a.cfg.Project.Path, path)
+		if err != nil {
+			return nil
+		}
+		relPath = filepath.ToSlash(relPath)
+
+		if len(a.cfg.Index.Include) > 0 && !util.MatchesAnyGlob(a.cfg.Index.Include, relPath) {
+			return nil
+		}
+		if util.MatchesAnyGlob(a.cfg.Index.Exclude, relPath) {
+			return nil
+		}
+
+		data, err := readFileCapped(path, maxTargetBytes-totalBytes)
+		if err != nil {
+			return nil
+		}
+		totalBytes += len(data)
+		files = append(files, FileContent{Path: relPath, Content: string(data)})
+
+		if totalBytes >= maxTargetBytes {
+			return io.EOF // stop walking
+		}
+		return nil
+	})
+
+	return files
+}
+
+// readFileCapped reads up to maxBytes from path.
+func readFileCapped(path string, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, io.EOF
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, int64(maxBytes)))
+}
+
+// extractSignatures scans file content for Go function, method, and type
+// declaration lines. Simple string extraction — no parser dependency.
+func extractSignatures(files []FileContent) []string {
+	var sigs []string
+	for _, fc := range files {
+		scanner := bufio.NewScanner(strings.NewReader(fc.Content))
+		for scanner.Scan() {
+			line := scanner.Text()
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "func ") || strings.HasPrefix(trimmed, "type ") {
+				sigs = append(sigs, trimmed)
+			}
+		}
+	}
+	return sigs
+}
+
+// searchForTarget queries RAG and post-filters results to the target path prefix.
+func (a *Assembler) searchForTarget(ctx context.Context, target Target) []RAGResult {
+	if a.searcher == nil {
+		return nil
+	}
+
+	topK := 20
+	if a.cfg.Index.MaxRAGResults > 0 {
+		topK = a.cfg.Index.MaxRAGResults
+	}
+
+	results, err := a.searcher.SearchStructured(ctx, target.Rationale, topK)
+	if err != nil {
+		slog.Warn("RAG search for target failed", "target", target.Path, "error", err)
+		return nil
+	}
+
+	prefix := target.Path
+	var filtered []RAGResult
+	for _, r := range results {
+		if strings.HasPrefix(r.File, prefix) {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered
 }
 
 // buildConventions formats the project conventions into labeled lines.

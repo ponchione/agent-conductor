@@ -1,6 +1,7 @@
 package templates
 
 import (
+	_ "embed"
 	"fmt"
 	"log/slog"
 	"os"
@@ -174,11 +175,45 @@ CONSTRAINT STANDARDS:
 Respond ONLY with the JSON object. No markdown fences, no commentary.
 `
 
-// LoadedPrompts holds the resolved prompt strings for all three pipeline phases.
+//go:embed defaults/build.md
+var defaultBuild string
+
+//go:embed defaults/describe.md
+var defaultDescribe string
+
+//go:embed defaults/scope_decompose.md
+var defaultScopeDecompose string
+
+//go:embed defaults/scope_analyze.md
+var defaultScopeAnalyze string
+
+//go:embed defaults/scope_crosscut.md
+var defaultScopeCrosscut string
+
+//go:embed defaults/scope_synthesize.md
+var defaultScopeSynthesize string
+
+//go:embed defaults/verify_analyze.md
+var defaultVerifyAnalyze string
+
+//go:embed defaults/verify_synthesize.md
+var defaultVerifySynthesize string
+
+// LoadedPrompts holds the resolved prompt strings for all pipeline phases.
 type LoadedPrompts struct {
+	// Existing (backward-compatible)
 	Scope  string
 	Verify string
 	Build  string
+
+	// Per-step fields for recursive pipeline
+	ScopeDecompose   string
+	ScopeAnalyze     string
+	ScopeCrosscut    string
+	ScopeSynthesize  string
+	VerifyAnalyze    string
+	VerifySynthesize string
+	Describe         string
 }
 
 // LoadPrompts resolves each prompt from disk (if configured) or falls back to the compiled defaults.
@@ -191,11 +226,52 @@ func LoadPrompts(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
 	if err != nil {
 		return nil, fmt.Errorf("verify prompt: %w", err)
 	}
-	build, err := loadPrompt(cfg.Project.Path, "build", cfg.Prompts.Build, DefaultBuildPrompt)
+	build, err := loadPrompt(cfg.Project.Path, "build", cfg.Prompts.Build, defaultBuild)
 	if err != nil {
 		return nil, fmt.Errorf("build prompt: %w", err)
 	}
-	return &LoadedPrompts{Scope: scope, Verify: verify, Build: build}, nil
+
+	scopeDecompose, err := loadPrompt(cfg.Project.Path, "scope_decompose", cfg.Prompts.ScopeDecompose, defaultScopeDecompose)
+	if err != nil {
+		return nil, fmt.Errorf("scope_decompose prompt: %w", err)
+	}
+	scopeAnalyze, err := loadPrompt(cfg.Project.Path, "scope_analyze", cfg.Prompts.ScopeAnalyze, defaultScopeAnalyze)
+	if err != nil {
+		return nil, fmt.Errorf("scope_analyze prompt: %w", err)
+	}
+	scopeCrosscut, err := loadPrompt(cfg.Project.Path, "scope_crosscut", cfg.Prompts.ScopeCrosscut, defaultScopeCrosscut)
+	if err != nil {
+		return nil, fmt.Errorf("scope_crosscut prompt: %w", err)
+	}
+	scopeSynthesize, err := loadPrompt(cfg.Project.Path, "scope_synthesize", cfg.Prompts.ScopeSynthesize, defaultScopeSynthesize)
+	if err != nil {
+		return nil, fmt.Errorf("scope_synthesize prompt: %w", err)
+	}
+	verifyAnalyze, err := loadPrompt(cfg.Project.Path, "verify_analyze", cfg.Prompts.VerifyAnalyze, defaultVerifyAnalyze)
+	if err != nil {
+		return nil, fmt.Errorf("verify_analyze prompt: %w", err)
+	}
+	verifySynthesize, err := loadPrompt(cfg.Project.Path, "verify_synthesize", cfg.Prompts.VerifySynthesize, defaultVerifySynthesize)
+	if err != nil {
+		return nil, fmt.Errorf("verify_synthesize prompt: %w", err)
+	}
+	describe, err := loadPrompt(cfg.Project.Path, "describe", cfg.Prompts.Describe, defaultDescribe)
+	if err != nil {
+		return nil, fmt.Errorf("describe prompt: %w", err)
+	}
+
+	return &LoadedPrompts{
+		Scope:            scope,
+		Verify:           verify,
+		Build:            build,
+		ScopeDecompose:   scopeDecompose,
+		ScopeAnalyze:     scopeAnalyze,
+		ScopeCrosscut:    scopeCrosscut,
+		ScopeSynthesize:  scopeSynthesize,
+		VerifyAnalyze:    verifyAnalyze,
+		VerifySynthesize: verifySynthesize,
+		Describe:         describe,
+	}, nil
 }
 
 func loadPrompt(projectPath, phase, filePath, fallback string) (string, error) {

@@ -2,21 +2,14 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/rag"
+	"github.com/ponchione/agent-conductor/internal/templates"
 )
-
-// llmAdapter bridges llm.Client (which returns (string, Usage, error)) to the
-// rag.LLMCompleter interface (which expects (string, error)).
-type llmAdapter struct{ c *llm.Client }
-
-func (a *llmAdapter) Complete(ctx context.Context, sys, user string) (string, error) {
-	text, _, err := a.c.Complete(ctx, sys, user)
-	return text, err
-}
 
 // buildRAGStack initialises the RAG store, embedder, and describer from the
 // project config. The caller owns store.Close().
@@ -35,8 +28,25 @@ func buildRAGStack(ctx context.Context, cfg *config.ProjectConfig) (*rag.Store, 
 		TimeoutSeconds: cfg.EmbedModel.TimeoutSeconds,
 	})
 
-	llmClient := llm.New(cfg.LocalModel)
-	describer := rag.NewDescriber(&llmAdapter{llmClient})
+	prompts, err := templates.LoadPrompts(cfg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("load prompts: %w", err)
+	}
+
+	var describeClient llm.Client
+	if provName, ok := cfg.Models.Roles["describe"]; ok {
+		if pc, ok := cfg.Models.Providers[provName]; ok {
+			c, err := llm.NewClientFromProvider(pc)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("describe provider %q: %w", provName, err)
+			}
+			describeClient = c
+		}
+	}
+	if describeClient == nil {
+		describeClient = llm.New(cfg.LocalModel)
+	}
+	describer := rag.NewDescriber(&llm.RAGCompleterAdapter{Client: describeClient}, prompts.Describe)
 
 	return store, embedder, describer, nil
 }

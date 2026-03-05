@@ -4,19 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/ponchione/agent-conductor/internal/database"
 	pipelineerrors "github.com/ponchione/agent-conductor/internal/errors"
-	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
+	"github.com/ponchione/agent-conductor/internal/scope"
 	"gopkg.in/yaml.v3"
 )
 
@@ -80,18 +78,6 @@ func validateScopeOutput(repoRoot string, pkg *models.ContextPackage) *scopeVali
 	return result
 }
 
-// buildCorrectionSection returns a prompt section listing paths the LLM
-// hallucinated so a retry can avoid them.
-func buildCorrectionSection(strippedPaths []string) string {
-	var b strings.Builder
-	b.WriteString("\n=== CORRECTION ===\nThe following paths do not exist in the repository. Do not include them:")
-	for _, p := range strippedPaths {
-		b.WriteString("\n  - ")
-		b.WriteString(p)
-	}
-	return b.String()
-}
-
 func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	slog.Info("Starting Scope Phase", "task", task.ID)
 	w.db.LogEvent(task.WorkflowID, task.ID, "scope_started", nil)
@@ -108,76 +94,45 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to parse work order: %w", err)
 	}
 
-	scopePrompt, err := w.assembler.AssembleScopePrompt(ctx, &wo)
+	// Delegate to the recursive scope orchestrator.
+	orch := scope.NewScopeOrchestrator(
+		w.models, w.assembler, w.cfg, w.guardrails,
+		scope.ScopePrompts{
+			Decompose:  w.prompts.ScopeDecompose,
+			Analyze:    w.prompts.ScopeAnalyze,
+			Crosscut:   w.prompts.ScopeCrosscut,
+			Synthesize: w.prompts.ScopeSynthesize,
+		},
+	)
+
+	pkg, records, err := orch.Execute(ctx, &wo)
 	if err != nil {
-		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "context assembly failed: %w", err)
-	}
-
-	maxAttempts := max(int(task.MaxAttempts), 1)
-
-	var pkg models.ContextPackage
-	var lastErr error
-	var lastUsage llm.Usage
-	var valResult *scopeValidationResult
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if attempt > 1 {
-			slog.Warn("Retrying scope LLM call", "task", task.ID, "attempt", attempt)
-			w.db.LogEvent(task.WorkflowID, task.ID, "scope_retry", map[string]any{
-				"attempt": attempt,
-				"error":   lastErr.Error(),
-			})
-		}
-
-		jsonStr, usage, err := w.llm.Complete(ctx, w.prompts.Scope, scopePrompt)
-		if err != nil {
-			lastErr = fmt.Errorf("llm completion failed (attempt %d): %w", attempt, err)
-			continue
-		}
-
-		cleanedJSON := llm.CleanLLMResponse(jsonStr)
-
-		if err := json.Unmarshal([]byte(cleanedJSON), &pkg); err != nil {
-			lastErr = fmt.Errorf("invalid json from llm (attempt %d): %w", attempt, err)
-			continue
-		}
-
-		// Path validation
-		valResult = validateScopeOutput(w.cfg.Project.Path, &pkg)
-
-		if valResult.thresholdExceeded {
-			lastErr = fmt.Errorf("scope validation: %d of %d paths do not exist (exceeds %.0f%% threshold)",
-				len(valResult.strippedPaths), valResult.pathsChecked, stripThreshold*100)
-			scopePrompt = scopePrompt + "\n\n" + buildCorrectionSection(valResult.strippedPaths)
-			w.db.LogEvent(task.WorkflowID, task.ID, "scope_validation_retry", map[string]any{
-				"attempt":        attempt,
-				"stripped_paths": valResult.strippedPaths,
-			})
-			continue
-		}
-
-		// Validation passed
-		w.db.LogEvent(task.WorkflowID, task.ID, "scope_validated", map[string]any{
-			"paths_checked":      valResult.pathsChecked,
-			"paths_stripped":     len(valResult.strippedPaths),
-			"paths_reclassified": len(valResult.reclassifiedPaths),
-		})
-		pkg = *valResult.pkg
-		lastUsage = usage
-		lastErr = nil
-		break
-	}
-
-	if lastErr != nil {
 		return pipelineerrors.Retryablef("scope", task.WorkflowID, task.ID,
-			"llm failed after %d attempts: %w", maxAttempts, lastErr)
+			"scope orchestrator failed: %w", err)
 	}
+
+	// Post-orchestrator path validation.
+	valResult := validateScopeOutput(w.cfg.Project.Path, pkg)
+
+	if valResult.thresholdExceeded {
+		return pipelineerrors.Retryablef("scope", task.WorkflowID, task.ID,
+			"scope validation: %d of %d paths do not exist (exceeds %.0f%% threshold)",
+			len(valResult.strippedPaths), valResult.pathsChecked, stripThreshold*100)
+	}
+
+	w.db.LogEvent(task.WorkflowID, task.ID, "scope_validated", map[string]any{
+		"paths_checked":      valResult.pathsChecked,
+		"paths_stripped":     len(valResult.strippedPaths),
+		"paths_reclassified": len(valResult.reclassifiedPaths),
+	})
+	pkg = valResult.pkg
 
 	wf, err := w.db.GetWorkflow(ctx, task.WorkflowID)
 	if err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to get workflow: %w", err)
 	}
 
-	fullPkg, err := w.assembler.Assemble(ctx, &wo, &pkg, wf.GitBranch)
+	fullPkg, err := w.assembler.Assemble(ctx, &wo, pkg, wf.GitBranch)
 	if err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "full context assembly failed: %w", err)
 	}
@@ -191,11 +146,8 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		}
 	}
 
-	var pathsStripped, pathsReclassified int
-	if valResult != nil {
-		pathsStripped = len(valResult.strippedPaths)
-		pathsReclassified = len(valResult.reclassifiedPaths)
-	}
+	pathsStripped := len(valResult.strippedPaths)
+	pathsReclassified := len(valResult.reclassifiedPaths)
 
 	pkgDir := filepath.Join(w.cfg.Project.DataDir, "artifacts", "context-packages")
 	if err := os.MkdirAll(pkgDir, 0755); err != nil {
@@ -207,13 +159,15 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to write context package: %w", err)
 	}
 
+	agg := aggregateTokens(records, "synthesize")
+
 	if err := w.db.UpdatePipelineRunScope(ctx, database.UpdatePipelineRunScopeParams{
 		WorkflowID:               task.WorkflowID,
 		ScopeStartedAt:           sql.NullString{String: scopeStartedAt.UTC().Format(time.RFC3339), Valid: true},
 		ScopeCompletedAt:         sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
-		ScopeTokensIn:            sql.NullInt64{Int64: int64(lastUsage.PromptTokens), Valid: true},
-		ScopeTokensOut:           sql.NullInt64{Int64: int64(lastUsage.CompletionTokens), Valid: true},
-		ScopeModel:               sql.NullString{String: w.cfg.LocalModel.ModelName, Valid: true},
+		ScopeTokensIn:            sql.NullInt64{Int64: int64(agg.tokensIn), Valid: true},
+		ScopeTokensOut:           sql.NullInt64{Int64: int64(agg.tokensOut), Valid: true},
+		ScopeModel:               sql.NullString{String: agg.model, Valid: agg.model != ""},
 		ScopeFilesSuggested:      sql.NullInt64{Int64: int64(len(pkg.FilesToModify) + len(pkg.NewFiles)), Valid: true},
 		ScopeEstimatedComplexity: sql.NullString{String: pkg.EstimatedComplexity, Valid: pkg.EstimatedComplexity != ""},
 		ScopeRagDirect:           sql.NullInt64{Int64: int64(ragDirect), Valid: true},
@@ -223,6 +177,8 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	}); err != nil {
 		slog.Warn("Failed to update pipeline run scope metrics", "error", err)
 	}
+
+	w.persistSubCalls(ctx, task.WorkflowID, records)
 
 	if err := w.db.UpdateWorkflowContext(ctx, database.UpdateWorkflowContextParams{
 		ID:                 task.WorkflowID,
@@ -240,7 +196,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 
 	w.db.LogEvent(task.WorkflowID, task.ID, "scope_completed", map[string]any{
 		"context_package_path": pkgPath,
-		"files_to_modify":      len(fullPkg.Scope.FilesToModify),
+		"files_to_modify":     len(fullPkg.Scope.FilesToModify),
 	})
 
 	slog.Info("Scope phase complete",

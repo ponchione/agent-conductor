@@ -69,4 +69,31 @@ git:
   branch_prefix: "feature/conducted"
   commit_author_name: "Agent Conductor"
   commit_author_email: "conductor@local"
+
+# Provider types:
+#   "openai"     — any OpenAI-compatible endpoint (local or remote)
+#   "claude-cli" — shells out to the claude binary (requires claude CLI installed)
+models:
+  providers:
+    local:
+      type: openai
+      endpoint: "http://localhost:8080/v1"
+      model: "deepseek-r1"
+      timeout_seconds: 120
+      temperature: 0.0
+    claude-sonnet:
+      type: claude-cli
+      model: "claude-sonnet-4-6"
+      timeout_seconds: 300
+
+  # Role mappings — each orchestrator phase uses the named provider.
+  # Switch any role to "claude-sonnet" for higher quality at higher cost.
+  roles:
+    decompose: local
+    analyze: local
+    crosscut: local
+    synthesize: local
+    describe: local
+    verify_analyze: local
+    verify_synthesize: local
 `

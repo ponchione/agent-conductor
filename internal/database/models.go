@@ -52,6 +52,23 @@ type PipelineRun struct {
 	UpdatedAt                string         `json:"updated_at"`
 }
 
+type SubCall struct {
+	ID               int64          `json:"id"`
+	PipelineRunID    string         `json:"pipeline_run_id"`
+	Phase            string         `json:"phase"`
+	Step             string         `json:"step"`
+	TargetPath       sql.NullString `json:"target_path"`
+	Provider         string         `json:"provider"`
+	Model            string         `json:"model"`
+	TokensIn         int64          `json:"tokens_in"`
+	TokensOut        int64          `json:"tokens_out"`
+	LatencyMs        int64          `json:"latency_ms"`
+	EstimatedCostUsd float64        `json:"estimated_cost_usd"`
+	Success          int64          `json:"success"`
+	ErrorMessage     sql.NullString `json:"error_message"`
+	CreatedAt        string         `json:"created_at"`
+}
+
 type Task struct {
 	ID             string         `json:"id"`
 	WorkflowID     string         `json:"workflow_id"`

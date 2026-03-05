@@ -72,7 +72,29 @@ var runCmd = &cobra.Command{
 		gitMgr := git.New(cfg)
 		q := queue.New(cfg, db)
 		runner := executor.NewExecutor(cfg)
-		llmClient := llm.New(cfg.LocalModel)
+
+		providers := make(map[string]llm.Client)
+		if len(cfg.Models.Providers) == 0 {
+			providers["default"] = llm.New(cfg.LocalModel)
+			cfg.Models.Roles = map[string]string{
+				"decompose":        "default",
+				"analyze":          "default",
+				"crosscut":         "default",
+				"synthesize":       "default",
+				"describe":         "default",
+				"verify_analyze":   "default",
+				"verify_synthesize": "default",
+			}
+		} else {
+			for name, pc := range cfg.Models.Providers {
+				client, err := llm.NewClientFromProvider(pc)
+				if err != nil {
+					return fmt.Errorf("provider %q: %w", name, err)
+				}
+				providers[name] = client
+			}
+		}
+		resolver := llm.NewRoleResolver(providers, cfg.Models.Roles)
 
 		var ragSearcher condctx.RAGSearcher
 		if cfg.EmbedModel.Endpoint != "" {
@@ -90,7 +112,7 @@ var runCmd = &cobra.Command{
 		}
 		assembler := condctx.NewAssembler(cfg, ragSearcher)
 
-		w := worker.New("worker-1", q, db, cfg, assembler, llmClient, runner, gitMgr, prompts)
+		w := worker.New("worker-1", q, db, cfg, assembler, resolver, &cfg.Guardrails, runner, gitMgr, prompts)
 
 		return runSync(absPath, wo, w, db, cfg)
 	},

@@ -19,15 +19,16 @@ import (
 
 // Worker processes tasks from the queue
 type Worker struct {
-	ID        string
-	q         *queue.Queue
-	db        *database.DB
-	cfg       *config.ProjectConfig
-	assembler *context.Assembler
-	llm       *llm.Client
-	runner    executor.BuildExecutor
-	git       *git.GitManager
-	prompts   *templates.LoadedPrompts
+	ID         string
+	q          *queue.Queue
+	db         *database.DB
+	cfg        *config.ProjectConfig
+	assembler  *context.Assembler
+	models     *llm.RoleResolver
+	guardrails *config.Guardrails
+	runner     executor.BuildExecutor
+	git        *git.GitManager
+	prompts    *templates.LoadedPrompts
 }
 
 func New(
@@ -36,21 +37,23 @@ func New(
 	db *database.DB,
 	cfg *config.ProjectConfig,
 	assembler *context.Assembler,
-	llmClient *llm.Client,
+	models *llm.RoleResolver,
+	guardrails *config.Guardrails,
 	runner executor.BuildExecutor,
 	gitMgr *git.GitManager,
 	prompts *templates.LoadedPrompts,
 ) *Worker {
 	return &Worker{
-		ID:        id,
-		q:         q,
-		db:        db,
-		cfg:       cfg,
-		assembler: assembler,
-		llm:       llmClient,
-		runner:    runner,
-		git:       gitMgr,
-		prompts:   prompts,
+		ID:         id,
+		q:          q,
+		db:         db,
+		cfg:        cfg,
+		assembler:  assembler,
+		models:     models,
+		guardrails: guardrails,
+		runner:     runner,
+		git:        gitMgr,
+		prompts:    prompts,
 	}
 }
 

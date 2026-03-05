@@ -123,6 +123,9 @@ var statsCmd = &cobra.Command{
 			printScopeQualitySection(sqStats)
 		}
 
+		// --- SUB-CALL SUMMARY ---
+		printSubCallSummary(ctx, db)
+
 		return nil
 	},
 }
@@ -219,6 +222,67 @@ func printScopeQualitySection(s database.GetScopeQualityStatsRow) {
 		nullF64ToInt(s.ComplexityMedium),
 		nullF64ToInt(s.ComplexityHigh),
 	)
+}
+
+func printSubCallSummary(ctx context.Context, db *database.DB) {
+	providerRows, err := db.GetSubCallGlobalStatsByProvider(ctx)
+	if err != nil {
+		log.Printf("warning: failed to fetch sub-call provider stats: %v", err)
+		return
+	}
+	if len(providerRows) == 0 {
+		return
+	}
+
+	fmt.Println()
+	fmt.Println("--- SUB-CALL SUMMARY ---")
+	fmt.Printf("%-16s  %6s  %12s  %12s  %10s\n", "Provider", "Calls", "Tokens In", "Tokens Out", "Est. Cost")
+
+	var totalCalls int64
+	for _, r := range providerRows {
+		totalCalls += r.CallCount
+		cost := "$0.00"
+		if r.TotalEstimatedCostUsd.Valid {
+			cost = fmt.Sprintf("$%.2f", r.TotalEstimatedCostUsd.Float64)
+		}
+		fmt.Printf("%-16s  %6d  %12s  %12s  %10s\n",
+			r.Provider,
+			r.CallCount,
+			fmtInt(nullF64ToInt(r.TotalTokensIn)),
+			fmtInt(nullF64ToInt(r.TotalTokensOut)),
+			cost,
+		)
+	}
+
+	phaseRows, err := db.GetSubCallPhaseAverages(ctx)
+	if err != nil {
+		log.Printf("warning: failed to fetch sub-call phase averages: %v", err)
+	} else if len(phaseRows) > 0 {
+		fmt.Printf("\nAvg sub-calls:   ")
+		for i, r := range phaseRows {
+			avg := float64(r.TotalCalls)
+			if r.RunCount > 0 {
+				avg = float64(r.TotalCalls) / float64(r.RunCount)
+			}
+			if i > 0 {
+				fmt.Printf("    ")
+			}
+			fmt.Printf("%s %.1f", r.Phase, avg)
+		}
+		fmt.Println()
+	}
+
+	if totalCalls > 0 {
+		fmt.Printf("\nDistribution:    ")
+		for i, r := range providerRows {
+			pctVal := r.CallCount * 100 / totalCalls
+			if i > 0 {
+				fmt.Printf("    ")
+			}
+			fmt.Printf("%s %d%%", r.Provider, pctVal)
+		}
+		fmt.Println()
+	}
 }
 
 // fmtInt formats an int64 with comma separators (e.g. 1234567 → "1,234,567").

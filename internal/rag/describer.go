@@ -7,25 +7,6 @@ import (
 	"strings"
 )
 
-// DescriptionSystemPrompt is the system prompt for the local LLM when
-// generating semantic descriptions during indexing.
-const DescriptionSystemPrompt = `You are a code documentation assistant. Given a file containing source code
-and optional relationship context, produce a brief semantic description for each
-function/method/type in the file.
-
-Respond ONLY in valid JSON with this schema:
-[
-  {"name": "FunctionName", "description": "1-3 sentence description"}
-]
-
-Rules:
-- One entry per function, method, or type declaration
-- Descriptions should capture INTENT, not just restate the signature
-- When relationship context is provided, mention key relationships:
-  who calls this function, what it delegates to, and what types it uses
-- Focus on what the code does in the context of the application
-- Keep each description under 60 words`
-
 // MaxDescriptionFileLength is the maximum character length of file content
 // sent to the local LLM for description generation.
 const MaxDescriptionFileLength = 6000
@@ -52,12 +33,13 @@ type LLMCompleter interface {
 // Describer generates semantic descriptions for code chunks using
 // a local LLM.
 type Describer struct {
-	llm LLMCompleter
+	llm          LLMCompleter
+	systemPrompt string
 }
 
 // NewDescriber creates a Describer backed by the given LLM client.
-func NewDescriber(llm LLMCompleter) *Describer {
-	return &Describer{llm: llm}
+func NewDescriber(llm LLMCompleter, systemPrompt string) *Describer {
+	return &Describer{llm: llm, systemPrompt: systemPrompt}
 }
 
 // DescribeFile sends the file content to the local LLM and returns
@@ -74,7 +56,7 @@ func (d *Describer) DescribeFile(ctx context.Context, filePath string, fileConte
 
 	userMsg := fmt.Sprintf("File: %s\n\n```\n%s\n```", filePath, content)
 
-	raw, err := d.llm.Complete(ctx, DescriptionSystemPrompt, userMsg)
+	raw, err := d.llm.Complete(ctx, d.systemPrompt, userMsg)
 	if err != nil {
 		return nil, fmt.Errorf("llm call for %s: %w", filePath, err)
 	}

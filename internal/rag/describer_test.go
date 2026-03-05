@@ -132,7 +132,7 @@ func TestDescribeFile_WithRelationshipContext(t *testing.T) {
 	mock := &mockLLM{
 		response: `[{"name": "Login", "description": "Authenticates user and creates session"}]`,
 	}
-	d := NewDescriber(mock)
+	d := NewDescriber(mock, "test system prompt")
 
 	content := "func Login(req LoginRequest) (*Session, error) { ... }"
 	relCtx := FormatRelationshipContext([]Chunk{
