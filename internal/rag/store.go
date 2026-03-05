@@ -351,6 +351,8 @@ func rowToChunk(row map[string]any) (Chunk, float32) {
 		switch t := v.(type) {
 		case time.Time:
 			c.IndexedAt = t
+		case arrow.Timestamp:
+			c.IndexedAt = time.UnixMicro(int64(t))
 		case int64:
 			c.IndexedAt = time.UnixMicro(t)
 		}
