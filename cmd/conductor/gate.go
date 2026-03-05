@@ -63,7 +63,7 @@ The workflow ID must be a full UUID (e.g. from 'conductor list').`,
 			}
 			defer store.Close()
 
-			if err := rag.IndexRepo(ctx2, cfg, store, embedder, describer); err != nil {
+			if err := rag.IndexRepo(ctx2, cfg, store, embedder, describer, rag.IndexOpts{}); err != nil {
 				slog.Warn("Auto re-index failed", "error", err)
 				fmt.Printf("Warning: auto re-index failed: %v. Run 'conductor index' manually.\n", err)
 				return nil

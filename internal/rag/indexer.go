@@ -27,6 +27,13 @@ type chunkRef struct {
 	chunkIdx int
 }
 
+// IndexOpts configures optional behavior for IndexRepo.
+type IndexOpts struct {
+	// Force drops the existing index and re-indexes all files,
+	// ignoring the file hash cache.
+	Force bool
+}
+
 // IndexRepo walks the project directory and indexes all matching files into the
 // RAG store using a three-pass pipeline:
 //
@@ -41,6 +48,7 @@ func IndexRepo(
 	store *Store,
 	embedder *Embedder,
 	describer *Describer,
+	opts IndexOpts,
 ) error {
 	root := cfg.Project.Path
 	if root == "" {
@@ -57,6 +65,14 @@ func IndexRepo(
 	if err != nil {
 		slog.Warn("could not load file hashes, re-indexing all", "error", err)
 		fileHashes = make(map[string]string)
+	}
+
+	if opts.Force {
+		slog.Info("force flag set, dropping index and re-indexing all files")
+		fileHashes = map[string]string{"__schema_version": SchemaVersion}
+		if err := store.DropAndRecreateTable(ctx); err != nil {
+			slog.Warn("failed to drop and recreate table, continuing", "error", err)
+		}
 	}
 
 	if fileHashes["__schema_version"] != SchemaVersion {
