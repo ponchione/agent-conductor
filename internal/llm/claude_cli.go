@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"strings"
 	"time"
 )
 
@@ -38,6 +37,9 @@ func (c *ClaudeCLIClient) Complete(ctx context.Context, systemPrompt string, use
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
+	// Note: --tools "" is intentionally omitted. Passing an empty string causes
+	// the CLI arg parser to swallow the next positional argument (the user message).
+	// --max-turns 1 is sufficient to prevent agentic tool-use loops.
 	args := []string{
 		"--print",
 		"--model", c.model,
@@ -45,7 +47,6 @@ func (c *ClaudeCLIClient) Complete(ctx context.Context, systemPrompt string, use
 		"--system-prompt", systemPrompt,
 		"--dangerously-skip-permissions",
 		"--max-turns", "1",
-		"--tools", "",
 		userMessage,
 	}
 
@@ -69,33 +70,50 @@ func (c *ClaudeCLIClient) Complete(ctx context.Context, systemPrompt string, use
 		return nil, fmt.Errorf("failed to parse claude CLI output: %w", err)
 	}
 
-	var parts []string
-	for _, block := range resp.Result {
-		if block.Type == "text" {
-			parts = append(parts, block.Text)
-		}
+	if resp.IsError {
+		return nil, fmt.Errorf("claude CLI returned error: %s", resp.Result)
 	}
 
 	return &CompletionResult{
-		Content:   strings.Join(parts, ""),
+		Content:   resp.Result,
 		Provider:  "claude-cli",
 		Model:     c.model,
 		LatencyMs: latency.Milliseconds(),
-		// TokensIn/TokensOut are zero because the claude CLI does not expose
-		// token usage in its JSON output.
-		TokensIn:  0,
-		TokensOut: 0,
+		TokensIn:  resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens,
+		TokensOut: resp.Usage.OutputTokens,
 	}, nil
 }
 
 // claudeCLIResponse is the top-level JSON structure returned by
-// claude --output-format json.
+// claude --print --output-format json.
+//
+// Example response:
+//
+//	{
+//	  "type": "result",
+//	  "result": "the LLM text output",
+//	  "is_error": false,
+//	  "duration_ms": 1062,
+//	  "total_cost_usd": 0.01022,
+//	  "usage": {
+//	    "input_tokens": 1979,
+//	    "output_tokens": 13,
+//	    "cache_read_input_tokens": 0,
+//	    "cache_creation_input_tokens": 0
+//	  }
+//	}
 type claudeCLIResponse struct {
-	Result []claudeCLIContentBlock `json:"result"`
+	Type     string      `json:"type"`
+	Result   string      `json:"result"`
+	IsError  bool        `json:"is_error"`
+	Usage    claudeUsage `json:"usage"`
+	CostUSD  float64     `json:"total_cost_usd"`
+	Duration int64       `json:"duration_ms"`
 }
 
-// claudeCLIContentBlock represents a single content block in the CLI response.
-type claudeCLIContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+type claudeUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 }
