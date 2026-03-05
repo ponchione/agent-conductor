@@ -77,22 +77,21 @@ var runCmd = &cobra.Command{
 		if len(cfg.Models.Providers) == 0 {
 			providers["default"] = llm.New(cfg.LocalModel)
 			cfg.Models.Roles = map[string]string{
-				"decompose":  "default",
-				"analyze":    "default",
-				"crosscut":   "default",
-				"synthesize": "default",
-				"describe":   "default",
+				"decompose":        "default",
+				"analyze":          "default",
+				"crosscut":         "default",
+				"synthesize":       "default",
+				"describe":         "default",
+				"verify_analyze":   "default",
+				"verify_synthesize": "default",
 			}
 		} else {
 			for name, pc := range cfg.Models.Providers {
-				providers[name] = llm.NewProviderClient(llm.Provider{
-					Endpoint:         pc.Endpoint,
-					Model:            pc.Model,
-					APIKey:           os.ExpandEnv(pc.APIKey),
-					TimeoutSeconds:   pc.TimeoutSeconds,
-					MaxContextTokens: pc.MaxContextTokens,
-					Temperature:      pc.Temperature,
-				})
+				client, err := llm.NewClientFromProvider(pc)
+				if err != nil {
+					return fmt.Errorf("provider %q: %w", name, err)
+				}
+				providers[name] = client
 			}
 		}
 		resolver := llm.NewRoleResolver(providers, cfg.Models.Roles)

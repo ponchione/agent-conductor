@@ -189,8 +189,15 @@ func (e *ClaudeCodeExecutor) Run(ctx context.Context, runCfg RunConfig) (*RunRes
 		"--system-prompt", runCfg.Prompt,
 		userMsg,
 	}
+	if model := e.cfg.Executor.ClaudeCode.Model; model != "" {
+		args = append([]string{"--model", model}, args...)
+	}
 
-	cmd := exec.CommandContext(ctx, "/home/gernsback/.local/bin/claude", args...)
+	claudeBin, err := exec.LookPath("claude")
+	if err != nil {
+		return nil, fmt.Errorf("claude binary not found: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, claudeBin, args...)
 	cmd.Dir = runCfg.RepoPath
 	cmd.Stdout = io.MultiWriter(os.Stdout, stdoutFile)
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderrFile)

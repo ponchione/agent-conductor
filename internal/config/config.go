@@ -87,8 +87,10 @@ type Executor struct {
 	OpenCode       OpenCodeConfig   `yaml:"opencode"`
 }
 
-// ClaudeCodeConfig is reserved for future tool-specific config.
-type ClaudeCodeConfig struct{}
+// ClaudeCodeConfig holds tool-specific config for the Claude Code executor.
+type ClaudeCodeConfig struct {
+	Model string `yaml:"model"`
+}
 
 type OpenCodeConfig struct {
 	Agent string `yaml:"agent"`
@@ -106,6 +108,7 @@ type Models struct {
 }
 
 type ProviderConfig struct {
+	Type             string   `yaml:"type"`
 	Endpoint         string   `yaml:"endpoint"`
 	Model            string   `yaml:"model"`
 	APIKey           string   `yaml:"api_key"`

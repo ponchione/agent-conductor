@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/ponchione/agent-conductor/internal/config"
@@ -37,14 +36,11 @@ func buildRAGStack(ctx context.Context, cfg *config.ProjectConfig) (*rag.Store, 
 	var describeClient llm.Client
 	if provName, ok := cfg.Models.Roles["describe"]; ok {
 		if pc, ok := cfg.Models.Providers[provName]; ok {
-			describeClient = llm.NewProviderClient(llm.Provider{
-				Endpoint:         pc.Endpoint,
-				Model:            pc.Model,
-				APIKey:           os.ExpandEnv(pc.APIKey),
-				TimeoutSeconds:   pc.TimeoutSeconds,
-				MaxContextTokens: pc.MaxContextTokens,
-				Temperature:      pc.Temperature,
-			})
+			c, err := llm.NewClientFromProvider(pc)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("describe provider %q: %w", provName, err)
+			}
+			describeClient = c
 		}
 	}
 	if describeClient == nil {
