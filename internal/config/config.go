@@ -84,16 +84,11 @@ type Executor struct {
 	Tool           string           `yaml:"tool"`
 	TimeoutMinutes int              `yaml:"timeout_minutes"`
 	ClaudeCode     ClaudeCodeConfig `yaml:"claude_code"`
-	OpenCode       OpenCodeConfig   `yaml:"opencode"`
 }
 
 // ClaudeCodeConfig holds tool-specific config for the Claude Code executor.
 type ClaudeCodeConfig struct {
 	Model string `yaml:"model"`
-}
-
-type OpenCodeConfig struct {
-	Agent string `yaml:"agent"`
 }
 
 type Git struct {

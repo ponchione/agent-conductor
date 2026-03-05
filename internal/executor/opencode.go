@@ -21,13 +21,11 @@ type BuildExecutor interface {
 
 // RunConfig holds the parameters passed to any executor backend.
 type RunConfig struct {
-	RepoPath   string        // both executors: working directory
-	Agent      string        // OpenCode only: agent name
-	InputFiles []string      // both: files whose contents are passed to the agent
-	Prompt     string        // both: system prompt / build instructions
-	Title      string        // OpenCode only: session title
-	Timeout    time.Duration // both: wall-clock timeout
-	LogDir     string        // both: directory for stdout.log / stderr.log
+	RepoPath   string        // working directory
+	InputFiles []string      // files whose contents are passed to the agent
+	Prompt     string        // system prompt / build instructions
+	Timeout    time.Duration // wall-clock timeout
+	LogDir     string        // directory for stdout.log / stderr.log
 }
 
 // RunResult is returned by every executor backend.
@@ -41,12 +39,7 @@ type RunResult struct {
 
 // NewExecutor returns the executor backend selected by cfg.Executor.Tool.
 func NewExecutor(cfg *config.ProjectConfig) BuildExecutor {
-	switch cfg.Executor.Tool {
-	case "opencode":
-		return &OpenCodeExecutor{cfg: cfg}
-	default: // "claude-code" and anything else
-		return &ClaudeCodeExecutor{cfg: cfg}
-	}
+	return &ClaudeCodeExecutor{cfg: cfg}
 }
 
 // openLogs creates the log directory and opens stdout/stderr log files.
@@ -98,58 +91,6 @@ func runResult(ctx context.Context, err error, duration time.Duration, stderrFil
 		StderrPath: stderrPath,
 		Success:    success,
 	}, nil
-}
-
-// OpenCodeExecutor runs work orders via the opencode CLI.
-type OpenCodeExecutor struct {
-	cfg *config.ProjectConfig
-}
-
-func (e *OpenCodeExecutor) Run(ctx context.Context, runCfg RunConfig) (*RunResult, error) {
-	timeout := runCfg.Timeout
-	if timeout == 0 {
-		timeout = 30 * time.Minute
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	stdoutPath, stderrPath, stdoutFile, stderrFile, err := openLogs(runCfg.LogDir)
-	if err != nil {
-		return nil, err
-	}
-	defer stdoutFile.Close()
-	defer stderrFile.Close()
-
-	args := []string{
-		"run",
-		"--agent", runCfg.Agent,
-	}
-	for _, f := range runCfg.InputFiles {
-		args = append(args, "--file", f)
-	}
-	args = append(args, "--title", runCfg.Title)
-	args = append(args, "Execute this work order using the provided context package.")
-	if runCfg.Prompt != "" {
-		args = append(args, runCfg.Prompt)
-	}
-
-	cmd := exec.CommandContext(ctx, "opencode", args...)
-	cmd.Dir = runCfg.RepoPath
-	cmd.Stdout = io.MultiWriter(os.Stdout, stdoutFile)
-	cmd.Stderr = io.MultiWriter(os.Stderr, stderrFile)
-	cmd.Env = os.Environ()
-
-	slog.Info("Executing OpenCode",
-		"agent", runCfg.Agent,
-		"dir", runCfg.RepoPath,
-		"timeout", timeout)
-	slog.Debug("Executing command", "cmd", cmd.String())
-
-	start := time.Now()
-	err = cmd.Run()
-	duration := time.Since(start)
-
-	return runResult(ctx, err, duration, stderrFile, stdoutPath, stderrPath)
 }
 
 // ClaudeCodeExecutor runs work orders via the claude CLI in non-interactive mode.

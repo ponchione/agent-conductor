@@ -160,7 +160,7 @@ func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database
 		WorkflowID:    wfID,
 		SequenceNum:   1,
 		TaskType:      "execution",
-		AgentType:     "opencode",
+		AgentType:     "claude-code",
 		TargetRepo:    cfg.Project.Name,
 		Phase:         "scope",
 		InputArtifact: absPath,

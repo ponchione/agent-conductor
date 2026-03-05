@@ -497,7 +497,7 @@ internal/
   context/             Context assembly — PreScope, GatherForTarget, Assemble
   database/            SQLite via sqlc — workflows, tasks, events, pipeline_runs, sub_calls
   errors/              Classified errors: Retryable, Fatal, NeedsHuman
-  executor/            Build executors — ClaudeCodeExecutor, OpenCodeExecutor
+  executor/            Build executor — ClaudeCodeExecutor
   gate/                Human review — approve (merge + archive) / reject
   git/                 go-git operations — diff, changed files, merge, branch delete
   llm/                 OpenAI-compatible client, RoleResolver, RAGCompleterAdapter

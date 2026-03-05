@@ -216,7 +216,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		WorkflowID:    task.WorkflowID,
 		SequenceNum:   task.SequenceNum + 1,
 		TaskType:      "execution",
-		AgentType:     "opencode",
+		AgentType:     "claude-code",
 		TargetRepo:    task.TargetRepo,
 		Phase:         "build",
 		InputArtifact: pkgPath,

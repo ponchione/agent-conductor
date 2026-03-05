@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -36,10 +35,8 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 
 	runCfg := executor.RunConfig{
 		RepoPath:   w.cfg.Project.Path,
-		Agent:      "build",
 		InputFiles: []string{workOrderPath, contextPath},
 		Prompt:     w.prompts.Build,
-		Title:      fmt.Sprintf("Build Task %s", task.ID),
 		Timeout:    time.Duration(wf.MaxDurationMins) * time.Minute,
 		LogDir:     filepath.Join(w.cfg.Project.DataDir, "logs", task.ID),
 	}
@@ -113,7 +110,7 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		WorkflowID:    task.WorkflowID,
 		SequenceNum:   task.SequenceNum + 1,
 		TaskType:      "verification",
-		AgentType:     "opencode",
+		AgentType:     "claude-code",
 		TargetRepo:    task.TargetRepo,
 		Phase:         "verify",
 		InputArtifact: contextPath,

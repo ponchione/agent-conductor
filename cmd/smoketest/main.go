@@ -62,7 +62,7 @@ func main() {
 			Name:        "runBuild",
 			Signature:   "func (w *Worker) runBuild(ctx context.Context, wf *database.Workflow, wo models.WorkOrder) error",
 			Body:        "func (w *Worker) runBuild(ctx context.Context, wf *database.Workflow, wo models.WorkOrder) error { return w.executor.Run(ctx, wf, wo) }",
-			Description: "Runs the build phase: invokes OpenCode with the build agent to execute code generation via Gemini using the scoped context package.",
+			Description: "Runs the build phase: invokes Claude Code to execute code generation using the scoped context package.",
 			LineStart:   30,
 			LineEnd:     65,
 			ContentHash: rag.ContentHashOf("build-body-placeholder"),
