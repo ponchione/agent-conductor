@@ -33,5 +33,5 @@ smokesearch:
 	go run ./cmd/smoke-search/
 
 index:
-    LD_LIBRARY_PATH=$(CURDIR)/lib/linux_amd64 \
-    ./bin/conductor index --project ./project.yaml
+	LD_LIBRARY_PATH=$(CURDIR)/lib/linux_amd64 \
+	./bin/conductor index --project ./project.yaml

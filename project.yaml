@@ -6,12 +6,13 @@ project:
 index:
   include:
     - "**/*.go"
-    - "**/*.md"
   exclude:
     - "**/vendor/**"
     - "**/.git/**"
     - "**/bin/**"
     - "**/.conductor/**"
+    - "**/*.md"
+    - "**/dbgen/**"
   max_rag_results: 30
   max_tree_lines: 200
   auto_reindex: true

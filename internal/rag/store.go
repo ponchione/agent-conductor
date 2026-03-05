@@ -201,6 +201,33 @@ func (s *Store) ChunksByName(ctx context.Context, name string) ([]Chunk, error) 
 	return chunks, nil
 }
 
+// Count returns the total number of rows in the chunks table.
+func (s *Store) Count(ctx context.Context) (int64, error) {
+	return s.table.Count(ctx)
+}
+
+// SelectMetadata returns all chunks with only metadata columns populated.
+// The embedding and body fields are skipped to keep the result lightweight.
+func (s *Store) SelectMetadata(ctx context.Context) ([]Chunk, error) {
+	cols := []string{
+		"id", "project_name", "file_path", "language", "chunk_type",
+		"name", "signature", "description",
+		"line_start", "line_end", "content_hash", "indexed_at",
+		"calls", "called_by", "types_used", "implements_ifaces", "imports",
+	}
+	rows, err := s.table.SelectWithColumns(ctx, cols)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select metadata: %w", err)
+	}
+
+	chunks := make([]Chunk, 0, len(rows))
+	for _, row := range rows {
+		chunk, _ := rowToChunk(row)
+		chunks = append(chunks, chunk)
+	}
+	return chunks, nil
+}
+
 // Close releases the table and connection.
 func (s *Store) Close() error {
 	if s.table != nil {

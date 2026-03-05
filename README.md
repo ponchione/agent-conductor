@@ -297,6 +297,21 @@ Legacy `scope` and `verify` prompts are still loaded for backward compatibility 
 conductor index --project /path/to/project.yaml
 ```
 
+### Inspect the RAG Database
+
+After indexing, verify what's stored:
+
+```bash
+# Aggregate stats: chunk counts by language, type, and top files
+conductor rag-dump --stats
+
+# Show all chunks for a specific file (sorted by line number)
+conductor rag-dump --file internal/rag/store.go
+
+# Find chunks matching a symbol name (includes call graph)
+conductor rag-dump --name NewStore
+```
+
 The indexer runs a three-pass pipeline:
 
 1. **Walk + Parse:** Walks the repo filtered by include/exclude globs, parses each file into structural chunks. For Go projects, uses `go/packages` and `go/ast` for rich metadata — call graphs, interface implementations, type relationships. Falls back to tree-sitter for TypeScript/TSX/Python, and a sliding-window chunker for everything else.
@@ -469,6 +484,7 @@ cmd/conductor/
   plan.go              Spec → work order decomposition via Claude Code
   gate.go              Approve/reject with merge, archive, and auto-reindex
   index.go             RAG indexing entry point
+  ragdump.go           RAG database inspection (stats, file, name lookup)
   ragsetup.go          Shared RAG stack initialization
   list.go              Workflow listing
   status.go            Workflow detail with prefix resolution
