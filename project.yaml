@@ -12,11 +12,26 @@ index:
     - "**/.git/**"
     - "**/bin/**"
     - "**/.conductor/**"
+  max_rag_results: 30
+  max_tree_lines: 200
+  auto_reindex: true
+
+conventions:
+  module_path: "github.com/ponchione/agent-conductor"
+  module_structure:
+    - "orchestrator.go"
+    - "types.go"
+  shared_path: "internal/util/"
+  sql_path: "sql/"
 
 executor:
   tool: claude-code
   timeout_minutes: 30
 
+# Legacy prompts — loaded for backward compatibility but not used by the
+# recursive scope/verify orchestrators.  The recursive pipeline steps
+# (scope_decompose, scope_analyze, etc.) resolve through the three-tier
+# system: .prompts/ override → project.yaml path → compiled default.
 prompts:
   scope: templates/scope-prompt.md
   verify: templates/verify-prompt.md
@@ -25,3 +40,10 @@ prompts:
 safety:
   max_files_changed: 50
   max_duration_mins: 60
+
+guardrails:
+  max_investigation_targets: 6
+  max_sub_calls_total: 12
+  phase_timeout_seconds: 300
+  max_cost_per_phase_usd: 0.50
+  warn_cost_per_phase_usd: 0.10
