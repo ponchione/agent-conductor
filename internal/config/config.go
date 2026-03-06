@@ -33,11 +33,13 @@ type Project struct {
 }
 
 type Index struct {
-	Include       []string `yaml:"include"`
-	Exclude       []string `yaml:"exclude"`
-	MaxRAGResults int      `yaml:"max_rag_results"`
-	MaxTreeLines  int      `yaml:"max_tree_lines"`
-	AutoReindex   bool     `yaml:"auto_reindex"`
+	Include               []string `yaml:"include"`
+	Exclude               []string `yaml:"exclude"`
+	MaxRAGResults         int      `yaml:"max_rag_results"`
+	MaxTreeLines          int      `yaml:"max_tree_lines"`
+	AutoReindex           bool     `yaml:"auto_reindex"`
+	MaxFileSizeBytes      int      `yaml:"max_file_size_bytes"`
+	MaxTotalFileSizeBytes int      `yaml:"max_total_file_size_bytes"`
 }
 
 type Conventions struct {
@@ -181,6 +183,12 @@ func Load(projectPath string) (*ProjectConfig, error) {
 	}
 	if cfg.Index.MaxTreeLines == 0 {
 		cfg.Index.MaxTreeLines = 200
+	}
+	if cfg.Index.MaxFileSizeBytes == 0 {
+		cfg.Index.MaxFileSizeBytes = 50 * 1024 // 50 KiB
+	}
+	if cfg.Index.MaxTotalFileSizeBytes == 0 {
+		cfg.Index.MaxTotalFileSizeBytes = 512 * 1024 // 512 KiB
 	}
 
 	if cfg.Guardrails.MaxInvestigationTargets == 0 {

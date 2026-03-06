@@ -167,6 +167,8 @@ func TestAssemble_WithEnrichedSearcher(t *testing.T) {
 				Function:    "Login",
 				File:        "internal/auth/service.go",
 				Description: "Handles user login",
+				Body:        "func Login() { ... }",
+				Signature:   "func Login() error",
 				Calls: []models.CodeRef{
 					{Name: "ValidateToken", Package: "auth"},
 				},
@@ -222,6 +224,12 @@ func TestAssemble_WithEnrichedSearcher(t *testing.T) {
 	}
 	if rc.IsDependencyHop {
 		t.Error("first result should not be a dependency hop")
+	}
+	if rc.Body != "func Login() { ... }" {
+		t.Errorf("expected Body 'func Login() { ... }', got %q", rc.Body)
+	}
+	if rc.Signature != "func Login() error" {
+		t.Errorf("expected Signature 'func Login() error', got %q", rc.Signature)
 	}
 
 	// Second result: dependency hop
@@ -502,5 +510,188 @@ func (s *Service) Logout() error {
 	}
 	if !foundMethod {
 		t.Error("expected signature for method Logout")
+	}
+}
+
+func TestAssemble_FileContentsPopulated(t *testing.T) {
+	tmpDir := t.TempDir()
+	authDir := filepath.Join(tmpDir, "internal", "auth")
+	if err := os.MkdirAll(authDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "handler.go"), []byte("package auth\n// handler\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: tmpDir, DataDir: t.TempDir()},
+		Index: config.Index{
+			MaxFileSizeBytes:      50 * 1024,
+			MaxTotalFileSizeBytes: 512 * 1024,
+		},
+	}
+	assembler := NewAssembler(cfg, nil)
+
+	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "auth"}
+	scopePkg := &models.ContextPackage{
+		Summary:             "test",
+		EstimatedComplexity: "low",
+		FilesToModify:       []models.FileRef{{Path: "internal/auth/handler.go", Reason: "add route"}},
+	}
+
+	full, err := assembler.Assemble(context.Background(), wo, scopePkg, "feature/test")
+	if err != nil {
+		t.Fatalf("Assemble failed: %v", err)
+	}
+	if len(full.Scope.FileContents) != 1 {
+		t.Fatalf("expected 1 file content entry, got %d", len(full.Scope.FileContents))
+	}
+	if full.Scope.FileContents[0].Path != "internal/auth/handler.go" {
+		t.Errorf("expected path 'internal/auth/handler.go', got %q", full.Scope.FileContents[0].Path)
+	}
+	if !strings.Contains(full.Scope.FileContents[0].Source, "package auth") {
+		t.Error("expected source to contain 'package auth'")
+	}
+}
+
+func TestAssemble_FileContents_MissingFileSkipped(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: t.TempDir(), DataDir: t.TempDir()},
+		Index: config.Index{
+			MaxFileSizeBytes:      50 * 1024,
+			MaxTotalFileSizeBytes: 512 * 1024,
+		},
+	}
+	assembler := NewAssembler(cfg, nil)
+
+	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "auth"}
+	scopePkg := &models.ContextPackage{
+		Summary:             "test",
+		EstimatedComplexity: "low",
+		FilesToModify:       []models.FileRef{{Path: "does/not/exist.go", Reason: "missing"}},
+	}
+
+	full, err := assembler.Assemble(context.Background(), wo, scopePkg, "feature/test")
+	if err != nil {
+		t.Fatalf("Assemble failed: %v", err)
+	}
+	if len(full.Scope.FileContents) != 0 {
+		t.Errorf("expected 0 file contents for missing file, got %d", len(full.Scope.FileContents))
+	}
+}
+
+func TestAssemble_FileContents_PerFileTruncation(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "big.go"), []byte(strings.Repeat("x", 200)), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: tmpDir, DataDir: t.TempDir()},
+		Index: config.Index{
+			MaxFileSizeBytes:      50, // small cap
+			MaxTotalFileSizeBytes: 512 * 1024,
+		},
+	}
+	assembler := NewAssembler(cfg, nil)
+
+	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "x"}
+	scopePkg := &models.ContextPackage{
+		Summary:             "test",
+		EstimatedComplexity: "low",
+		FilesToModify:       []models.FileRef{{Path: "big.go", Reason: "big file"}},
+	}
+
+	full, err := assembler.Assemble(context.Background(), wo, scopePkg, "feature/test")
+	if err != nil {
+		t.Fatalf("Assemble failed: %v", err)
+	}
+	if len(full.Scope.FileContents) != 1 {
+		t.Fatalf("expected 1 file content entry, got %d", len(full.Scope.FileContents))
+	}
+	if !strings.Contains(full.Scope.FileContents[0].Source, "[truncated: file exceeds max_file_size_bytes]") {
+		t.Error("expected truncation marker in source")
+	}
+}
+
+func TestAssemble_FileContents_TotalBudgetExhausted(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte(strings.Repeat("a", 80)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte(strings.Repeat("b", 80)), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: tmpDir, DataDir: t.TempDir()},
+		Index: config.Index{
+			MaxFileSizeBytes:      1024,
+			MaxTotalFileSizeBytes: 80, // exactly enough for one file, exhausted after
+		},
+	}
+	assembler := NewAssembler(cfg, nil)
+
+	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "x"}
+	scopePkg := &models.ContextPackage{
+		Summary:             "test",
+		EstimatedComplexity: "low",
+		FilesToModify: []models.FileRef{
+			{Path: "a.go", Reason: "first"},
+			{Path: "b.go", Reason: "second"},
+		},
+	}
+
+	full, err := assembler.Assemble(context.Background(), wo, scopePkg, "feature/test")
+	if err != nil {
+		t.Fatalf("Assemble failed: %v", err)
+	}
+	if len(full.Scope.FileContents) != 1 {
+		t.Fatalf("expected 1 file content (budget exhausted), got %d", len(full.Scope.FileContents))
+	}
+	if full.Scope.FileContents[0].Path != "a.go" {
+		t.Errorf("expected first file 'a.go', got %q", full.Scope.FileContents[0].Path)
+	}
+}
+
+func TestAssemble_PassThroughFields(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Path: t.TempDir(), DataDir: t.TempDir()},
+		Index: config.Index{
+			MaxFileSizeBytes:      50 * 1024,
+			MaxTotalFileSizeBytes: 512 * 1024,
+		},
+	}
+	assembler := NewAssembler(cfg, nil)
+
+	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "auth"}
+	scopePkg := &models.ContextPackage{
+		Summary:             "test",
+		EstimatedComplexity: "medium",
+		BuildInstructions:   "make build",
+		NewFiles: []models.NewFile{
+			{Path: "internal/auth/logout.go", Purpose: "logout handler"},
+		},
+		SQLFiles: []models.FileRef{
+			{Path: "sql/001_auth.sql", Reason: "auth schema"},
+		},
+		Dependencies: []string{"github.com/go-chi/chi/v5"},
+	}
+
+	full, err := assembler.Assemble(context.Background(), wo, scopePkg, "feature/test")
+	if err != nil {
+		t.Fatalf("Assemble failed: %v", err)
+	}
+	if full.Scope.BuildInstructions != "make build" {
+		t.Errorf("expected BuildInstructions 'make build', got %q", full.Scope.BuildInstructions)
+	}
+	if len(full.Scope.NewFiles) != 1 || full.Scope.NewFiles[0].Path != "internal/auth/logout.go" {
+		t.Errorf("expected NewFiles with logout.go, got %v", full.Scope.NewFiles)
+	}
+	if len(full.Scope.SQLFiles) != 1 || full.Scope.SQLFiles[0].Path != "sql/001_auth.sql" {
+		t.Errorf("expected SQLFiles with 001_auth.sql, got %v", full.Scope.SQLFiles)
+	}
+	if len(full.Scope.Dependencies) != 1 || full.Scope.Dependencies[0] != "github.com/go-chi/chi/v5" {
+		t.Errorf("expected Dependencies with chi, got %v", full.Scope.Dependencies)
 	}
 }

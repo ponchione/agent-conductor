@@ -15,6 +15,12 @@ type ContextPackage struct {
 	BuildInstructions   string       `json:"build_instructions"`
 }
 
+// FileWithContent pairs a file path with its inline source content.
+type FileWithContent struct {
+	Path   string `json:"path"`
+	Source string `json:"source"`
+}
+
 // FileRef is a file path with a reason explaining why it is relevant.
 type FileRef struct {
 	Path   string `json:"path"`
@@ -112,11 +118,16 @@ type WorkOrderContext struct {
 
 // ScopeContext holds the scope LLM's analysis enriched with RAG results.
 type ScopeContext struct {
-	FilesToModify       []FileRef      `json:"files_to_modify"`
-	FilesToReference    []FileRef      `json:"files_to_reference"`
-	RelevantCode        []RelevantCode `json:"relevant_code"`
-	Summary             string         `json:"summary"`
-	EstimatedComplexity string         `json:"estimated_complexity"`
+	FilesToModify       []FileRef        `json:"files_to_modify"`
+	FilesToReference    []FileRef        `json:"files_to_reference"`
+	FileContents        []FileWithContent `json:"file_contents,omitempty"`
+	RelevantCode        []RelevantCode   `json:"relevant_code"`
+	Summary             string           `json:"summary"`
+	EstimatedComplexity string           `json:"estimated_complexity"`
+	BuildInstructions   string           `json:"build_instructions,omitempty"`
+	NewFiles            []NewFile        `json:"new_files,omitempty"`
+	SQLFiles            []FileRef        `json:"sql_files,omitempty"`
+	Dependencies        []string         `json:"dependencies,omitempty"`
 }
 
 // CodeRef identifies a function or method in the codebase.
@@ -132,6 +143,8 @@ type RelevantCode struct {
 	Function        string    `json:"function"`
 	File            string    `json:"file"`
 	Description     string    `json:"description"`
+	Body            string    `json:"body,omitempty"`
+	Signature       string    `json:"signature,omitempty"`
 	Calls           []CodeRef `json:"calls,omitempty"`
 	CalledBy        []CodeRef `json:"called_by,omitempty"`
 	IsDependencyHop bool      `json:"is_dependency_hop,omitempty"`

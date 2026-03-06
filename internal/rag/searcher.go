@@ -247,6 +247,8 @@ func toEnrichedResults(results []EnrichedResult, maxResults int) []condctx.Enric
 			Function:        r.Chunk.Name,
 			File:            r.Chunk.FilePath,
 			Description:     r.Chunk.Description,
+			Body:            r.Chunk.Body,
+			Signature:       r.Chunk.Signature,
 			Calls:           funcRefsToCodeRefs(r.Chunk.Calls),
 			CalledBy:        funcRefsToCodeRefs(r.Chunk.CalledBy),
 			IsDependencyHop: r.IsDependencyHop,

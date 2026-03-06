@@ -35,6 +35,8 @@ type EnrichedRAGResult struct {
 	Function        string
 	File            string
 	Description     string
+	Body            string
+	Signature       string
 	Calls           []models.CodeRef
 	CalledBy        []models.CodeRef
 	IsDependencyHop bool
@@ -85,6 +87,8 @@ func (a *Assembler) searchRelevantCode(ctx context.Context, wo *models.WorkOrder
 					Function:        r.Function,
 					File:            r.File,
 					Description:     r.Description,
+					Body:            r.Body,
+					Signature:       r.Signature,
 					Calls:           r.Calls,
 					CalledBy:        r.CalledBy,
 					IsDependencyHop: r.IsDependencyHop,
@@ -191,6 +195,9 @@ func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder, scopePkg
 		)
 	}
 
+	allRefs := dedupFileRefs(append(scopePkg.FilesToModify, scopePkg.FilesToReference...))
+	fileContents := a.readFileContents(allRefs)
+
 	full := &models.FullContextPackage{
 		WorkOrder: models.WorkOrderContext{
 			Title:              wo.Title,
@@ -204,9 +211,14 @@ func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder, scopePkg
 		Scope: models.ScopeContext{
 			FilesToModify:       scopePkg.FilesToModify,
 			FilesToReference:    scopePkg.FilesToReference,
+			FileContents:        fileContents,
 			RelevantCode:        relevantCode,
 			Summary:             scopePkg.Summary,
 			EstimatedComplexity: scopePkg.EstimatedComplexity,
+			BuildInstructions:   scopePkg.BuildInstructions,
+			NewFiles:            scopePkg.NewFiles,
+			SQLFiles:            scopePkg.SQLFiles,
+			Dependencies:        scopePkg.Dependencies,
 		},
 		Directives: models.Directives{
 			BranchName:          branchName,
@@ -215,6 +227,65 @@ func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder, scopePkg
 	}
 
 	return full, nil
+}
+
+// dedupFileRefs deduplicates file references by Path, preserving first-seen order.
+func dedupFileRefs(refs []models.FileRef) []models.FileRef {
+	seen := make(map[string]bool, len(refs))
+	out := make([]models.FileRef, 0, len(refs))
+	for _, r := range refs {
+		if seen[r.Path] {
+			continue
+		}
+		seen[r.Path] = true
+		out = append(out, r)
+	}
+	return out
+}
+
+// readFileContents reads inline file contents for the given references.
+// It respects per-file and total size budgets from config. Files that are
+// unreadable or exceed the budget are skipped with a log message.
+func (a *Assembler) readFileContents(refs []models.FileRef) []models.FileWithContent {
+	perFileCap := a.cfg.Index.MaxFileSizeBytes
+	totalCap := a.cfg.Index.MaxTotalFileSizeBytes
+	if perFileCap <= 0 || totalCap <= 0 {
+		return nil
+	}
+
+	var out []models.FileWithContent
+	totalBytes := 0
+
+	for _, ref := range refs {
+		if totalBytes >= totalCap {
+			slog.Info("file contents total budget exhausted, skipping remaining files",
+				"skipped", ref.Path, "total_bytes", totalBytes)
+			break
+		}
+
+		absPath := filepath.Join(a.cfg.Project.Path, ref.Path)
+		remaining := totalCap - totalBytes
+		cap := min(perFileCap, remaining)
+
+		data, err := readFileCapped(absPath, cap)
+		if err != nil {
+			slog.Info("skipping unreadable file for inline content", "path", ref.Path, "error", err)
+			continue
+		}
+
+		source := string(data)
+		if len(data) == cap {
+			source += "\n// [truncated: file exceeds max_file_size_bytes]"
+		}
+
+		totalBytes += len(data)
+		out = append(out, models.FileWithContent{
+			Path:   ref.Path,
+			Source: source,
+		})
+	}
+
+	return out
 }
 
 // buildFileTree walks the project directory and returns an indented file tree
