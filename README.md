@@ -12,17 +12,17 @@ conductor run --project project.yaml work-order.yaml
 
 The conductor runs a three-phase pipeline:
 
-**Scope** — A recursive multi-step pipeline that decomposes the work order into investigation targets, gathers context for each target (files, signatures, RAG results), analyzes each area independently, identifies cross-cutting concerns, then synthesizes everything into a single structured context package. All analysis runs on local LLMs — no tokens leave your machine.
+**Scope** — A fan-out/fan-in pipeline that decomposes the work order into investigation targets, gathers context for each target (files, signatures, RAG results), analyzes each area independently, identifies cross-cutting concerns, then synthesizes everything into a single structured context package. All analysis runs on local LLMs — no tokens leave your machine.
 
 **Build** — Passes the context package to Claude Code, which creates a git branch, implements the changes, and commits. The conductor stays out of its way.
 
-**Verify** — A recursive pipeline that segments the git diff, analyzes each segment against the work order's acceptance criteria, runs deterministic pre-checks (build, test, vet), then synthesizes a final PASS/WARN/FAIL verdict. Analysis runs on local LLMs.
+**Verify** — A two-step pipeline that segments the git diff, analyzes each segment against the work order's acceptance criteria, runs deterministic pre-checks (build, test, vet), then synthesizes a final PASS/WARN/FAIL verdict. Analysis runs on local LLMs.
 
 The workflow then sits in `human_review` until you approve or reject it.
 
-## The Recursive Scope Pipeline
+## The Scope Pipeline
 
-The scope phase runs five steps, each feeding into the next:
+The scope phase runs six steps in a fan-out/fan-in pattern:
 
 ```
 PreScope (Go)  →  Decompose (1 LLM call)  →  Gather (Go)  →  Analyze (N LLM calls)  →  CrossCut (1 LLM call)  →  Synthesize (1 LLM call)
@@ -42,9 +42,9 @@ PreScope (Go)  →  Decompose (1 LLM call)  →  Gather (Go)  →  Analyze (N LL
 
 **Post-Scope Validation** then checks every path against the filesystem. Non-existent paths are stripped. New files that already exist are reclassified to `files_to_modify`. If more than 50% of paths are invalid, the scope phase retries.
 
-## The Recursive Verify Pipeline
+## The Verify Pipeline
 
-The verify phase mirrors the scope's structure:
+The verify phase follows the same fan-out/fan-in pattern:
 
 ```
 Segment (Go)  →  Analyze (N LLM calls)  →  Synthesize (1 LLM call)
@@ -289,7 +289,7 @@ The pipeline steps with independent prompts are:
 | `build` | `defaults/build.md` | Instructions for Claude Code |
 | `describe` | `defaults/describe.md` | RAG chunk description generation |
 
-Legacy `scope` and `verify` prompts are still loaded for backward compatibility but are not used by the recursive orchestrators.
+Legacy `scope` and `verify` prompts are still loaded for backward compatibility but are not used by the pipeline orchestrators.
 
 ### Index the Repository
 
@@ -406,7 +406,7 @@ This displays:
 
 ### Sub-Call Tracking
 
-Every LLM call within the recursive pipelines is individually tracked in the `sub_calls` table: phase, step, target path, provider, model, tokens in/out, latency, estimated cost, and success/failure. This enables fine-grained analysis of which steps consume the most tokens and where failures occur.
+Every LLM call within the scope and verify pipelines is individually tracked in the `sub_calls` table: phase, step, target path, provider, model, tokens in/out, latency, estimated cost, and success/failure. This enables fine-grained analysis of which steps consume the most tokens and where failures occur.
 
 ## Context Package Structure
 
@@ -426,11 +426,14 @@ The build agent receives a structured JSON directive, not a text blob:
   "scope": {
     "files_to_modify": [{"path": "...", "reason": "..."}],
     "files_to_reference": [{"path": "...", "reason": "..."}],
+    "file_contents": [{"path": "...", "source": "..."}],
     "relevant_code": [
       {
         "function": "...",
         "file": "...",
         "description": "...",
+        "body": "...",
+        "signature": "...",
         "calls": [{"name": "...", "package": "..."}],
         "called_by": [{"name": "...", "package": "..."}],
         "is_dependency_hop": false,
@@ -438,7 +441,11 @@ The build agent receives a structured JSON directive, not a text blob:
       }
     ],
     "summary": "...",
-    "estimated_complexity": "medium"
+    "estimated_complexity": "medium",
+    "build_instructions": "...",
+    "new_files": [{"path": "...", "purpose": "..."}],
+    "sql_files": [{"path": "...", "reason": "..."}],
+    "dependencies": []
   },
   "directives": {
     "branch_name": "feature/conducted-abc12345",
@@ -447,7 +454,7 @@ The build agent receives a structured JSON directive, not a text blob:
 }
 ```
 
-The `relevant_code` array includes both direct RAG hits (ranked by multi-query hit count) and one-hop dependency expansions through the call graph.
+The `file_contents` array includes the full source of every file in `files_to_modify` and `files_to_reference`, pre-loaded so the build agent can begin editing without discovery reads. Files are capped at 50KB each with a 512KB total budget. The `relevant_code` array includes function bodies and signatures from the RAG index, plus both direct hits (ranked by multi-query hit count) and one-hop dependency expansions through the call graph.
 
 ## RAG Search
 
@@ -497,7 +504,7 @@ internal/
   context/             Context assembly — PreScope, GatherForTarget, Assemble
   database/            SQLite via sqlc — workflows, tasks, events, pipeline_runs, sub_calls
   errors/              Classified errors: Retryable, Fatal, NeedsHuman
-  executor/            Build executor — ClaudeCodeExecutor
+  executor/            Build executors — ClaudeCodeExecutor, OpenCodeExecutor
   gate/                Human review — approve (merge + archive) / reject
   git/                 go-git operations — diff, changed files, merge, branch delete
   llm/                 OpenAI-compatible client, RoleResolver, RAGCompleterAdapter
@@ -516,14 +523,14 @@ internal/
     store.go           LanceDB vector storage with name index for call graph lookups
     types.go           Chunk, SearchResult, FuncRef, Filter
   scope/
-    orchestrator.go    Recursive scope: Decompose → Gather → Analyze → CrossCut → Synthesize
+    orchestrator.go    Scope pipeline: Decompose → Gather → Analyze → CrossCut → Synthesize
     types.go           InvestigationTarget, AreaAnalysis, CrossCutAnalysis, SubCallRecord
   templates/
     prompts.go         Three-tier prompt resolution, compiled defaults via go:embed
     defaults/          Embedded default prompts for all pipeline steps
   util/                Glob matching, SQL time parsing
   verify/
-    orchestrator.go    Recursive verify: Segment → Analyze → Synthesize
+    orchestrator.go    Verify pipeline: Segment → Analyze → Synthesize
     types.go           DiffSegment, SegmentVerdict, PreCheckResult
   worker/
     worker.go          Task dispatch by phase
@@ -540,7 +547,7 @@ templates/             Project-level prompt overrides (scope, build, verify)
 
 - **Go** with CGo for LanceDB bindings
 - **LanceDB** for vector storage and similarity search
-- **tree-sitter** for structural code parsing (Go, TypeScript, TSX)
+- **tree-sitter** for structural code parsing (Go, TypeScript, TSX, Python)
 - **go/packages + go/ast** for rich Go analysis (call graphs, interface implementations, type relationships)
 - **nomic-embed-code** for code-specialized embeddings via llama.cpp
 - **DeepSeek-R1-Distill-Qwen-32B** (or any OpenAI-compatible model) for scope and verify analysis
@@ -551,12 +558,9 @@ templates/             Project-level prompt overrides (scope, build, verify)
 
 ## Known Limitations
 
-- Claude Code output does not stream in real-time during the build phase
-- No auto-merge on approve (fast-forward merge only; complex merges need manual intervention)
 - Single repo per work order — no cross-repo coordination
 - No GitHub/GitLab PR creation
 - Verify phase assumes `main` as the base branch
 - LanceDB uses L2 distance — raw scores appear low but ranking is correct
 - The plan command requires Claude Code on PATH
-- Local model tool calling is not yet supported in the scope phase
-- MCP server integration is not yet implemented
+- Local model tool calling is not supported in the scope phase
