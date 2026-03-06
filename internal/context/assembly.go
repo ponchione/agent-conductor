@@ -229,6 +229,45 @@ func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder, scopePkg
 	return full, nil
 }
 
+// AssembleBootstrap builds a FullContextPackage directly from work order fields,
+// bypassing the scope LLM and RAG search. Used for bootstrap work orders where
+// the user already knows exactly what files need to be created.
+func (a *Assembler) AssembleBootstrap(wo *models.WorkOrder, branchName string) *models.FullContextPackage {
+	newFiles := make([]models.NewFile, len(wo.KnownFiles))
+	for i, path := range wo.KnownFiles {
+		newFiles[i] = models.NewFile{Path: path, Purpose: "bootstrap"}
+	}
+
+	var refNote string
+	if wo.ReferenceModule != "" {
+		refNote = fmt.Sprintf(
+			"Use %s as an architectural reference for patterns, conventions, and structure.",
+			wo.ReferenceModule,
+		)
+	}
+
+	return &models.FullContextPackage{
+		WorkOrder: models.WorkOrderContext{
+			Title:              wo.Title,
+			Type:               wo.Type,
+			TargetModule:       wo.TargetModule,
+			ReferenceModule:    wo.ReferenceModule,
+			AcceptanceCriteria: wo.AcceptanceCriteria,
+			Constraints:        wo.Constraints,
+			KnownFiles:         wo.KnownFiles,
+		},
+		Scope: models.ScopeContext{
+			Summary:             wo.Title,
+			EstimatedComplexity: "high",
+			NewFiles:            newFiles,
+		},
+		Directives: models.Directives{
+			BranchName:          branchName,
+			ReferenceModuleNote: refNote,
+		},
+	}
+}
+
 // dedupFileRefs deduplicates file references by Path, preserving first-seen order.
 func dedupFileRefs(refs []models.FileRef) []models.FileRef {
 	seen := make(map[string]bool, len(refs))

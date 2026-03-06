@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -34,10 +35,25 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 
 	workOrderPath := wf.OriginalFile
 
+	prompt := w.prompts.Build
+	if w.prompts.Bootstrap != "" {
+		ctxData, readErr := os.ReadFile(contextPath)
+		if readErr == nil {
+			var cp struct {
+				WorkOrder struct {
+					Type string `json:"type"`
+				} `json:"work_order"`
+			}
+			if json.Unmarshal(ctxData, &cp) == nil && cp.WorkOrder.Type == "bootstrap" {
+				prompt = w.prompts.Bootstrap
+			}
+		}
+	}
+
 	runCfg := executor.RunConfig{
 		RepoPath:   w.cfg.Project.Path,
 		InputFiles: []string{workOrderPath, contextPath},
-		Prompt:     w.prompts.Build,
+		Prompt:     prompt,
 		Timeout:    time.Duration(wf.MaxDurationMins) * time.Minute,
 		LogDir:     filepath.Join(w.cfg.Project.DataDir, "logs", task.ID),
 	}

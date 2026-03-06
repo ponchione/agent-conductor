@@ -49,7 +49,12 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("invalid config: %w", err)
 		}
 
-		prompts, err := templates.LoadPrompts(cfg)
+		var prompts *templates.LoadedPrompts
+		if wo.Type == "bootstrap" {
+			prompts, err = templates.LoadPromptsForBootstrap(cfg)
+		} else {
+			prompts, err = templates.LoadPrompts(cfg)
+		}
 		if err != nil {
 			slog.Error("Failed to load prompts", "error", err)
 			return err

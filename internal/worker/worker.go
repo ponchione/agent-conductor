@@ -5,6 +5,7 @@ import (
 	goerrors "errors"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/context"
@@ -15,6 +16,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/queue"
 	"github.com/ponchione/agent-conductor/internal/templates"
+	"gopkg.in/yaml.v3"
 )
 
 // Worker processes tasks from the queue
@@ -76,7 +78,11 @@ func (w *Worker) ProcessNextTask(ctx stdctx.Context) {
 	var result error
 	switch task.Phase {
 	case "scope":
-		result = w.runScope(ctx, task)
+		if isBootstrapWorkOrder(task) {
+			result = w.runBootstrapScope(ctx, task)
+		} else {
+			result = w.runScope(ctx, task)
+		}
 	case "build":
 		result = w.runBuild(ctx, task)
 	case "verify":
@@ -116,4 +122,20 @@ func (w *Worker) ProcessNextTask(ctx stdctx.Context) {
 			ID: task.WorkflowID, CurrentState: "failed",
 		})
 	}
+}
+
+// isBootstrapWorkOrder reads the task's input artifact (work order YAML) and
+// returns true if the work order type is "bootstrap".
+func isBootstrapWorkOrder(task *database.Task) bool {
+	data, err := os.ReadFile(task.InputArtifact)
+	if err != nil {
+		return false
+	}
+	var wo struct {
+		Type string `yaml:"type"`
+	}
+	if err := yaml.Unmarshal(data, &wo); err != nil {
+		return false
+	}
+	return wo.Type == "bootstrap"
 }

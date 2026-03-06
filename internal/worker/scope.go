@@ -78,6 +78,105 @@ func validateScopeOutput(repoRoot string, pkg *models.ContextPackage) *scopeVali
 	return result
 }
 
+func (w *Worker) runBootstrapScope(ctx context.Context, task *database.Task) error {
+	slog.Info("Starting Bootstrap Scope Phase (no LLM)", "task", task.ID)
+	w.db.LogEvent(task.WorkflowID, task.ID, "scope_started", map[string]any{"bootstrap": true})
+
+	scopeStartedAt := time.Now()
+
+	woContent, err := os.ReadFile(task.InputArtifact)
+	if err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to read work order: %w", err)
+	}
+
+	var wo models.WorkOrder
+	if err := yaml.Unmarshal(woContent, &wo); err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to parse work order: %w", err)
+	}
+
+	wf, err := w.db.GetWorkflow(ctx, task.WorkflowID)
+	if err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to get workflow: %w", err)
+	}
+
+	fullPkg := w.assembler.AssembleBootstrap(&wo, wf.GitBranch)
+
+	pkgDir := filepath.Join(w.cfg.Project.DataDir, "artifacts", "context-packages")
+	if err := os.MkdirAll(pkgDir, 0755); err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to create context-packages dir: %w", err)
+	}
+	pkgPath := filepath.Join(pkgDir, task.WorkflowID+"-context-package.json")
+	pkgData, _ := json.MarshalIndent(fullPkg, "", "  ")
+	if err := os.WriteFile(pkgPath, pkgData, 0644); err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to write context package: %w", err)
+	}
+
+	if err := w.db.UpdatePipelineRunScope(ctx, database.UpdatePipelineRunScopeParams{
+		WorkflowID:               task.WorkflowID,
+		ScopeStartedAt:           sql.NullString{String: scopeStartedAt.UTC().Format(time.RFC3339), Valid: true},
+		ScopeCompletedAt:         sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
+		ScopeTokensIn:            sql.NullInt64{Int64: 0, Valid: true},
+		ScopeTokensOut:           sql.NullInt64{Int64: 0, Valid: true},
+		ScopeModel:               sql.NullString{String: "bootstrap", Valid: true},
+		ScopeFilesSuggested:      sql.NullInt64{Int64: int64(len(wo.KnownFiles)), Valid: true},
+		ScopeEstimatedComplexity: sql.NullString{String: "high", Valid: true},
+		ScopeRagDirect:           sql.NullInt64{Int64: 0, Valid: true},
+		ScopeRagHops:             sql.NullInt64{Int64: 0, Valid: true},
+		ScopePathsStripped:       sql.NullInt64{Int64: 0, Valid: true},
+		ScopePathsReclassified:   sql.NullInt64{Int64: 0, Valid: true},
+	}); err != nil {
+		slog.Warn("Failed to update pipeline run scope metrics", "error", err)
+	}
+
+	if err := w.db.UpdateWorkflowContext(ctx, database.UpdateWorkflowContextParams{
+		ID:                 task.WorkflowID,
+		ContextPackagePath: sql.NullString{String: pkgPath, Valid: true},
+	}); err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to update workflow context path: %w", err)
+	}
+
+	if err := w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
+		ID:           task.WorkflowID,
+		CurrentState: "scope_complete",
+	}); err != nil {
+		slog.Error("Failed to update workflow state to scope_complete", "workflow", task.WorkflowID, "error", err)
+	}
+
+	w.db.LogEvent(task.WorkflowID, task.ID, "scope_completed", map[string]any{
+		"context_package_path": pkgPath,
+		"bootstrap":            true,
+		"new_files":            len(fullPkg.Scope.NewFiles),
+	})
+
+	slog.Info("Bootstrap scope phase complete",
+		"new_files", len(fullPkg.Scope.NewFiles),
+		"summary", fullPkg.Scope.Summary,
+	)
+
+	w.q.CompleteTask(task.ID, &queue.TaskResult{
+		ExitCode:  0,
+		StdoutLog: "Bootstrap scope completed (no LLM)",
+	})
+
+	buildTaskID := uuid.New().String()
+	if err := w.db.CreateTask(ctx, database.CreateTaskParams{
+		ID:            buildTaskID,
+		WorkflowID:    task.WorkflowID,
+		SequenceNum:   task.SequenceNum + 1,
+		TaskType:      "execution",
+		AgentType:     "claude-code",
+		TargetRepo:    task.TargetRepo,
+		Phase:         "build",
+		InputArtifact: pkgPath,
+		State:         "pending",
+		MaxAttempts:   1,
+	}); err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to create build task: %w", err)
+	}
+
+	return nil
+}
+
 func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	slog.Info("Starting Scope Phase", "task", task.ID)
 	w.db.LogEvent(task.WorkflowID, task.ID, "scope_started", nil)

@@ -110,8 +110,8 @@ type streamEvent struct {
 type assistantEvent struct {
 	Message struct {
 		Content []struct {
-			Type  string                 `json:"type"`
-			Name  string                 `json:"name"`
+			Type  string         `json:"type"`
+			Name  string         `json:"name"`
 			Input map[string]any `json:"input"`
 		} `json:"content"`
 	} `json:"message"`
@@ -237,7 +237,7 @@ func (e *ClaudeCodeExecutor) Run(ctx context.Context, runCfg RunConfig) (*RunRes
 	}
 
 	args := []string{
-		"--output-format", "stream-json",
+		"--output-format", "stream-json", "--verbose",
 		"--dangerously-skip-permissions",
 		promptFlag, runCfg.Prompt,
 		userMsg,

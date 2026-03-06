@@ -61,6 +61,7 @@ type Prompts struct {
 	VerifyAnalyze    string `yaml:"verify_analyze"`
 	VerifySynthesize string `yaml:"verify_synthesize"`
 	Describe         string `yaml:"describe"`
+	Bootstrap        string `yaml:"bootstrap"`
 }
 
 type EmbedModel struct {
@@ -96,6 +97,7 @@ type ClaudeCodeConfig struct {
 
 type Git struct {
 	BranchPrefix      string `yaml:"branch_prefix"`
+	BaseBranch        string `yaml:"base_branch"`
 	CommitAuthorName  string `yaml:"commit_author_name"`
 	CommitAuthorEmail string `yaml:"commit_author_email"`
 }
@@ -152,6 +154,7 @@ func Load(projectPath string) (*ProjectConfig, error) {
 		},
 		Git: Git{
 			BranchPrefix:      "feature/conducted",
+			BaseBranch:        "main",
 			CommitAuthorName:  "Agent Conductor",
 			CommitAuthorEmail: "conductor@local",
 		},

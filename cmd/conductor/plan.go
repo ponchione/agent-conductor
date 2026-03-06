@@ -43,11 +43,9 @@ the work order format the conductor pipeline consumes.`,
 
 		loaded, err := config.Load(projectPath)
 		if err != nil {
-			slog.Debug("no project config loaded, running in greenfield mode", "error", err)
-			cfg = nil
-		} else {
-			cfg = loaded
+			return fmt.Errorf("could not load project config: %w\n  For greenfield projects, use \"conductor init\" instead", err)
 		}
+		cfg = loaded
 		return nil
 	},
 	RunE: runPlan,
@@ -132,13 +130,6 @@ func buildPlanUserMessage(spec string, cfg *config.ProjectConfig) string {
 	sb.WriteString("=== SPECIFICATION ===\n")
 	sb.WriteString(spec)
 	sb.WriteString("\n")
-
-	if cfg == nil {
-		sb.WriteString("\n=== NOTE ===\n")
-		sb.WriteString("No existing project configuration was found. This appears to be a greenfield project.\n")
-		sb.WriteString("Generate work orders based solely on the specification above.\n")
-		return sb.String()
-	}
 
 	sb.WriteString("\n=== PROJECT CONTEXT ===\n")
 

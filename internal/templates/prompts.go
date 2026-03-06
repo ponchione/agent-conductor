@@ -125,12 +125,115 @@ CONSTRAINTS:
 - If directives.reference_module_note is present, follow its guidance.
 `
 
+// DefaultInitPrompt is the system prompt for the init command.
+// It instructs Claude to derive a project config and bootstrap work order from a spec.
+const DefaultInitPrompt = `
+You are a senior software architect analyzing a feature specification to
+produce a project configuration and a bootstrap work order for an AI coding
+agent pipeline.
+
+Return a single JSON object (no markdown, no extra text) matching this schema:
+
+{
+  "project_config": {
+    "project_name": "my-project",
+    "project_language": "python",
+    "project_framework": "fastapi",
+    "index_include": ["**/*.py", "**/*.yaml", "**/*.toml"],
+    "index_exclude": ["**/__pycache__/**", "**/*.pyc", "**/.venv/**", "**/dist/**"],
+    "module_path": "src/myproject",
+    "module_structure": ["src/myproject/api", "src/myproject/models", "tests"],
+    "shared_path": "src/myproject/common",
+    "sql_path": "sql/"
+  },
+  "bootstrap": {
+    "title": "Bootstrap project skeleton",
+    "type": "bootstrap",
+    "target_module": ".",
+    "reference_module": "",
+    "known_files": [],
+    "acceptance_criteria": ["list of verifiable assertions"],
+    "constraints": ["list of things to avoid"]
+  }
+}
+
+PROJECT_CONFIG RULES:
+- project_name: lowercase, hyphenated name derived from the spec.
+- project_language: the primary language (python, go, typescript, rust, etc.).
+- project_framework: the primary framework if any (fastapi, gin, next, etc.), or empty string.
+- index_include: glob patterns for files the pipeline should index. Use **/ prefix.
+  Include source files, config files (yaml, toml, json), and Dockerfile if present.
+- index_exclude: glob patterns to skip. Always use **/ prefix.
+  Include language-specific build artifacts, virtual environments, caches, and data dirs.
+- module_path: the root source directory (e.g. "src/myproject", "internal", "cmd").
+- module_structure: list of directories that form the project's package structure.
+- shared_path: shared/common utilities directory if applicable, empty string if none.
+- sql_path: SQL files directory if applicable, empty string if none.
+
+The project_config will be used to produce this YAML structure:
+
+  project:
+    name: "{project_name}"
+    path: "/path/to/your/project"
+    language: "{project_language}"
+    framework: "{project_framework}"
+  index:
+    include: {index_include}
+    exclude: {index_exclude}
+    max_rag_results: 30
+    max_tree_lines: 200
+    auto_reindex: true
+  conventions:
+    module_path: "{module_path}"
+    module_structure: {module_structure}
+    shared_path: "{shared_path}"
+    sql_path: "{sql_path}"
+  prompts:
+    scope: templates/scope-prompt.md
+    verify: templates/verify-prompt.md
+    build: templates/build-prompt.md
+  executor:
+    tool: claude-code
+    timeout_minutes: 30
+  safety:
+    max_files_changed: 50
+    max_duration_mins: 60
+  guardrails:
+    max_investigation_targets: 6
+    max_sub_calls_total: 12
+    phase_timeout_seconds: 300
+    max_cost_per_phase_usd: 0.50
+    warn_cost_per_phase_usd: 0.10
+
+BOOTSTRAP WORK ORDER RULES:
+- type MUST be "bootstrap".
+- known_files MUST be empty. Acceptance criteria define what to create, not known_files.
+- acceptance_criteria MUST include creation of:
+  templates/scope-prompt.md, templates/verify-prompt.md, templates/build-prompt.md
+  These are conductor pipeline prompt templates that future work orders depend on.
+- acceptance_criteria should also include project scaffolding: dependency manifest,
+  entry point, config, Dockerfile if applicable, and .gitignore.
+- Derive language-appropriate build/test commands for acceptance criteria:
+  Python: "poetry install succeeds", "poetry run pytest passes"
+  Go: "go build ./... passes", "go vet ./... passes"
+  TypeScript: "npm install succeeds", "npm run build passes"
+  Rust: "cargo build passes", "cargo test passes"
+- Each criterion must be objectively verifiable (not subjective like "clean code").
+- constraints should list things to avoid (e.g. "No new external dependencies beyond X").
+
+Respond ONLY with the JSON object. No markdown fences, no commentary.
+`
+
 // DefaultPlanPrompt is the system prompt for the plan command.
 // It instructs Claude to decompose a specification into work orders.
 // Not wired into LoadPrompts — used as a standalone constant by the plan command.
 const DefaultPlanPrompt = `
 You are a senior software architect decomposing a feature specification into
 discrete, ordered work orders for an AI coding agent pipeline.
+
+You will be given the specification along with PROJECT CONTEXT that describes the
+existing project (language, conventions, file tree). Use this context to produce
+accurate, grounded work orders.
 
 Return a single JSON object (no markdown, no extra text) matching this schema:
 
@@ -162,13 +265,17 @@ DEPENDENCY ORDERING:
 
 ACCEPTANCE CRITERIA STANDARDS:
 - Each criterion must be objectively verifiable (not subjective like "clean code").
-- Always include "make build passes with no errors" and "go vet ./... passes".
+- Derive language-appropriate build/test commands from the project context:
+  Python: "poetry install succeeds", "poetry run pytest passes" (or pip equivalent)
+  Go: "go build ./... passes", "go vet ./... passes", "go test ./... passes"
+  TypeScript: "npm install succeeds", "npm run build passes", "npm test passes"
+  Rust: "cargo build passes", "cargo test passes"
 - Describe observable behavior, not implementation details.
 - Include negative criteria where relevant ("X does NOT happen when Y").
 
 CONSTRAINT STANDARDS:
 - Name specific files that must NOT be modified (e.g. "Do NOT modify cmd/root.go").
-- Name specific packages that must NOT be imported (e.g. "Do NOT import internal/rag").
+- Name specific packages that must NOT be imported.
 - Include "No new external dependencies" when applicable.
 - Include build/test commands that must keep passing.
 
@@ -199,6 +306,9 @@ var defaultVerifyAnalyze string
 //go:embed defaults/verify_synthesize.md
 var defaultVerifySynthesize string
 
+//go:embed defaults/bootstrap.md
+var defaultBootstrap string
+
 // LoadedPrompts holds the resolved prompt strings for all pipeline phases.
 type LoadedPrompts struct {
 	// Existing (backward-compatible)
@@ -214,6 +324,7 @@ type LoadedPrompts struct {
 	VerifyAnalyze    string
 	VerifySynthesize string
 	Describe         string
+	Bootstrap        string
 }
 
 // LoadPrompts resolves each prompt from disk (if configured) or falls back to the compiled defaults.
@@ -271,6 +382,24 @@ func LoadPrompts(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
 		VerifyAnalyze:    verifyAnalyze,
 		VerifySynthesize: verifySynthesize,
 		Describe:         describe,
+	}, nil
+}
+
+// LoadPromptsForBootstrap loads only the prompts needed for bootstrap work orders.
+// Scope prompts are left empty (bootstrap skips the scope LLM). Build is resolved
+// through the normal 3-tier mechanism. Verify and describe use compiled defaults.
+func LoadPromptsForBootstrap(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
+	bootstrap, err := loadPrompt(cfg.Project.Path, "bootstrap", cfg.Prompts.Bootstrap, defaultBootstrap)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap prompt: %w", err)
+	}
+
+	return &LoadedPrompts{
+		Build:            bootstrap,
+		Bootstrap:        bootstrap,
+		VerifyAnalyze:    defaultVerifyAnalyze,
+		VerifySynthesize: defaultVerifySynthesize,
+		Describe:         defaultDescribe,
 	}, nil
 }
 
