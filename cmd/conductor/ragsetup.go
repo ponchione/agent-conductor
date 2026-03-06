@@ -22,6 +22,12 @@ func buildRAGStack(ctx context.Context, cfg *config.ProjectConfig) (*rag.Store, 
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	success := false
+	defer func() {
+		if !success {
+			store.Close()
+		}
+	}()
 
 	embedder := rag.NewEmbedder(rag.EmbedderConfig{
 		Endpoint:       cfg.EmbedModel.Endpoint,
@@ -48,5 +54,6 @@ func buildRAGStack(ctx context.Context, cfg *config.ProjectConfig) (*rag.Store, 
 	}
 	describer := rag.NewDescriber(&llm.RAGCompleterAdapter{Client: describeClient}, prompts.Describe)
 
+	success = true
 	return store, embedder, describer, nil
 }

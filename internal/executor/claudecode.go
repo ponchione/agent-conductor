@@ -67,6 +67,7 @@ func openLogs(logDir string) (stdoutPath, stderrPath string, stdoutFile, stderrF
 	stderrFile, err = os.Create(stderrPath)
 	if err != nil {
 		stdoutFile.Close()
+		os.Remove(stdoutFile.Name())
 		return "", "", nil, nil, fmt.Errorf("failed to create stderr log: %w", err)
 	}
 
@@ -254,6 +255,18 @@ func (e *ClaudeCodeExecutor) Run(ctx context.Context, runCfg RunConfig) (*RunRes
 	cmd.Dir = runCfg.RepoPath
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderrFile)
 	cmd.Env = os.Environ()
+	if e.cfg.Git.CommitAuthorName != "" {
+		cmd.Env = append(cmd.Env,
+			"GIT_AUTHOR_NAME="+e.cfg.Git.CommitAuthorName,
+			"GIT_COMMITTER_NAME="+e.cfg.Git.CommitAuthorName,
+		)
+	}
+	if e.cfg.Git.CommitAuthorEmail != "" {
+		cmd.Env = append(cmd.Env,
+			"GIT_AUTHOR_EMAIL="+e.cfg.Git.CommitAuthorEmail,
+			"GIT_COMMITTER_EMAIL="+e.cfg.Git.CommitAuthorEmail,
+		)
+	}
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {

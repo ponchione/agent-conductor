@@ -302,7 +302,11 @@ func (a *Assembler) readFileContents(refs []models.FileRef) []models.FileWithCon
 			break
 		}
 
-		absPath := filepath.Join(a.cfg.Project.Path, ref.Path)
+		absPath, err := util.SafePath(a.cfg.Project.Path, ref.Path)
+		if err != nil {
+			slog.Warn("skipping file with unsafe path", "path", ref.Path, "error", err)
+			continue
+		}
 		remaining := totalCap - totalBytes
 		cap := min(perFileCap, remaining)
 
@@ -369,7 +373,7 @@ func (a *Assembler) buildFileTree() (string, int) {
 
 	cap := a.cfg.Index.MaxTreeLines
 	if cap <= 0 {
-		cap = 200
+		cap = defaultMaxTreeLines
 	}
 
 	var sb strings.Builder
@@ -456,13 +460,22 @@ func (a *Assembler) GatherForTarget(ctx context.Context, wo *models.WorkOrder, t
 	}, nil
 }
 
-// maxTargetBytes caps total file content read per target to avoid unbounded memory.
-const maxTargetBytes = 512 * 1024 // 512 KiB
+const (
+	// maxTargetBytes caps total file content read per target to avoid unbounded memory.
+	maxTargetBytes = 512 * 1024 // 512 KiB
+
+	// defaultMaxTreeLines is the fallback for Index.MaxTreeLines when not configured.
+	defaultMaxTreeLines = 200
+)
 
 // readTargetFiles walks the target directory and returns file paths with content,
 // filtered by the project's include/exclude globs.
 func (a *Assembler) readTargetFiles(targetPath string) []FileContent {
-	root := filepath.Join(a.cfg.Project.Path, targetPath)
+	root, err := util.SafePath(a.cfg.Project.Path, targetPath)
+	if err != nil {
+		slog.Warn("target path escapes project root", "path", targetPath, "error", err)
+		return nil
+	}
 	if _, err := os.Stat(root); err != nil {
 		slog.Warn("target path not accessible", "path", root, "error", err)
 		return nil

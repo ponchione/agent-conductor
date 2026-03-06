@@ -33,6 +33,24 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "context package path is missing")
 	}
 
+	// Create and checkout the feature branch before running the executor.
+	exists, err := w.git.BranchExists(w.cfg.Project.Path, wf.GitBranch)
+	if err != nil {
+		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID,
+			"failed to check branch %s: %w", wf.GitBranch, err)
+	}
+	if !exists {
+		if err := w.git.CreateBranch(w.cfg.Project.Path, wf.GitBranch, w.cfg.Git.BaseBranch); err != nil {
+			return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID,
+				"failed to create branch %s: %w", wf.GitBranch, err)
+		}
+	}
+	if err := w.git.CheckoutBranch(w.cfg.Project.Path, wf.GitBranch); err != nil {
+		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID,
+			"failed to checkout branch %s: %w", wf.GitBranch, err)
+	}
+	slog.Info("Branch ready", "branch", wf.GitBranch, "base", w.cfg.Git.BaseBranch)
+
 	workOrderPath := wf.OriginalFile
 
 	prompt := w.prompts.Build
@@ -72,23 +90,29 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 
 	if len(w.cfg.Safety.ForbiddenPaths) > 0 {
 		if changedFilesErr != nil {
-			slog.Warn("Could not enumerate changed files for forbidden path check", "error", changedFilesErr)
-		} else {
-			for _, changed := range changedFiles {
-				for _, forbidden := range w.cfg.Safety.ForbiddenPaths {
-					if strings.EqualFold(changed, forbidden) || strings.HasSuffix(changed, "/"+forbidden) {
-						return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "forbidden path violation: build agent modified %q which is listed in safety.forbidden_paths", changed)
-					}
+			return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID,
+				"cannot verify forbidden paths: git changed files failed: %w", changedFilesErr)
+		}
+		for _, changed := range changedFiles {
+			cleanChanged := filepath.Clean(changed)
+			for _, forbidden := range w.cfg.Safety.ForbiddenPaths {
+				cleanForbidden := filepath.Clean(forbidden)
+				if cleanChanged == cleanForbidden || strings.HasPrefix(cleanChanged, cleanForbidden+"/") {
+					return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "forbidden path violation: build agent modified %q which is listed in safety.forbidden_paths", changed)
 				}
 			}
 		}
 	}
 
+	// Intentionally non-transactional: state update and metrics are written
+	// separately. If the state update fails we return fatal; metric writes
+	// are best-effort and logged on failure.
 	if err := w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
 		ID:           task.WorkflowID,
 		CurrentState: "build_complete",
 	}); err != nil {
-		slog.Error("Failed to update workflow state to build_complete", "workflow", task.WorkflowID, "error", err)
+		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID,
+			"failed to update workflow state to build_complete: %w", err)
 	}
 
 	w.db.LogEvent(task.WorkflowID, task.ID, "build_completed", map[string]any{

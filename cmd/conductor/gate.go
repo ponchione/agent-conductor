@@ -110,6 +110,7 @@ An optional reason can be provided as the second argument.`,
 	},
 }
 
+// archiveWorkOrder is fire-and-forget; errors are logged, not returned.
 func archiveWorkOrder(ctx stdctx.Context, db *database.DB, workflowID, dataDir string) {
 	wf, err := db.GetWorkflow(ctx, workflowID)
 	if err != nil {

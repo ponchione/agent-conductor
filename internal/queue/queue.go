@@ -13,6 +13,14 @@ import (
 	pipelineerrors "github.com/ponchione/agent-conductor/internal/errors"
 )
 
+// Workflow state constants.
+const (
+	StatePaused       = "paused"
+	StateReviewNeeded = "review_needed"
+	StateCompleted    = "completed"
+	StateFailed       = "failed"
+)
+
 var (
 	ErrNoTasks        = goerrors.New("no tasks available")
 	ErrWorkflowPaused = goerrors.New("workflow is paused")
@@ -55,8 +63,8 @@ func (q *Queue) ClaimNextTask(workerID string) (*database.Task, error) {
 		return nil, err
 	}
 
-	if wf.CurrentState == "paused" || wf.CurrentState == "review_needed" ||
-		wf.CurrentState == "completed" || wf.CurrentState == "failed" {
+	if wf.CurrentState == StatePaused || wf.CurrentState == StateReviewNeeded ||
+		wf.CurrentState == StateCompleted || wf.CurrentState == StateFailed {
 		q.ReleaseTask(task.ID)
 		return nil, ErrWorkflowPaused
 	}
@@ -75,7 +83,10 @@ func (q *Queue) ReleaseTask(taskID string) error {
 }
 
 func (q *Queue) CompleteTask(taskID string, result *TaskResult) error {
-	filesJson, _ := json.Marshal(result.FilesChanged)
+	filesJson, err := json.Marshal(result.FilesChanged)
+	if err != nil {
+		slog.Error("failed to marshal files changed", "error", err)
+	}
 
 	params := database.CompleteTaskParams{
 		ID:           taskID,

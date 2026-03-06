@@ -1,6 +1,9 @@
 package pipelineerrors
 
-import "fmt"
+import (
+	"fmt"
+	"log/slog"
+)
 
 // Class categorises a pipeline error so the dispatch loop can branch on it.
 type Class int
@@ -40,6 +43,19 @@ func (e *PipelineError) Error() string {
 
 func (e *PipelineError) Unwrap() error {
 	return e.Err
+}
+
+// LogValue implements slog.LogValuer so structured loggers render the error
+// message instead of serializing the struct (which loses the Err field
+// because encoding/json cannot marshal the error interface).
+func (e *PipelineError) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("phase", e.Phase),
+		slog.String("workflow_id", e.WorkflowID),
+		slog.String("task_id", e.TaskID),
+		slog.String("class", e.Class.String()),
+		slog.String("message", e.Err.Error()),
+	)
 }
 
 // Retryablef creates a Retryable PipelineError.

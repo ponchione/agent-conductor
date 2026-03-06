@@ -35,6 +35,7 @@ type criterionPreCheck struct {
 	notes     string
 }
 
+// TODO: refactor to use structured pre-check config instead of string matching
 func (w *Worker) runPreChecks(ctx context.Context, criteria []string) []criterionPreCheck {
 	var results []criterionPreCheck
 	for _, c := range criteria {
@@ -274,7 +275,10 @@ func writeVerifyReport(report *models.VerificationReport, dataDir, workflowID st
 		return "", fmt.Errorf("failed to create verify-reports dir: %w", err)
 	}
 	reportPath := filepath.Join(reportDir, workflowID+"-verify-report.json")
-	reportData, _ := json.MarshalIndent(report, "", "  ")
+	reportData, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal verification report: %w", err)
+	}
 	if err := os.WriteFile(reportPath, reportData, 0644); err != nil {
 		return "", fmt.Errorf("failed to write verification report: %w", err)
 	}

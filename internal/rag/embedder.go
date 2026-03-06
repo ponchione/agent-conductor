@@ -160,7 +160,7 @@ func (e *Embedder) post(ctx context.Context, input any) (*embeddingResponse, err
 
 	if resp.StatusCode != http.StatusOK {
 		var body json.RawMessage
-		json.NewDecoder(resp.Body).Decode(&body)
+		_ = json.NewDecoder(resp.Body).Decode(&body) // best-effort body read for error message
 		return nil, fmt.Errorf("api returned status %d: %s", resp.StatusCode, string(body))
 	}
 

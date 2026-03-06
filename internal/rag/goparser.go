@@ -177,6 +177,10 @@ func (p *GoASTParser) parseFuncDecl(
 	startOff := p.fset.Position(decl.Pos()).Offset
 	endOff := min(p.fset.Position(decl.End()).Offset, len(content))
 
+	if startOff < 0 || startOff > endOff || endOff > len(content) {
+		return nil
+	}
+
 	body := string(content[startOff:endOff])
 
 	var sig string
@@ -333,6 +337,10 @@ func (p *GoASTParser) parseGenDecl(
 
 		startOff := p.fset.Position(startNode.Pos()).Offset
 		endOff := min(p.fset.Position(startNode.End()).Offset, len(content))
+
+		if startOff < 0 || startOff > endOff || endOff > len(content) {
+			continue
+		}
 
 		body := string(content[startOff:endOff])
 

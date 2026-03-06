@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -112,8 +113,10 @@ func (s *Store) UpsertChunks(ctx context.Context, chunks []Chunk, embeddings [][
 	}
 
 	for _, c := range chunks {
-		filter := fmt.Sprintf("id = '%s'", c.ID)
-		_ = s.table.Delete(ctx, filter)
+		filter := fmt.Sprintf("id = '%s'", escapeLanceFilter(c.ID))
+		if err := s.table.Delete(ctx, filter); err != nil {
+			slog.Warn("failed to delete chunk before upsert", "id", c.ID, "error", err)
+		}
 	}
 
 	record, err := s.chunksToRecord(chunks, embeddings)
@@ -131,7 +134,7 @@ func (s *Store) UpsertChunks(ctx context.Context, chunks []Chunk, embeddings [][
 
 // DeleteByFilePath removes all chunks for the given repo-relative file path.
 func (s *Store) DeleteByFilePath(ctx context.Context, filePath string) error {
-	filter := fmt.Sprintf("file_path = '%s'", filePath)
+	filter := fmt.Sprintf("file_path = '%s'", escapeLanceFilter(filePath))
 	if err := s.table.Delete(ctx, filter); err != nil {
 		return fmt.Errorf("failed to delete chunks for %s: %w", filePath, err)
 	}
@@ -170,7 +173,7 @@ func (s *Store) VectorSearch(ctx context.Context, queryVec []float32, topK int, 
 // ChunksByFilePath returns all stored chunks for a given file path.
 // Used by the indexer for change detection (comparing content hashes).
 func (s *Store) ChunksByFilePath(ctx context.Context, filePath string) ([]Chunk, error) {
-	filter := fmt.Sprintf("file_path = '%s'", filePath)
+	filter := fmt.Sprintf("file_path = '%s'", escapeLanceFilter(filePath))
 	rows, err := s.table.SelectWithFilter(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to select chunks for %s: %w", filePath, err)
@@ -187,7 +190,7 @@ func (s *Store) ChunksByFilePath(ctx context.Context, filePath string) ([]Chunk,
 // ChunksByName returns all stored chunks matching the given name field.
 // Used by the searcher for one-hop dependency expansion via the call graph.
 func (s *Store) ChunksByName(ctx context.Context, name string) ([]Chunk, error) {
-	filter := fmt.Sprintf("name = '%s'", name)
+	filter := fmt.Sprintf("name = '%s'", escapeLanceFilter(name))
 	rows, err := s.table.SelectWithFilter(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to select chunks by name %s: %w", name, err)
@@ -312,13 +315,13 @@ func buildFilterString(filters []Filter) string {
 	var parts []string
 	for _, f := range filters {
 		if f.Language != "" {
-			parts = append(parts, fmt.Sprintf("language = '%s'", f.Language))
+			parts = append(parts, fmt.Sprintf("language = '%s'", escapeLanceFilter(f.Language)))
 		}
 		if f.ChunkType != "" {
-			parts = append(parts, fmt.Sprintf("chunk_type = '%s'", f.ChunkType))
+			parts = append(parts, fmt.Sprintf("chunk_type = '%s'", escapeLanceFilter(f.ChunkType)))
 		}
 		if f.FilePath != "" {
-			parts = append(parts, fmt.Sprintf("file_path LIKE '%s%%'", f.FilePath))
+			parts = append(parts, fmt.Sprintf("file_path LIKE '%s%%'", escapeLanceFilter(f.FilePath)))
 		}
 	}
 
@@ -422,6 +425,11 @@ func (s *Store) DropAndRecreateTable(ctx context.Context) error {
 	}
 	s.table = table
 	return nil
+}
+
+// escapeLanceFilter escapes single quotes in a string for use in LanceDB SQL-like filters.
+func escapeLanceFilter(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
 }
 
 // marshalJSON encodes a value as a JSON string. Returns "[]" for nil slices.

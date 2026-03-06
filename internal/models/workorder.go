@@ -22,6 +22,12 @@ var validWorkOrderTypes = map[string]bool{
 }
 
 func (wo *WorkOrder) Validate() error {
+	if wo.Title == "" {
+		return fmt.Errorf("work order title is required")
+	}
+	if wo.TargetModule == "" {
+		return fmt.Errorf("work order target_module is required")
+	}
 	if !validWorkOrderTypes[wo.Type] {
 		return fmt.Errorf("invalid work order type %q: must be one of new_feature, bug_fix, refactor, schema_change, docs, bootstrap", wo.Type)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 )
 
 // AtomicClaimTask handles the transaction for finding and claiming a task
@@ -48,7 +49,11 @@ func (db *DB) AtomicClaimTask(ctx context.Context, workerID string) (*Task, erro
 func (db *DB) LogEvent(workflowID, taskID, eventType string, data map[string]any) error {
 	var dataJson []byte
 	if data != nil {
-		dataJson, _ = json.Marshal(data)
+		var err error
+		dataJson, err = json.Marshal(data)
+		if err != nil {
+			slog.Warn("failed to marshal event data", "event_type", eventType, "error", err)
+		}
 	}
 
 	tID := sql.NullString{String: taskID, Valid: taskID != ""}

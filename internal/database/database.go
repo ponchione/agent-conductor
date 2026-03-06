@@ -22,8 +22,16 @@ func NewDB(dsn string) (*DB, error) {
 	}
 
 	if err := conn.Ping(); err != nil {
+		conn.Close()
 		return nil, err
 	}
+
+	success := false
+	defer func() {
+		if !success {
+			conn.Close()
+		}
+	}()
 
 	if _, err := conn.Exec("PRAGMA foreign_keys = ON;"); err != nil {
 		return nil, err
@@ -47,6 +55,7 @@ func NewDB(dsn string) (*DB, error) {
 		}
 	}
 
+	success = true
 	return &DB{
 		Queries: New(conn),
 		conn:    conn,

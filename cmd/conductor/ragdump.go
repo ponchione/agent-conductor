@@ -150,8 +150,7 @@ func dumpFile(ctx context.Context, store *rag.Store, filePath string) error {
 		}
 		fmt.Fprintf(w, "  L%d-%d\t%s\t%s\t%q\n", c.LineStart, c.LineEnd, c.ChunkType, c.Name, desc)
 	}
-	w.Flush()
-	return nil
+	return w.Flush()
 }
 
 func dumpName(ctx context.Context, store *rag.Store, name string) error {
@@ -207,7 +206,7 @@ func printSortedCounts(m map[string]int) {
 	for _, e := range entries {
 		fmt.Fprintf(w, "  %s\t%d\n", e.key, e.count)
 	}
-	w.Flush()
+	_ = w.Flush() // best-effort stdout
 }
 
 func printTopFiles(m map[string]int, limit int) {
@@ -225,5 +224,5 @@ func printTopFiles(m map[string]int, limit int) {
 	for _, e := range entries {
 		fmt.Fprintf(w, "  %s\t%d\n", e.key, e.count)
 	}
-	w.Flush()
+	_ = w.Flush() // best-effort stdout
 }

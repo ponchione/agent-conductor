@@ -58,7 +58,9 @@ Default shows the last 10. Use --all to show all.`,
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", id, wf.CurrentState, wf.GitBranch, created)
 		}
-		w.Flush()
+		if err := w.Flush(); err != nil {
+			return fmt.Errorf("flush output: %w", err)
+		}
 		return nil
 	},
 }

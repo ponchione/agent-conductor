@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 	"path/filepath"
 
 	"github.com/ponchione/agent-conductor/internal/database"
@@ -114,7 +114,7 @@ var statsCmd = &cobra.Command{
 		// --- VERIFY vs HUMAN AGREEMENT ---
 		agreementRows, err := db.GetVerifyHumanAgreement(ctx)
 		if err != nil {
-			log.Printf("warning: failed to fetch agreement data: %v", err)
+			slog.Warn("failed to fetch agreement data", "error", err)
 		} else {
 			printAgreementSection(agreementRows)
 		}
@@ -122,7 +122,7 @@ var statsCmd = &cobra.Command{
 		// --- BY WORK ORDER TYPE ---
 		typeRows, err := db.GetStatsByWorkOrderType(ctx)
 		if err != nil {
-			log.Printf("warning: failed to fetch work order type stats: %v", err)
+			slog.Warn("failed to fetch work order type stats", "error", err)
 		} else {
 			printTypeBreakdownSection(typeRows)
 		}
@@ -130,7 +130,7 @@ var statsCmd = &cobra.Command{
 		// --- SCOPE QUALITY ---
 		sqStats, err := db.GetScopeQualityStats(ctx)
 		if err != nil {
-			log.Printf("warning: failed to fetch scope quality stats: %v", err)
+			slog.Warn("failed to fetch scope quality stats", "error", err)
 		} else {
 			printScopeQualitySection(sqStats)
 		}
@@ -239,7 +239,7 @@ func printScopeQualitySection(s database.GetScopeQualityStatsRow) {
 func printSubCallSummary(ctx context.Context, db *database.DB) {
 	providerRows, err := db.GetSubCallGlobalStatsByProvider(ctx)
 	if err != nil {
-		log.Printf("warning: failed to fetch sub-call provider stats: %v", err)
+		slog.Warn("failed to fetch sub-call provider stats", "error", err)
 		return
 	}
 	if len(providerRows) == 0 {
@@ -268,7 +268,7 @@ func printSubCallSummary(ctx context.Context, db *database.DB) {
 
 	phaseRows, err := db.GetSubCallPhaseAverages(ctx)
 	if err != nil {
-		log.Printf("warning: failed to fetch sub-call phase averages: %v", err)
+		slog.Warn("failed to fetch sub-call phase averages", "error", err)
 	} else if len(phaseRows) > 0 {
 		fmt.Printf("\nAvg sub-calls:   ")
 		for i, r := range phaseRows {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
 	"github.com/ponchione/agent-conductor/internal/scope"
+	"github.com/ponchione/agent-conductor/internal/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,6 +28,7 @@ type scopeValidationResult struct {
 	reclassifiedPaths []string
 	pathsChecked      int
 	thresholdExceeded bool
+	err               error
 }
 
 // validateScopeOutput checks every path in the ContextPackage against the
@@ -36,28 +39,46 @@ func validateScopeOutput(repoRoot string, pkg *models.ContextPackage) *scopeVali
 	result := &scopeValidationResult{pkg: pkg}
 
 	// Filter existing-file arrays: FilesToModify, FilesToReference, SQLFiles.
-	filterFileRefs := func(refs []models.FileRef, source string) []models.FileRef {
+	filterFileRefs := func(refs []models.FileRef, source string) ([]models.FileRef, error) {
 		result.pathsChecked += len(refs)
 		filtered := make([]models.FileRef, 0, len(refs))
 		for _, ref := range refs {
-			if _, err := os.Stat(filepath.Join(repoRoot, ref.Path)); err != nil {
+			safePath, err := util.SafePath(repoRoot, ref.Path)
+			if err != nil {
+				return nil, fmt.Errorf("path traversal in %s: %q: %w", source, ref.Path, err)
+			}
+			if _, err := os.Stat(safePath); err != nil {
 				result.strippedPaths = append(result.strippedPaths, ref.Path+" ("+source+")")
 				slog.Warn("Scope validation: path does not exist", "path", ref.Path, "source", source)
 				continue
 			}
 			filtered = append(filtered, ref)
 		}
-		return filtered
+		return filtered, nil
 	}
 
-	pkg.FilesToModify = filterFileRefs(pkg.FilesToModify, "files_to_modify")
-	pkg.FilesToReference = filterFileRefs(pkg.FilesToReference, "files_to_reference")
-	pkg.SQLFiles = filterFileRefs(pkg.SQLFiles, "sql_files")
+	var filterErr error
+	pkg.FilesToModify, filterErr = filterFileRefs(pkg.FilesToModify, "files_to_modify")
+	if filterErr != nil {
+		return &scopeValidationResult{pkg: pkg, err: filterErr}
+	}
+	pkg.FilesToReference, filterErr = filterFileRefs(pkg.FilesToReference, "files_to_reference")
+	if filterErr != nil {
+		return &scopeValidationResult{pkg: pkg, err: filterErr}
+	}
+	pkg.SQLFiles, filterErr = filterFileRefs(pkg.SQLFiles, "sql_files")
+	if filterErr != nil {
+		return &scopeValidationResult{pkg: pkg, err: filterErr}
+	}
 
 	// Reclassify NewFiles that already exist on disk into FilesToModify.
 	keptNew := make([]models.NewFile, 0, len(pkg.NewFiles))
 	for _, nf := range pkg.NewFiles {
-		if _, err := os.Stat(filepath.Join(repoRoot, nf.Path)); err == nil {
+		safePath, pathErr := util.SafePath(repoRoot, nf.Path)
+		if pathErr != nil {
+			return &scopeValidationResult{pkg: pkg, err: fmt.Errorf("path traversal in new_files: %q: %w", nf.Path, pathErr)}
+		}
+		if _, err := os.Stat(safePath); err == nil {
 			pkg.FilesToModify = append(pkg.FilesToModify, models.FileRef{
 				Path:   nf.Path,
 				Reason: nf.Purpose,
@@ -106,7 +127,10 @@ func (w *Worker) runBootstrapScope(ctx context.Context, task *database.Task) err
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to create context-packages dir: %w", err)
 	}
 	pkgPath := filepath.Join(pkgDir, task.WorkflowID+"-context-package.json")
-	pkgData, _ := json.MarshalIndent(fullPkg, "", "  ")
+	pkgData, err := json.MarshalIndent(fullPkg, "", "  ")
+	if err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to marshal context package: %w", err)
+	}
 	if err := os.WriteFile(pkgPath, pkgData, 0644); err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to write context package: %w", err)
 	}
@@ -139,7 +163,8 @@ func (w *Worker) runBootstrapScope(ctx context.Context, task *database.Task) err
 		ID:           task.WorkflowID,
 		CurrentState: "scope_complete",
 	}); err != nil {
-		slog.Error("Failed to update workflow state to scope_complete", "workflow", task.WorkflowID, "error", err)
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID,
+			"failed to update workflow state to scope_complete: %w", err)
 	}
 
 	w.db.LogEvent(task.WorkflowID, task.ID, "scope_completed", map[string]any{
@@ -213,6 +238,11 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	// Post-orchestrator path validation.
 	valResult := validateScopeOutput(w.cfg.Project.Path, pkg)
 
+	if valResult.err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID,
+			"scope validation failed: %v", valResult.err)
+	}
+
 	if valResult.thresholdExceeded {
 		return pipelineerrors.Retryablef("scope", task.WorkflowID, task.ID,
 			"scope validation: %d of %d paths do not exist (exceeds %.0f%% threshold)",
@@ -253,7 +283,10 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to create context-packages dir: %w", err)
 	}
 	pkgPath := filepath.Join(pkgDir, task.WorkflowID+"-context-package.json")
-	pkgData, _ := json.MarshalIndent(fullPkg, "", "  ")
+	pkgData, err := json.MarshalIndent(fullPkg, "", "  ")
+	if err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to marshal context package: %w", err)
+	}
 	if err := os.WriteFile(pkgPath, pkgData, 0644); err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to write context package: %w", err)
 	}
@@ -290,7 +323,8 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		ID:           task.WorkflowID,
 		CurrentState: "scope_complete",
 	}); err != nil {
-		slog.Error("Failed to update workflow state to scope_complete", "workflow", task.WorkflowID, "error", err)
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID,
+			"failed to update workflow state to scope_complete: %w", err)
 	}
 
 	w.db.LogEvent(task.WorkflowID, task.ID, "scope_completed", map[string]any{

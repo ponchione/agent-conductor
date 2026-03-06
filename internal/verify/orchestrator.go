@@ -99,7 +99,10 @@ func (o *VerifyOrchestrator) stepAnalyze(
 				AnalysisFailed: true,
 				FailureReason:  err.Error(),
 			}
-			data, _ := json.Marshal(verdict)
+			data, mErr := json.Marshal(verdict)
+			if mErr != nil {
+				slog.Warn("failed to marshal segment verdict", "segment", i, "error", mErr)
+			}
 			rawVerdicts[i] = string(data)
 			continue
 		}

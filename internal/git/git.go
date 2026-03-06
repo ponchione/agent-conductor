@@ -8,6 +8,65 @@ import (
 	gitconfig "github.com/ponchione/agent-conductor/internal/config"
 )
 
+// CreateBranch creates a new branch at the head of baseBranch.
+// Returns an error if the branch already exists.
+func (g *GitManager) CreateBranch(repoPath, branchName, baseBranch string) error {
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("open repo: %w", err)
+	}
+
+	baseRef, err := r.Reference(plumbing.NewBranchReferenceName(baseBranch), true)
+	if err != nil {
+		return fmt.Errorf("resolve base branch %s: %w", baseBranch, err)
+	}
+
+	newRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), baseRef.Hash())
+	if err := r.Storer.SetReference(newRef); err != nil {
+		return fmt.Errorf("create branch %s: %w", branchName, err)
+	}
+
+	return nil
+}
+
+// CheckoutBranch switches the worktree to the named branch.
+func (g *GitManager) CheckoutBranch(repoPath, branchName string) error {
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("open repo: %w", err)
+	}
+
+	wt, err := r.Worktree()
+	if err != nil {
+		return fmt.Errorf("get worktree: %w", err)
+	}
+
+	if err := wt.Checkout(&git.CheckoutOptions{
+		Branch: plumbing.NewBranchReferenceName(branchName),
+	}); err != nil {
+		return fmt.Errorf("checkout %s: %w", branchName, err)
+	}
+
+	return nil
+}
+
+// BranchExists reports whether a local branch reference exists.
+func (g *GitManager) BranchExists(repoPath, branchName string) (bool, error) {
+	r, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return false, fmt.Errorf("open repo: %w", err)
+	}
+
+	_, err = r.Reference(plumbing.NewBranchReferenceName(branchName), true)
+	if err == plumbing.ErrReferenceNotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check branch %s: %w", branchName, err)
+	}
+	return true, nil
+}
+
 // MergeBranch fast-forward merges target into base within the given repo.
 // Only fast-forward merges are supported; returns an error if branches have diverged.
 func (g *GitManager) MergeBranch(repoPath, base, target string) error {
