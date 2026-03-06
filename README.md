@@ -78,6 +78,28 @@ The planner receives the project's file tree and conventions, producing work ord
 
 For greenfield projects, omit `--project`. The planner operates from the spec alone. If the plan command can't parse Claude's response on the first try, it retries with the parse error as correction feedback.
 
+### Audit Pass
+
+After generation, the plan command runs a second LLM pass that audits the work orders against the original spec. The audit checks for completeness, correctness, and proper scoping — it can add missing work orders, modify existing ones, or confirm them unchanged. Each audited work order is tagged with an `audit_source` field (`added`, `modified`, or omitted for unchanged).
+
+```
+Audit: 1 added, 2 modified, 3 unchanged
+  - Added work order for missing database migration
+  - Modified acceptance criteria on API endpoint work order
+```
+
+To skip the audit pass (faster, fewer tokens):
+
+```
+conductor plan spec.md --skip-audit
+```
+
+### Plan Metrics
+
+Each plan run records metrics to the `plan_runs` table: spec file, generation/audit model names, work order counts, audit summary (added/modified/unchanged), and token usage for both the generation and audit calls. These are best-effort — a recording failure does not block the plan command.
+
+### Output
+
 Output is numbered YAML files ready for `conductor run`:
 
 ```
@@ -472,7 +494,7 @@ Results are deduplicated across queries, ranked by hit count then score, and spl
 All project data lives under `~/.conductor/projects/<project-name>/`:
 
 ```
-db/conductor.db                              # SQLite — workflows, tasks, events, pipeline runs, sub-calls
+db/conductor.db                              # SQLite — workflows, tasks, events, pipeline runs, sub-calls, plan runs
 rag/chunks.lance/                            # LanceDB — vector embeddings
 rag_file_hashes.json                         # Change detection for incremental re-indexing
 artifacts/context-packages/<wf-id>-*.json    # Scope phase output
@@ -488,7 +510,7 @@ logs/<task-id>/stderr.log
 cmd/conductor/
   main.go              CLI root, cobra setup
   run.go               Synchronous pipeline execution
-  plan.go              Spec → work order decomposition via Claude Code
+  plan.go              Spec → work order decomposition via Claude Code, with audit pass
   gate.go              Approve/reject with merge, archive, and auto-reindex
   index.go             RAG indexing entry point
   ragdump.go           RAG database inspection (stats, file, name lookup)
@@ -502,7 +524,7 @@ cmd/conductor/
 internal/
   config/              Two-tier config (global + project), provider env var expansion
   context/             Context assembly — PreScope, GatherForTarget, Assemble
-  database/            SQLite via sqlc — workflows, tasks, events, pipeline_runs, sub_calls
+  database/            SQLite via sqlc — workflows, tasks, events, pipeline_runs, sub_calls, plan_runs
   errors/              Classified errors: Retryable, Fatal, NeedsHuman
   executor/            Build executors — ClaudeCodeExecutor, OpenCodeExecutor
   gate/                Human review — approve (merge + archive) / reject

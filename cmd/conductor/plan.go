@@ -15,7 +15,9 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
 	"github.com/ponchione/agent-conductor/internal/config"
+	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/logging"
 	"github.com/ponchione/agent-conductor/internal/models"
@@ -54,11 +56,13 @@ the work order format the conductor pipeline consumes.`,
 var (
 	planOutputDir string
 	planTimeout   int
+	planSkipAudit bool
 )
 
 func init() {
 	planCmd.Flags().StringVar(&planOutputDir, "output", "./work-orders/", "Output directory for generated work order files")
 	planCmd.Flags().IntVar(&planTimeout, "timeout", 300, "Timeout in seconds for the Claude invocation")
+	planCmd.Flags().BoolVar(&planSkipAudit, "skip-audit", false, "Skip the audit pass that reviews generated work orders for completeness")
 }
 
 func runPlan(cmd *cobra.Command, args []string) error {
@@ -78,10 +82,11 @@ func runPlan(cmd *cobra.Command, args []string) error {
 	timeout := time.Duration(planTimeout) * time.Second
 
 	slog.Info("invoking Claude for planning", "timeout", timeout)
-	raw, err := invokeClaude(claudePath, templates.DefaultPlanPrompt, userMsg, timeout)
+	genResult, err := invokeClaudeWithStats(claudePath, templates.DefaultPlanPrompt, userMsg, timeout)
 	if err != nil {
 		return fmt.Errorf("claude invocation failed: %w", err)
 	}
+	raw := genResult.Content
 
 	workOrders, parseErr := parsePlanResponse(raw)
 	if parseErr != nil {
@@ -92,10 +97,17 @@ func runPlan(cmd *cobra.Command, args []string) error {
 			userMsg, parseErr.Error(), raw,
 		)
 
-		raw, err = invokeClaude(claudePath, templates.DefaultPlanPrompt, correctionMsg, timeout)
-		if err != nil {
-			return fmt.Errorf("claude retry invocation failed: %w", err)
+		retryResult, retryErr := invokeClaudeWithStats(claudePath, templates.DefaultPlanPrompt, correctionMsg, timeout)
+		if retryErr != nil {
+			return fmt.Errorf("claude retry invocation failed: %w", retryErr)
 		}
+		// Accumulate tokens from retry into generation totals.
+		genResult.TokensIn += retryResult.TokensIn
+		genResult.TokensOut += retryResult.TokensOut
+		if retryResult.Model != "" {
+			genResult.Model = retryResult.Model
+		}
+		raw = retryResult.Content
 
 		workOrders, parseErr = parsePlanResponse(raw)
 		if parseErr != nil {
@@ -110,6 +122,27 @@ func runPlan(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	var summary *auditSummary
+	var auditResult *invokeClaudeResult
+	if planSkipAudit {
+		slog.Info("skipping audit pass (--skip-audit)")
+	} else {
+		slog.Info("auditing generated work orders", "count", len(workOrders))
+		auditedOrders, auditSummary, auditRes, auditErr := auditWorkOrders(claudePath, string(specData), workOrders, cfg, timeout)
+		if auditErr != nil {
+			slog.Warn("audit pass failed, using unaudited work orders", "error", auditErr)
+		} else {
+			workOrders = auditedOrders
+			summary = auditSummary
+			auditResult = auditRes
+		}
+	}
+
+	// Persist metrics (best-effort).
+	if err := recordPlanRun(cfg, specPath, genResult, auditResult, len(workOrders), summary); err != nil {
+		slog.Warn("failed to record plan run metrics", "error", err)
+	}
+
 	if err := writeWorkOrderFiles(workOrders, planOutputDir); err != nil {
 		return fmt.Errorf("failed to write work order files: %w", err)
 	}
@@ -120,6 +153,54 @@ func runPlan(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 
+	if summary != nil {
+		fmt.Printf("Audit: %d added, %d modified, %d unchanged\n", summary.Added, summary.Modified, summary.Unchanged)
+		for _, change := range summary.Changes {
+			fmt.Printf("  - %s\n", change)
+		}
+		fmt.Println()
+	}
+
+	return nil
+}
+
+// recordPlanRun persists plan metrics to the plan_runs table (best-effort).
+func recordPlanRun(cfg *config.ProjectConfig, specFile string, genResult *invokeClaudeResult, auditResult *invokeClaudeResult, workOrdersGenerated int, summary *auditSummary) error {
+	dbPath := filepath.Join(cfg.Project.DataDir, "db", "conductor.db")
+	db, err := database.NewDB(dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	id := uuid.New().String()
+
+	params := database.InsertPlanRunParams{
+		ID:                  id,
+		SpecFile:            specFile,
+		WorkOrdersGenerated: database.Int64(workOrdersGenerated),
+	}
+	if genResult != nil {
+		params.GenerationModel = database.String(genResult.Model)
+		params.GenerationTokensIn = database.Int64(genResult.TokensIn)
+		params.GenerationTokensOut = database.Int64(genResult.TokensOut)
+	}
+	if auditResult != nil {
+		params.AuditModel = database.String(auditResult.Model)
+		params.AuditTokensIn = database.Int64(auditResult.TokensIn)
+		params.AuditTokensOut = database.Int64(auditResult.TokensOut)
+	}
+	if summary != nil {
+		params.AuditWorkOrdersAdded = database.Int64(summary.Added)
+		params.AuditWorkOrdersModified = database.Int64(summary.Modified)
+		params.AuditWorkOrdersUnchanged = database.Int64(summary.Unchanged)
+	}
+
+	if err := db.InsertPlanRun(context.Background(), params); err != nil {
+		return fmt.Errorf("insert plan_runs: %w", err)
+	}
+
+	slog.Debug("recorded plan run", "id", id)
 	return nil
 }
 
@@ -252,12 +333,46 @@ func planBuildFileTree(cfg *config.ProjectConfig) (string, int) {
 }
 
 // invokeClaude runs the claude binary with --print mode and returns stdout.
+// It delegates to invokeClaudeWithStats and discards token metadata.
 func invokeClaude(claudePath, systemPrompt, userMsg string, timeout time.Duration) (string, error) {
+	result, err := invokeClaudeWithStats(claudePath, systemPrompt, userMsg, timeout)
+	if err != nil {
+		return "", err
+	}
+	return result.Content, nil
+}
+
+// invokeClaudeResult holds the text output and token usage from a Claude invocation.
+type invokeClaudeResult struct {
+	Content   string
+	TokensIn  int
+	TokensOut int
+	Model     string
+}
+
+// planCLIResponse mirrors the JSON envelope from claude --print --output-format json.
+type planCLIResponse struct {
+	Result  string        `json:"result"`
+	IsError bool          `json:"is_error"`
+	Model   string        `json:"model"`
+	Usage   planCLIUsage  `json:"usage"`
+}
+
+type planCLIUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+}
+
+// invokeClaudeWithStats runs the claude binary with --output-format json and returns token usage.
+func invokeClaudeWithStats(claudePath, systemPrompt, userMsg string, timeout time.Duration) (*invokeClaudeResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, claudePath,
 		"--print",
+		"--output-format", "json",
 		"--dangerously-skip-permissions",
 		"--system-prompt", systemPrompt,
 		userMsg,
@@ -269,12 +384,28 @@ func invokeClaude(claudePath, systemPrompt, userMsg string, timeout time.Duratio
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("claude timed out after %s", timeout)
+			return nil, fmt.Errorf("claude timed out after %s", timeout)
 		}
-		return "", fmt.Errorf("claude exited with error: %w\nstderr: %s", err, stderr.String())
+		return nil, fmt.Errorf("claude exited with error: %w\nstderr: %s", err, stderr.String())
 	}
 
-	return stdout.String(), nil
+	var resp planCLIResponse
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		// Fallback: return raw output with zero tokens.
+		slog.Warn("could not parse claude JSON output, token counts unavailable", "error", err)
+		return &invokeClaudeResult{Content: stdout.String()}, nil
+	}
+
+	if resp.IsError {
+		return nil, fmt.Errorf("claude returned error: %s", resp.Result)
+	}
+
+	return &invokeClaudeResult{
+		Content:   resp.Result,
+		TokensIn:  resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens,
+		TokensOut: resp.Usage.OutputTokens,
+		Model:     resp.Model,
+	}, nil
 }
 
 // planWorkOrder is the JSON deserialization type for a single work order from Claude's response.
@@ -292,6 +423,24 @@ type planWorkOrder struct {
 // planResponse is the top-level JSON envelope returned by Claude.
 type planResponse struct {
 	WorkOrders []planWorkOrder `json:"work_orders"`
+}
+
+// auditPlanWorkOrder extends planWorkOrder with the audit_action field.
+type auditPlanWorkOrder struct {
+	planWorkOrder
+	AuditAction string `json:"audit_action"`
+}
+
+type auditSummary struct {
+	Added     int      `json:"added"`
+	Modified  int      `json:"modified"`
+	Unchanged int      `json:"unchanged"`
+	Changes   []string `json:"changes"`
+}
+
+type auditResponse struct {
+	WorkOrders   []auditPlanWorkOrder `json:"work_orders"`
+	AuditSummary auditSummary         `json:"audit_summary"`
 }
 
 // parsePlanResponse extracts and validates work orders from Claude's raw response.
@@ -327,6 +476,86 @@ func parsePlanResponse(raw string) ([]models.WorkOrder, error) {
 	return workOrders, nil
 }
 
+// auditWorkOrders runs a second LLM pass to audit generated work orders against the spec.
+func auditWorkOrders(claudePath string, spec string, workOrders []models.WorkOrder, cfg *config.ProjectConfig, timeout time.Duration) ([]models.WorkOrder, *auditSummary, *invokeClaudeResult, error) {
+	woJSON, err := json.MarshalIndent(workOrders, "", "  ")
+	if err != nil {
+		return workOrders, nil, nil, fmt.Errorf("failed to marshal work orders: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("=== SPECIFICATION ===\n")
+	sb.WriteString(spec)
+	sb.WriteString("\n")
+
+	sb.WriteString("\n=== PROJECT CONTEXT ===\n")
+	if convSection := planBuildConventions(cfg.Conventions); convSection != "" {
+		sb.WriteString("\n=== PROJECT CONVENTIONS ===\n")
+		sb.WriteString(convSection)
+	}
+	treeStr, totalFiles := planBuildFileTree(cfg)
+	sb.WriteString("\n=== PROJECT FILE TREE ===\n")
+	if treeStr != "" {
+		sb.WriteString(treeStr)
+		treeLines := strings.Count(treeStr, "\n")
+		if totalFiles > treeLines {
+			fmt.Fprintf(&sb, "... (%d more files not shown)\n", totalFiles-treeLines)
+		}
+	} else {
+		sb.WriteString("(no matching files)\n")
+	}
+
+	sb.WriteString("\n=== GENERATED WORK ORDERS ===\n")
+	sb.Write(woJSON)
+	sb.WriteString("\n")
+
+	userMsg := sb.String()
+
+	result, err := invokeClaudeWithStats(claudePath, templates.DefaultPlanAuditPrompt, userMsg, timeout)
+	if err != nil {
+		return workOrders, nil, nil, fmt.Errorf("audit invocation failed: %w", err)
+	}
+
+	cleaned := llm.CleanLLMResponse(result.Content)
+	var resp auditResponse
+	if err := json.Unmarshal([]byte(cleaned), &resp); err != nil {
+		slog.Warn("audit response parse failed, using unaudited work orders", "error", err)
+		return workOrders, nil, result, nil
+	}
+
+	if len(resp.WorkOrders) == 0 {
+		slog.Warn("audit response contained no work orders, using unaudited work orders")
+		return workOrders, nil, result, nil
+	}
+
+	audited := make([]models.WorkOrder, len(resp.WorkOrders))
+	for i, aw := range resp.WorkOrders {
+		var auditSource string
+		if aw.AuditAction == "added" || aw.AuditAction == "modified" {
+			auditSource = aw.AuditAction
+		}
+
+		wo := models.WorkOrder{
+			Title:              aw.Title,
+			Type:               aw.Type,
+			TargetModule:       aw.TargetModule,
+			ReferenceModule:    aw.ReferenceModule,
+			KnownFiles:         aw.KnownFiles,
+			AcceptanceCriteria: aw.AcceptanceCriteria,
+			Constraints:        aw.Constraints,
+			AuditSource:        auditSource,
+		}
+		if err := wo.Validate(); err != nil {
+			slog.Warn("audited work order failed validation, using unaudited work orders",
+				"index", i+1, "title", aw.Title, "error", err)
+			return workOrders, nil, result, nil
+		}
+		audited[i] = wo
+	}
+
+	return audited, &resp.AuditSummary, result, nil
+}
+
 // orderedWorkOrder controls YAML field order for output files.
 // The field order matches the canonical work order format:
 // title, type, target_module, reference_module, known_files, acceptance_criteria, constraints.
@@ -338,6 +567,7 @@ type orderedWorkOrder struct {
 	KnownFiles         []string `yaml:"known_files,omitempty"`
 	AcceptanceCriteria []string `yaml:"acceptance_criteria,omitempty"`
 	Constraints        []string `yaml:"constraints,omitempty"`
+	AuditSource        string   `yaml:"audit_source,omitempty"`
 }
 
 // writeWorkOrderFiles writes each work order to a numbered YAML file.
@@ -355,6 +585,7 @@ func writeWorkOrderFiles(workOrders []models.WorkOrder, outputDir string) error 
 			KnownFiles:         wo.KnownFiles,
 			AcceptanceCriteria: wo.AcceptanceCriteria,
 			Constraints:        wo.Constraints,
+			AuditSource:        wo.AuditSource,
 		}
 
 		data, err := yaml.Marshal(ordered)

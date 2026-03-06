@@ -733,6 +733,49 @@ func (q *Queries) GetWorkflow(ctx context.Context, id string) (Workflow, error) 
 	return i, err
 }
 
+const insertPlanRun = `-- name: InsertPlanRun :exec
+INSERT INTO plan_runs (
+    id, spec_file, generation_model, audit_model,
+    work_orders_generated,
+    audit_work_orders_added, audit_work_orders_modified, audit_work_orders_unchanged,
+    generation_tokens_in, generation_tokens_out,
+    audit_tokens_in, audit_tokens_out
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertPlanRunParams struct {
+	ID                       string         `json:"id"`
+	SpecFile                 string         `json:"spec_file"`
+	GenerationModel          sql.NullString `json:"generation_model"`
+	AuditModel               sql.NullString `json:"audit_model"`
+	WorkOrdersGenerated      sql.NullInt64  `json:"work_orders_generated"`
+	AuditWorkOrdersAdded     sql.NullInt64  `json:"audit_work_orders_added"`
+	AuditWorkOrdersModified  sql.NullInt64  `json:"audit_work_orders_modified"`
+	AuditWorkOrdersUnchanged sql.NullInt64  `json:"audit_work_orders_unchanged"`
+	GenerationTokensIn       sql.NullInt64  `json:"generation_tokens_in"`
+	GenerationTokensOut      sql.NullInt64  `json:"generation_tokens_out"`
+	AuditTokensIn            sql.NullInt64  `json:"audit_tokens_in"`
+	AuditTokensOut           sql.NullInt64  `json:"audit_tokens_out"`
+}
+
+func (q *Queries) InsertPlanRun(ctx context.Context, arg InsertPlanRunParams) error {
+	_, err := q.db.ExecContext(ctx, insertPlanRun,
+		arg.ID,
+		arg.SpecFile,
+		arg.GenerationModel,
+		arg.AuditModel,
+		arg.WorkOrdersGenerated,
+		arg.AuditWorkOrdersAdded,
+		arg.AuditWorkOrdersModified,
+		arg.AuditWorkOrdersUnchanged,
+		arg.GenerationTokensIn,
+		arg.GenerationTokensOut,
+		arg.AuditTokensIn,
+		arg.AuditTokensOut,
+	)
+	return err
+}
+
 const insertSubCall = `-- name: InsertSubCall :exec
 INSERT INTO sub_calls (
     pipeline_run_id, phase, step, target_path,

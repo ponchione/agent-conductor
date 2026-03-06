@@ -55,6 +55,22 @@ type PipelineRun struct {
 	UpdatedAt                string          `json:"updated_at"`
 }
 
+type PlanRun struct {
+	ID                       string         `json:"id"`
+	SpecFile                 string         `json:"spec_file"`
+	GenerationModel          sql.NullString `json:"generation_model"`
+	AuditModel               sql.NullString `json:"audit_model"`
+	WorkOrdersGenerated      sql.NullInt64  `json:"work_orders_generated"`
+	AuditWorkOrdersAdded     sql.NullInt64  `json:"audit_work_orders_added"`
+	AuditWorkOrdersModified  sql.NullInt64  `json:"audit_work_orders_modified"`
+	AuditWorkOrdersUnchanged sql.NullInt64  `json:"audit_work_orders_unchanged"`
+	AuditTokensIn            sql.NullInt64  `json:"audit_tokens_in"`
+	AuditTokensOut           sql.NullInt64  `json:"audit_tokens_out"`
+	GenerationTokensIn       sql.NullInt64  `json:"generation_tokens_in"`
+	GenerationTokensOut      sql.NullInt64  `json:"generation_tokens_out"`
+	CreatedAt                string         `json:"created_at"`
+}
+
 type SubCall struct {
 	ID               int64          `json:"id"`
 	PipelineRunID    string         `json:"pipeline_run_id"`

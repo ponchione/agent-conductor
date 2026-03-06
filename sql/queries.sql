@@ -264,3 +264,12 @@ SELECT
     COUNT(DISTINCT pipeline_run_id) AS run_count
 FROM sub_calls
 GROUP BY phase;
+
+-- name: InsertPlanRun :exec
+INSERT INTO plan_runs (
+    id, spec_file, generation_model, audit_model,
+    work_orders_generated,
+    audit_work_orders_added, audit_work_orders_modified, audit_work_orders_unchanged,
+    generation_tokens_in, generation_tokens_out,
+    audit_tokens_in, audit_tokens_out
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);

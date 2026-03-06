@@ -150,3 +150,21 @@ CREATE TABLE IF NOT EXISTS sub_calls (
 
 CREATE INDEX IF NOT EXISTS idx_sub_calls_pipeline_run ON sub_calls(pipeline_run_id);
 CREATE INDEX IF NOT EXISTS idx_sub_calls_phase_step ON sub_calls(phase, step);
+
+CREATE TABLE IF NOT EXISTS plan_runs (
+    id                          TEXT PRIMARY KEY,
+    spec_file                   TEXT NOT NULL,
+    generation_model            TEXT,
+    audit_model                 TEXT,
+    work_orders_generated       INTEGER,
+    audit_work_orders_added     INTEGER,
+    audit_work_orders_modified  INTEGER,
+    audit_work_orders_unchanged INTEGER,
+    audit_tokens_in             INTEGER,
+    audit_tokens_out            INTEGER,
+    generation_tokens_in        INTEGER,
+    generation_tokens_out       INTEGER,
+    created_at                  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_runs_created_at ON plan_runs(created_at);

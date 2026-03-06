@@ -3,13 +3,14 @@ package models
 import "fmt"
 
 type WorkOrder struct {
-	Title              string   `yaml:"title"`
-	TargetModule       string   `yaml:"target_module"`
-	ReferenceModule    string   `yaml:"reference_module"`
-	Type               string   `yaml:"type"`
-	KnownFiles         []string `yaml:"known_files"`
-	AcceptanceCriteria []string `yaml:"acceptance_criteria"`
-	Constraints        []string `yaml:"constraints"`
+	Title              string   `yaml:"title" json:"title"`
+	TargetModule       string   `yaml:"target_module" json:"target_module"`
+	ReferenceModule    string   `yaml:"reference_module" json:"reference_module"`
+	Type               string   `yaml:"type" json:"type"`
+	KnownFiles         []string `yaml:"known_files" json:"known_files"`
+	AcceptanceCriteria []string `yaml:"acceptance_criteria" json:"acceptance_criteria"`
+	Constraints        []string `yaml:"constraints" json:"constraints"`
+	AuditSource        string   `yaml:"audit_source,omitempty" json:"audit_source,omitempty"`
 }
 
 var validWorkOrderTypes = map[string]bool{

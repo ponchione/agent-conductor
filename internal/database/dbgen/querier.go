@@ -30,6 +30,7 @@ type Querier interface {
 	GetTask(ctx context.Context, id string) (Task, error)
 	GetVerifyHumanAgreement(ctx context.Context) ([]GetVerifyHumanAgreementRow, error)
 	GetWorkflow(ctx context.Context, id string) (Workflow, error)
+	InsertPlanRun(ctx context.Context, arg InsertPlanRunParams) error
 	InsertSubCall(ctx context.Context, arg InsertSubCallParams) error
 	ListEvents(ctx context.Context, workflowID sql.NullString) ([]Event, error)
 	ReleaseTask(ctx context.Context, id string) error

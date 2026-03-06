@@ -22,6 +22,7 @@ type CreatePipelineRunParams = dbgen.CreatePipelineRunParams
 type CreateTaskParams = dbgen.CreateTaskParams
 type CreateWorkflowParams = dbgen.CreateWorkflowParams
 type FailTaskParams = dbgen.FailTaskParams
+type InsertPlanRunParams = dbgen.InsertPlanRunParams
 type InsertSubCallParams = dbgen.InsertSubCallParams
 type UpdatePipelineRunBuildParams = dbgen.UpdatePipelineRunBuildParams
 type UpdatePipelineRunHumanResultParams = dbgen.UpdatePipelineRunHumanResultParams
