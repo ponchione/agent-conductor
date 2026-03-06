@@ -62,10 +62,17 @@ var statsCmd = &cobra.Command{
 			fmtInt(nullF64ToInt(stats.TotalScopeTokensIn)),
 			fmtInt(nullF64ToInt(stats.TotalScopeTokensOut)),
 		)
+		fmt.Printf("Build:   %s in  /  %s out\n",
+			fmtInt(nullF64ToInt(stats.TotalBuildTokensIn)),
+			fmtInt(nullF64ToInt(stats.TotalBuildTokensOut)),
+		)
 		fmt.Printf("Verify:  %s in  /  %s out\n",
 			fmtInt(nullF64ToInt(stats.TotalVerifyTokensIn)),
 			fmtInt(nullF64ToInt(stats.TotalVerifyTokensOut)),
 		)
+		if stats.TotalBuildCostUsd.Valid && stats.TotalBuildCostUsd.Float64 > 0 {
+			fmt.Printf("Build cost: $%.2f\n", stats.TotalBuildCostUsd.Float64)
+		}
 
 		fmt.Println()
 		fmt.Println("--- PHASE TIMING (avg) ---")
@@ -73,6 +80,11 @@ var statsCmd = &cobra.Command{
 			fmt.Printf("Scope:   %ds\n", int64(stats.AvgScopeSecs.Float64))
 		} else {
 			fmt.Printf("Scope:   0s\n")
+		}
+		if stats.AvgBuildSecs.Valid {
+			fmt.Printf("Build:   %ds\n", int64(stats.AvgBuildSecs.Float64))
+		} else {
+			fmt.Printf("Build:   0s\n")
 		}
 		if stats.AvgVerifySecs.Valid {
 			fmt.Printf("Verify:  %ds\n", int64(stats.AvgVerifySecs.Float64))

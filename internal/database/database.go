@@ -33,10 +33,18 @@ func NewDB(dsn string) (*DB, error) {
 		return nil, fmt.Errorf("migration failed: %w", err)
 	}
 
-	// Migration: add work_order_content column for existing databases.
-	_, migErr := conn.Exec("ALTER TABLE pipeline_runs ADD COLUMN work_order_content TEXT")
-	if migErr != nil && !strings.Contains(migErr.Error(), "duplicate column") {
-		return nil, fmt.Errorf("migration failed: %w", migErr)
+	// Migrations: add columns for existing databases.
+	migrations := []string{
+		"ALTER TABLE pipeline_runs ADD COLUMN work_order_content TEXT",
+		"ALTER TABLE pipeline_runs ADD COLUMN build_cost_usd REAL",
+		"ALTER TABLE pipeline_runs ADD COLUMN build_session_id TEXT",
+		"ALTER TABLE pipeline_runs ADD COLUMN build_tool_calls TEXT",
+	}
+	for _, m := range migrations {
+		_, migErr := conn.Exec(m)
+		if migErr != nil && !strings.Contains(migErr.Error(), "duplicate column") {
+			return nil, fmt.Errorf("migration failed: %w", migErr)
+		}
 	}
 
 	return &DB{

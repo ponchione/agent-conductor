@@ -105,7 +105,12 @@ WHERE workflow_id = ?;
 -- name: UpdatePipelineRunBuild :exec
 UPDATE pipeline_runs
 SET build_started_at = ?, build_completed_at = ?,
-    build_files_changed = ?, updated_at = datetime('now')
+    build_files_changed = ?,
+    build_tokens_in = ?, build_tokens_out = ?,
+    build_model = ?,
+    build_cost_usd = ?, build_session_id = ?,
+    build_tool_calls = ?,
+    updated_at = datetime('now')
 WHERE workflow_id = ?;
 
 -- name: UpdatePipelineRunVerify :exec
@@ -136,13 +141,20 @@ SELECT
         THEN CAST(strftime('%s', scope_completed_at) AS INTEGER) - CAST(strftime('%s', scope_started_at) AS INTEGER)
     END)                                                                    AS avg_scope_secs,
     AVG(CASE
+        WHEN build_started_at IS NOT NULL AND build_completed_at IS NOT NULL
+        THEN CAST(strftime('%s', build_completed_at) AS INTEGER) - CAST(strftime('%s', build_started_at) AS INTEGER)
+    END)                                                                    AS avg_build_secs,
+    AVG(CASE
         WHEN verify_started_at IS NOT NULL AND verify_completed_at IS NOT NULL
         THEN CAST(strftime('%s', verify_completed_at) AS INTEGER) - CAST(strftime('%s', verify_started_at) AS INTEGER)
     END)                                                                    AS avg_verify_secs,
     SUM(COALESCE(scope_tokens_in, 0))                                      AS total_scope_tokens_in,
     SUM(COALESCE(scope_tokens_out, 0))                                     AS total_scope_tokens_out,
+    SUM(COALESCE(build_tokens_in, 0))                                      AS total_build_tokens_in,
+    SUM(COALESCE(build_tokens_out, 0))                                     AS total_build_tokens_out,
     SUM(COALESCE(verify_tokens_in, 0))                                     AS total_verify_tokens_in,
-    SUM(COALESCE(verify_tokens_out, 0))                                    AS total_verify_tokens_out
+    SUM(COALESCE(verify_tokens_out, 0))                                    AS total_verify_tokens_out,
+    SUM(COALESCE(build_cost_usd, 0))                                       AS total_build_cost_usd
 FROM pipeline_runs;
 
 -- name: GetRecentPipelineRuns :many
@@ -160,6 +172,7 @@ SELECT
         ELSE 'mismatch'
     END AS agreement,
     COALESCE(scope_tokens_in, 0) + COALESCE(scope_tokens_out, 0) +
+    COALESCE(build_tokens_in, 0) + COALESCE(build_tokens_out, 0) +
     COALESCE(verify_tokens_in, 0) + COALESCE(verify_tokens_out, 0) AS total_tokens
 FROM pipeline_runs
 ORDER BY created_at DESC

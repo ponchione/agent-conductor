@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -84,11 +85,24 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		changedFilesCount = len(changedFiles)
 	}
 
+	var toolCallsJSON string
+	if len(result.ToolCalls) > 0 {
+		if b, err := json.Marshal(result.ToolCalls); err == nil {
+			toolCallsJSON = string(b)
+		}
+	}
+
 	if err := w.db.UpdatePipelineRunBuild(ctx, database.UpdatePipelineRunBuildParams{
 		WorkflowID:        task.WorkflowID,
 		BuildStartedAt:    sql.NullString{String: buildStartedAt.UTC().Format(time.RFC3339), Valid: true},
 		BuildCompletedAt:  sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
 		BuildFilesChanged: sql.NullInt64{Int64: int64(changedFilesCount), Valid: true},
+		BuildTokensIn:     sql.NullInt64{Int64: int64(result.TokensIn), Valid: result.TokensIn > 0},
+		BuildTokensOut:    sql.NullInt64{Int64: int64(result.TokensOut), Valid: result.TokensOut > 0},
+		BuildModel:        sql.NullString{String: result.Model, Valid: result.Model != ""},
+		BuildCostUsd:      sql.NullFloat64{Float64: result.CostUSD, Valid: result.CostUSD > 0},
+		BuildSessionID:    sql.NullString{String: result.SessionID, Valid: result.SessionID != ""},
+		BuildToolCalls:    sql.NullString{String: toolCallsJSON, Valid: toolCallsJSON != ""},
 	}); err != nil {
 		slog.Warn("Failed to update pipeline run build metrics", "error", err)
 	}
@@ -96,6 +110,11 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	slog.Info("Build phase complete",
 		"duration", result.Duration.String(),
 		"files_changed", changedFilesCount,
+		"tokens_in", result.TokensIn,
+		"tokens_out", result.TokensOut,
+		"cost_usd", result.CostUSD,
+		"model", result.Model,
+		"tool_calls", len(result.ToolCalls),
 	)
 
 	w.q.CompleteTask(task.ID, &queue.TaskResult{

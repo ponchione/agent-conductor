@@ -120,6 +120,11 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     verify_tokens_in        INTEGER,
     verify_tokens_out       INTEGER,
 
+    -- Build enrichment (WO-2)
+    build_cost_usd          REAL,
+    build_session_id        TEXT,
+    build_tool_calls        TEXT,
+
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );

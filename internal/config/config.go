@@ -90,7 +90,8 @@ type Executor struct {
 
 // ClaudeCodeConfig holds tool-specific config for the Claude Code executor.
 type ClaudeCodeConfig struct {
-	Model string `yaml:"model"`
+	Model              string `yaml:"model"`
+	AppendSystemPrompt bool   `yaml:"append_system_prompt"`
 }
 
 type Git struct {

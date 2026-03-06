@@ -231,13 +231,20 @@ SELECT
         THEN CAST(strftime('%s', scope_completed_at) AS INTEGER) - CAST(strftime('%s', scope_started_at) AS INTEGER)
     END)                                                                    AS avg_scope_secs,
     AVG(CASE
+        WHEN build_started_at IS NOT NULL AND build_completed_at IS NOT NULL
+        THEN CAST(strftime('%s', build_completed_at) AS INTEGER) - CAST(strftime('%s', build_started_at) AS INTEGER)
+    END)                                                                    AS avg_build_secs,
+    AVG(CASE
         WHEN verify_started_at IS NOT NULL AND verify_completed_at IS NOT NULL
         THEN CAST(strftime('%s', verify_completed_at) AS INTEGER) - CAST(strftime('%s', verify_started_at) AS INTEGER)
     END)                                                                    AS avg_verify_secs,
     SUM(COALESCE(scope_tokens_in, 0))                                      AS total_scope_tokens_in,
     SUM(COALESCE(scope_tokens_out, 0))                                     AS total_scope_tokens_out,
+    SUM(COALESCE(build_tokens_in, 0))                                      AS total_build_tokens_in,
+    SUM(COALESCE(build_tokens_out, 0))                                     AS total_build_tokens_out,
     SUM(COALESCE(verify_tokens_in, 0))                                     AS total_verify_tokens_in,
-    SUM(COALESCE(verify_tokens_out, 0))                                    AS total_verify_tokens_out
+    SUM(COALESCE(verify_tokens_out, 0))                                    AS total_verify_tokens_out,
+    SUM(COALESCE(build_cost_usd, 0))                                       AS total_build_cost_usd
 FROM pipeline_runs
 `
 
@@ -250,11 +257,15 @@ type GetPipelineStatsRow struct {
 	HumanRejected        sql.NullFloat64 `json:"human_rejected"`
 	HumanPending         sql.NullFloat64 `json:"human_pending"`
 	AvgScopeSecs         sql.NullFloat64 `json:"avg_scope_secs"`
+	AvgBuildSecs         sql.NullFloat64 `json:"avg_build_secs"`
 	AvgVerifySecs        sql.NullFloat64 `json:"avg_verify_secs"`
 	TotalScopeTokensIn   sql.NullFloat64 `json:"total_scope_tokens_in"`
 	TotalScopeTokensOut  sql.NullFloat64 `json:"total_scope_tokens_out"`
+	TotalBuildTokensIn   sql.NullFloat64 `json:"total_build_tokens_in"`
+	TotalBuildTokensOut  sql.NullFloat64 `json:"total_build_tokens_out"`
 	TotalVerifyTokensIn  sql.NullFloat64 `json:"total_verify_tokens_in"`
 	TotalVerifyTokensOut sql.NullFloat64 `json:"total_verify_tokens_out"`
+	TotalBuildCostUsd    sql.NullFloat64 `json:"total_build_cost_usd"`
 }
 
 func (q *Queries) GetPipelineStats(ctx context.Context) (GetPipelineStatsRow, error) {
@@ -269,11 +280,15 @@ func (q *Queries) GetPipelineStats(ctx context.Context) (GetPipelineStatsRow, er
 		&i.HumanRejected,
 		&i.HumanPending,
 		&i.AvgScopeSecs,
+		&i.AvgBuildSecs,
 		&i.AvgVerifySecs,
 		&i.TotalScopeTokensIn,
 		&i.TotalScopeTokensOut,
+		&i.TotalBuildTokensIn,
+		&i.TotalBuildTokensOut,
 		&i.TotalVerifyTokensIn,
 		&i.TotalVerifyTokensOut,
+		&i.TotalBuildCostUsd,
 	)
 	return i, err
 }
@@ -293,6 +308,7 @@ SELECT
         ELSE 'mismatch'
     END AS agreement,
     COALESCE(scope_tokens_in, 0) + COALESCE(scope_tokens_out, 0) +
+    COALESCE(build_tokens_in, 0) + COALESCE(build_tokens_out, 0) +
     COALESCE(verify_tokens_in, 0) + COALESCE(verify_tokens_out, 0) AS total_tokens
 FROM pipeline_runs
 ORDER BY created_at DESC
@@ -822,15 +838,26 @@ func (q *Queries) RetryTask(ctx context.Context, id string) error {
 const updatePipelineRunBuild = `-- name: UpdatePipelineRunBuild :exec
 UPDATE pipeline_runs
 SET build_started_at = ?, build_completed_at = ?,
-    build_files_changed = ?, updated_at = datetime('now')
+    build_files_changed = ?,
+    build_tokens_in = ?, build_tokens_out = ?,
+    build_model = ?,
+    build_cost_usd = ?, build_session_id = ?,
+    build_tool_calls = ?,
+    updated_at = datetime('now')
 WHERE workflow_id = ?
 `
 
 type UpdatePipelineRunBuildParams struct {
-	BuildStartedAt    sql.NullString `json:"build_started_at"`
-	BuildCompletedAt  sql.NullString `json:"build_completed_at"`
-	BuildFilesChanged sql.NullInt64  `json:"build_files_changed"`
-	WorkflowID        string         `json:"workflow_id"`
+	BuildStartedAt    sql.NullString  `json:"build_started_at"`
+	BuildCompletedAt  sql.NullString  `json:"build_completed_at"`
+	BuildFilesChanged sql.NullInt64   `json:"build_files_changed"`
+	BuildTokensIn     sql.NullInt64   `json:"build_tokens_in"`
+	BuildTokensOut    sql.NullInt64   `json:"build_tokens_out"`
+	BuildModel        sql.NullString  `json:"build_model"`
+	BuildCostUsd      sql.NullFloat64 `json:"build_cost_usd"`
+	BuildSessionID    sql.NullString  `json:"build_session_id"`
+	BuildToolCalls    sql.NullString  `json:"build_tool_calls"`
+	WorkflowID        string          `json:"workflow_id"`
 }
 
 func (q *Queries) UpdatePipelineRunBuild(ctx context.Context, arg UpdatePipelineRunBuildParams) error {
@@ -838,6 +865,12 @@ func (q *Queries) UpdatePipelineRunBuild(ctx context.Context, arg UpdatePipeline
 		arg.BuildStartedAt,
 		arg.BuildCompletedAt,
 		arg.BuildFilesChanged,
+		arg.BuildTokensIn,
+		arg.BuildTokensOut,
+		arg.BuildModel,
+		arg.BuildCostUsd,
+		arg.BuildSessionID,
+		arg.BuildToolCalls,
 		arg.WorkflowID,
 	)
 	return err
