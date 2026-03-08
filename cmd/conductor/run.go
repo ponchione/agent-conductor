@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/ponchione/agent-conductor/internal/config"
@@ -82,12 +83,12 @@ var runCmd = &cobra.Command{
 		if len(cfg.Models.Providers) == 0 {
 			providers["default"] = llm.New(cfg.LocalModel)
 			cfg.Models.Roles = map[string]string{
-				"decompose":        "default",
-				"analyze":          "default",
-				"crosscut":         "default",
-				"synthesize":       "default",
-				"describe":         "default",
-				"verify_analyze":   "default",
+				"decompose":         "default",
+				"analyze":           "default",
+				"crosscut":          "default",
+				"synthesize":        "default",
+				"describe":          "default",
+				"verify_analyze":    "default",
 				"verify_synthesize": "default",
 			}
 		} else {
@@ -186,10 +187,13 @@ func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database
 			return fmt.Errorf("failed to query workflow: %w", err)
 		}
 
-		if wf.CurrentState == "human_review" || wf.CurrentState == "completed" || wf.CurrentState == "failed" {
+		if wf.CurrentState == "human_review" || wf.CurrentState == "review_needed" ||
+			wf.CurrentState == "completed" || wf.CurrentState == "failed" {
 			fmt.Printf("\nExecution finished with state: %s\n", wf.CurrentState)
 			break
 		}
+
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	return nil

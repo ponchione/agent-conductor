@@ -1,7 +1,7 @@
--- name: ClaimTask :exec
+-- name: ClaimTask :execrows
 UPDATE tasks
 SET state = 'claimed', claimed_by = ?, claimed_at = datetime('now')
-WHERE id = ?;
+WHERE id = ? AND state = 'pending';
 
 -- name: CompleteTask :exec
 UPDATE tasks

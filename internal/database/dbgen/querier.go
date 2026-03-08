@@ -10,7 +10,7 @@ import (
 )
 
 type Querier interface {
-	ClaimTask(ctx context.Context, arg ClaimTaskParams) error
+	ClaimTask(ctx context.Context, arg ClaimTaskParams) (int64, error)
 	CompleteTask(ctx context.Context, arg CompleteTaskParams) error
 	CreateEvent(ctx context.Context, arg CreateEventParams) error
 	CreatePipelineRun(ctx context.Context, arg CreatePipelineRunParams) error

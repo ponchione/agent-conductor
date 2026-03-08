@@ -9,42 +9,52 @@ import (
 
 // AtomicClaimTask handles the transaction for finding and claiming a task
 func (db *DB) AtomicClaimTask(ctx context.Context, workerID string) (*Task, error) {
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
+	for range 5 {
+		tx, err := db.conn.Begin()
+		if err != nil {
+			return nil, err
+		}
+		qtx := db.WithTx(tx)
 
-	qtx := db.WithTx(tx)
+		taskID, err := qtx.GetPendingTask(ctx)
+		if err == sql.ErrNoRows {
+			_ = tx.Rollback()
+			return nil, nil
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
 
-	taskID, err := qtx.GetPendingTask(ctx)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
+		rows, err := qtx.ClaimTask(ctx, ClaimTaskParams{
+			ClaimedBy: sql.NullString{String: workerID, Valid: true},
+			ID:        taskID,
+		})
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+		if rows == 0 {
+			_ = tx.Rollback()
+			continue
+		}
+
+		task, err := qtx.GetTask(ctx, taskID)
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+
+		if err := tx.Commit(); err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
+
+		return &task, nil
 	}
 
-	err = qtx.ClaimTask(ctx, ClaimTaskParams{
-		ClaimedBy: sql.NullString{String: workerID, Valid: true},
-		ID:        taskID,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	task, err := qtx.GetTask(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-
-	return &task, nil
+	return nil, nil
 }
-
 
 func (db *DB) LogEvent(workflowID, taskID, eventType string, data map[string]any) error {
 	var dataJson []byte

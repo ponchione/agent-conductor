@@ -45,10 +45,10 @@ The workflow ID must be a full UUID (e.g. from 'conductor list').`,
 
 		ctx := stdctx.Background()
 		gitMgr := git.New(cfg)
-		if err := gate.Approve(ctx, db, gitMgr, workflowID, cfg.Project.Path); err != nil {
+		if err := gate.Approve(ctx, db, gitMgr, workflowID, cfg.Project.Path, cfg.Git.BaseBranch); err != nil {
 			return fmt.Errorf("approve failed: %w", err)
 		}
-		fmt.Printf("Workflow %s approved and merged into main.\n", workflowID)
+		fmt.Printf("Workflow %s approved and merged into %s.\n", workflowID, cfg.Git.BaseBranch)
 
 		archiveWorkOrder(ctx, db, workflowID, cfg.Project.DataDir)
 

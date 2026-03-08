@@ -86,7 +86,8 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 			"build agent exited with code %d", result.ExitCode)
 	}
 
-	changedFiles, changedFilesErr := w.git.GetChangedFilesBetween(w.cfg.Project.Path, "main", wf.GitBranch)
+	baseBranch := w.cfg.Git.BaseBranch
+	changedFiles, changedFilesErr := w.git.GetChangedFilesBetween(w.cfg.Project.Path, baseBranch, wf.GitBranch)
 
 	if len(w.cfg.Safety.ForbiddenPaths) > 0 {
 		if changedFilesErr != nil {
@@ -104,6 +105,21 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		}
 	}
 
+	changedFilesCount := 0
+	if changedFilesErr == nil {
+		changedFilesCount = len(changedFiles)
+	}
+
+	// Persist budget consumption before advancing workflow state.
+	if err := w.db.UpdateWorkflowBudget(ctx, database.UpdateWorkflowBudgetParams{
+		CurrentDepth: wf.CurrentDepth + 1,
+		FilesChanged: wf.FilesChanged + int64(changedFilesCount),
+		ID:           task.WorkflowID,
+	}); err != nil {
+		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID,
+			"failed to update workflow budget: %w", err)
+	}
+
 	// Intentionally non-transactional: state update and metrics are written
 	// separately. If the state update fails we return fatal; metric writes
 	// are best-effort and logged on failure.
@@ -119,11 +135,6 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		"exit_code": result.ExitCode,
 		"duration":  result.Duration.String(),
 	})
-
-	changedFilesCount := 0
-	if changedFilesErr == nil {
-		changedFilesCount = len(changedFiles)
-	}
 
 	var toolCallsJSON string
 	if len(result.ToolCalls) > 0 {
@@ -157,11 +168,14 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		"tool_calls", len(result.ToolCalls),
 	)
 
-	w.q.CompleteTask(task.ID, &queue.TaskResult{
+	if err := w.q.CompleteTask(task.ID, &queue.TaskResult{
 		ExitCode:  result.ExitCode,
 		StdoutLog: result.StdoutPath,
 		StderrLog: result.StderrPath,
-	})
+	}); err != nil {
+		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID,
+			"failed to complete build task: %w", err)
+	}
 
 	verifyTaskID := uuid.New().String()
 	if err := w.db.CreateTask(ctx, database.CreateTaskParams{

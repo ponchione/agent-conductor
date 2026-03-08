@@ -159,6 +159,14 @@ func (w *Worker) runBootstrapScope(ctx context.Context, task *database.Task) err
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to update workflow context path: %w", err)
 	}
 
+	if err := w.db.UpdateWorkflowBudget(ctx, database.UpdateWorkflowBudgetParams{
+		CurrentDepth: wf.CurrentDepth + 1,
+		FilesChanged: wf.FilesChanged,
+		ID:           task.WorkflowID,
+	}); err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to update workflow budget: %w", err)
+	}
+
 	if err := w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
 		ID:           task.WorkflowID,
 		CurrentState: "scope_complete",
@@ -178,10 +186,12 @@ func (w *Worker) runBootstrapScope(ctx context.Context, task *database.Task) err
 		"summary", fullPkg.Scope.Summary,
 	)
 
-	w.q.CompleteTask(task.ID, &queue.TaskResult{
+	if err := w.q.CompleteTask(task.ID, &queue.TaskResult{
 		ExitCode:  0,
 		StdoutLog: "Bootstrap scope completed (no LLM)",
-	})
+	}); err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to complete scope task: %w", err)
+	}
 
 	buildTaskID := uuid.New().String()
 	if err := w.db.CreateTask(ctx, database.CreateTaskParams{
@@ -319,6 +329,14 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to update workflow context path: %w", err)
 	}
 
+	if err := w.db.UpdateWorkflowBudget(ctx, database.UpdateWorkflowBudgetParams{
+		CurrentDepth: wf.CurrentDepth + 1,
+		FilesChanged: wf.FilesChanged,
+		ID:           task.WorkflowID,
+	}); err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to update workflow budget: %w", err)
+	}
+
 	if err := w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
 		ID:           task.WorkflowID,
 		CurrentState: "scope_complete",
@@ -329,7 +347,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 
 	w.db.LogEvent(task.WorkflowID, task.ID, "scope_completed", map[string]any{
 		"context_package_path": pkgPath,
-		"files_to_modify":     len(fullPkg.Scope.FilesToModify),
+		"files_to_modify":      len(fullPkg.Scope.FilesToModify),
 	})
 
 	slog.Info("Scope phase complete",
@@ -338,10 +356,12 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		"files_to_reference", len(fullPkg.Scope.FilesToReference),
 	)
 
-	w.q.CompleteTask(task.ID, &queue.TaskResult{
+	if err := w.q.CompleteTask(task.ID, &queue.TaskResult{
 		ExitCode:  0,
 		StdoutLog: "Scope completed successfully",
-	})
+	}); err != nil {
+		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to complete scope task: %w", err)
+	}
 
 	buildTaskID := uuid.New().String()
 	if err := w.db.CreateTask(ctx, database.CreateTaskParams{

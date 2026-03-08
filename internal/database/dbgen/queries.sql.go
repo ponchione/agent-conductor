@@ -10,10 +10,10 @@ import (
 	"database/sql"
 )
 
-const claimTask = `-- name: ClaimTask :exec
+const claimTask = `-- name: ClaimTask :execrows
 UPDATE tasks
 SET state = 'claimed', claimed_by = ?, claimed_at = datetime('now')
-WHERE id = ?
+WHERE id = ? AND state = 'pending'
 `
 
 type ClaimTaskParams struct {
@@ -21,9 +21,16 @@ type ClaimTaskParams struct {
 	ID        string         `json:"id"`
 }
 
-func (q *Queries) ClaimTask(ctx context.Context, arg ClaimTaskParams) error {
-	_, err := q.db.ExecContext(ctx, claimTask, arg.ClaimedBy, arg.ID)
-	return err
+func (q *Queries) ClaimTask(ctx context.Context, arg ClaimTaskParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, claimTask, arg.ClaimedBy, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return rows, nil
 }
 
 const completeTask = `-- name: CompleteTask :exec

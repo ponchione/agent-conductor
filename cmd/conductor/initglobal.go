@@ -12,8 +12,8 @@ import (
 
 var initGlobalCmd = &cobra.Command{
 	Use:   "init-global",
-	Short: "Create ~/.conductor/config.yaml with default machine-level settings",
-	Long: `init-global creates ~/.conductor/config.yaml populated with default
+	Short: "Create ~/source/.conductor/config.yaml with default machine-level settings",
+	Long: `init-global creates ~/source/.conductor/config.yaml populated with default
 machine-level settings (local_model, embed_model, git). These settings apply
 to all projects on this machine and can be overridden by individual project.yaml files.
 
@@ -41,7 +41,7 @@ If the file already exists, the command prints its path and exits without modify
 			return nil
 		}
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create ~/.conductor: %w", err)
+			return fmt.Errorf("failed to create ~/source/.conductor: %w", err)
 		}
 		if err := os.WriteFile(path, []byte(globalConfigTemplate), 0644); err != nil {
 			return fmt.Errorf("failed to write global config: %w", err)

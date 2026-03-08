@@ -16,7 +16,7 @@ import (
 // Workflow state constants.
 const (
 	StatePaused       = "paused"
-	StateReviewNeeded = "review_needed"
+	StateReviewNeeded = "human_review"
 	StateCompleted    = "completed"
 	StateFailed       = "failed"
 )
@@ -134,7 +134,7 @@ func (q *Queue) triggerGate(workflowID, gateType, details string) {
 	ctx := context.Background()
 	q.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
 		ID:           workflowID,
-		CurrentState: "review_needed",
+		CurrentState: StateReviewNeeded,
 	})
 
 	q.db.LogEvent(workflowID, "", "gate_triggered", map[string]any{

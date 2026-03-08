@@ -85,7 +85,8 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "workflow missing: %w", err)
 	}
 
-	diff, err := w.git.GetDiff(w.cfg.Project.Path, "main", wf.GitBranch)
+	baseBranch := w.cfg.Git.BaseBranch
+	diff, err := w.git.GetDiff(w.cfg.Project.Path, baseBranch, wf.GitBranch)
 	if err != nil {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "git diff failed: %w", err)
 	}
@@ -199,6 +200,15 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		CurrentState:           "human_review",
 	}); err != nil {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to update workflow verification: %w", err)
+	}
+
+	if err := w.db.UpdateWorkflowBudget(ctx, database.UpdateWorkflowBudgetParams{
+		CurrentDepth: wf.CurrentDepth + 1,
+		FilesChanged: wf.FilesChanged,
+		ID:           task.WorkflowID,
+	}); err != nil {
+		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID,
+			"failed to update workflow budget: %w", err)
 	}
 
 	if allPreFailed {

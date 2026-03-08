@@ -189,7 +189,7 @@ This produces `bin/conductor` with the LanceDB shared library path baked in via 
 conductor init-global
 ```
 
-Creates `~/.conductor/config.yaml` with machine-level defaults for model endpoints, git settings, and embedding config. These apply to all projects and are overridden by project-specific settings.
+Creates `~/source/.conductor/config.yaml` with machine-level defaults for model endpoints, git settings, and embedding config. These apply to all projects and are overridden by project-specific settings.
 
 ### Multi-Provider Configuration
 
@@ -393,13 +393,13 @@ Inspect the artifacts:
 
 ```bash
 # Context package (scope output)
-cat ~/.conductor/projects/<name>/artifacts/context-packages/<id>-context-package.json | jq .
+cat ~/source/.conductor/projects/<name>/artifacts/context-packages/<id>-context-package.json | jq .
 
 # Verification report
-cat ~/.conductor/projects/<name>/artifacts/verify-reports/<id>-verify-report.json | jq .
+cat ~/source/.conductor/projects/<name>/artifacts/verify-reports/<id>-verify-report.json | jq .
 
 # Build logs
-cat ~/.conductor/projects/<name>/logs/<task-id>/stdout.log
+cat ~/source/.conductor/projects/<name>/logs/<task-id>/stdout.log
 
 # Git diff
 cd /path/to/repo && git diff main..feature/conducted-<prefix>
@@ -491,7 +491,7 @@ Results are deduplicated across queries, ranked by hit count then score, and spl
 
 ## Data Directory
 
-All project data lives under `~/.conductor/projects/<project-name>/`:
+All project data lives under `~/source/.conductor/projects/<project-name>/`:
 
 ```
 db/conductor.db                              # SQLite — workflows, tasks, events, pipeline runs, sub-calls, plan runs

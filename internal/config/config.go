@@ -133,7 +133,7 @@ type Guardrails struct {
 }
 
 // Load reads and merges the global and project config files.
-// Layer order: hardcoded defaults → global (~/.conductor/config.yaml) → project config.
+// Layer order: hardcoded defaults → global (~/source/.conductor/config.yaml) → project config.
 // DataDir is always computed, never read from YAML.
 func Load(projectPath string) (*ProjectConfig, error) {
 	home, err := os.UserHomeDir()
