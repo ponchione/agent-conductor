@@ -186,6 +186,57 @@ func TestStreamParser_RawFieldPopulated(t *testing.T) {
 	}
 }
 
+func TestConsoleCallback_AssistantText(t *testing.T) {
+	var buf bytes.Buffer
+	cb := ConsoleCallback(&buf)
+	cb(StreamEvent{Type: "assistant", Content: "Hello world"})
+	if !strings.Contains(buf.String(), "Hello world") {
+		t.Errorf("expected assistant text in output, got %q", buf.String())
+	}
+}
+
+func TestConsoleCallback_ToolUse(t *testing.T) {
+	var buf bytes.Buffer
+	cb := ConsoleCallback(&buf)
+	cb(StreamEvent{Type: "tool_use", ToolName: "Read", ToolInput: "path/to/file"})
+	got := buf.String()
+	if !strings.Contains(got, "Tool: Read(path/to/file)") {
+		t.Errorf("expected tool summary line, got %q", got)
+	}
+}
+
+func TestConsoleCallback_ToolResultSuppressed(t *testing.T) {
+	var buf bytes.Buffer
+	cb := ConsoleCallback(&buf)
+	cb(StreamEvent{Type: "tool_result", ToolName: "Read", ToolOutput: "lots of content"})
+	if buf.Len() != 0 {
+		t.Errorf("expected no console output for tool_result, got %q", buf.String())
+	}
+}
+
+func TestConsoleCallback_Result(t *testing.T) {
+	var buf bytes.Buffer
+	cb := ConsoleCallback(&buf)
+	cb(StreamEvent{
+		Type: "result",
+		Usage: &TokenUsage{
+			InputTokens:  15000,
+			OutputTokens: 3000,
+			CostUSD:      0.12,
+		},
+	})
+	got := buf.String()
+	if !strings.Contains(got, "15000") {
+		t.Errorf("expected input tokens in output, got %q", got)
+	}
+	if !strings.Contains(got, "3000") {
+		t.Errorf("expected output tokens in output, got %q", got)
+	}
+	if !strings.Contains(got, "0.12") {
+		t.Errorf("expected cost in output, got %q", got)
+	}
+}
+
 func TestStreamParser_Result(t *testing.T) {
 	lines := []string{
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"},{"type":"tool_use","name":"Read","input":{"file_path":"f.go"}}]}}`,

@@ -1,9 +1,7 @@
 package executor
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -108,16 +106,6 @@ type streamEvent struct {
 	Type string `json:"type"`
 }
 
-type assistantEvent struct {
-	Message struct {
-		Content []struct {
-			Type  string         `json:"type"`
-			Name  string         `json:"name"`
-			Input map[string]any `json:"input"`
-		} `json:"content"`
-	} `json:"message"`
-}
-
 type resultEvent struct {
 	CostUSD   float64 `json:"total_cost_usd"`
 	SessionID string  `json:"session_id"`
@@ -139,58 +127,6 @@ type streamResult struct {
 	CostUSD   float64
 	SessionID string
 	ToolCalls map[string]int
-}
-
-// parseNDJSON reads NDJSON lines from r, writes raw lines to logWriter, and
-// returns accumulated metadata. It logs tool-call one-liners in real time.
-func parseNDJSON(r io.Reader, logWriter io.Writer) streamResult {
-	sr := streamResult{ToolCalls: make(map[string]int)}
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		// Write raw line to log file for post-mortem
-		_, _ = logWriter.Write(line)
-		_, _ = logWriter.Write([]byte("\n"))
-
-		var env streamEvent
-		if err := json.Unmarshal(line, &env); err != nil {
-			slog.Warn("NDJSON: malformed line", "error", err)
-			continue
-		}
-
-		switch env.Type {
-		case "assistant":
-			var ae assistantEvent
-			if err := json.Unmarshal(line, &ae); err != nil {
-				slog.Warn("NDJSON: failed to parse assistant event", "error", err)
-				continue
-			}
-			for _, block := range ae.Message.Content {
-				if block.Type == "tool_use" {
-					sr.ToolCalls[block.Name]++
-					summary := toolCallSummary(block.Name, block.Input)
-					slog.Info("Tool call", "tool", block.Name, "detail", summary)
-				}
-			}
-		case "result":
-			var re resultEvent
-			if err := json.Unmarshal(line, &re); err != nil {
-				slog.Warn("NDJSON: failed to parse result event", "error", err)
-				continue
-			}
-			sr.TokensIn = re.Usage.InputTokens + re.Usage.CacheReadInputTokens + re.Usage.CacheCreationInputTokens
-			sr.TokensOut = re.Usage.OutputTokens
-			sr.Model = re.Model
-			sr.CostUSD = re.CostUSD
-			sr.SessionID = re.SessionID
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		slog.Warn("NDJSON: scanner error", "error", err)
-	}
-	return sr
 }
 
 // toolCallSummary extracts a short description from tool input for logging.
@@ -289,7 +225,9 @@ func (e *ClaudeCodeExecutor) Run(ctx context.Context, runCfg RunConfig) (*RunRes
 		return nil, fmt.Errorf("failed to start claude: %w", err)
 	}
 
-	sr := parseNDJSON(stdoutPipe, stdoutFile)
+	parser := NewStreamParser(ConsoleCallback(os.Stdout))
+	parser.Parse(stdoutPipe, stdoutFile)
+	sr := parser.Result()
 
 	waitErr := cmd.Wait()
 	duration := time.Since(start)
