@@ -368,3 +368,149 @@ func TestCompleteStream_HappyPath(t *testing.T) {
 		}
 	}
 }
+
+func TestCompleteStream_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Internal Error"))
+	}))
+	defer server.Close()
+
+	client := NewProviderClient(Provider{Endpoint: server.URL, Model: "m"})
+	_, err := client.CompleteStream(context.Background(), "sys", "user")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "status 500") {
+		t.Errorf("expected status 500 error, got %v", err)
+	}
+}
+
+func TestCompleteStream_MalformedChunk(t *testing.T) {
+	sseBody := "data: {invalid json}\n\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte(sseBody))
+	}))
+	defer server.Close()
+
+	client := NewProviderClient(Provider{Endpoint: server.URL, Model: "m"})
+	ch, err := client.CompleteStream(context.Background(), "sys", "user")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var gotError bool
+	for chunk := range ch {
+		if chunk.Error != nil {
+			gotError = true
+		}
+	}
+	if !gotError {
+		t.Error("expected an error chunk for malformed JSON")
+	}
+}
+
+func TestCompleteStream_ContextCancel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected ResponseWriter to be a Flusher")
+		}
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n"))
+		flusher.Flush()
+		// Block until client disconnects
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	client := NewProviderClient(Provider{Endpoint: server.URL, Model: "m"})
+
+	ch, err := client.CompleteStream(ctx, "sys", "user")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Read the first chunk
+	chunk := <-ch
+	if chunk.Content != "Hi" {
+		t.Errorf("expected 'Hi', got %q", chunk.Content)
+	}
+
+	// Cancel context
+	cancel()
+
+	// Channel should close (drain remaining)
+	for range ch {
+	}
+	// If we get here without hanging, context cancellation works
+}
+
+func TestCompleteStream_NoUsageInFinalChunk(t *testing.T) {
+	sseBody := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"Hi"}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte(sseBody))
+	}))
+	defer server.Close()
+
+	client := NewProviderClient(Provider{Endpoint: server.URL, Model: "m"})
+	ch, err := client.CompleteStream(context.Background(), "sys", "user")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var chunks []StreamChunk
+	for chunk := range ch {
+		chunks = append(chunks, chunk)
+	}
+
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if !chunks[1].Done {
+		t.Error("expected final chunk Done=true")
+	}
+	if chunks[1].Usage != nil {
+		t.Error("expected nil Usage when server omits it")
+	}
+}
+
+func TestCompleteStream_EmptyLines(t *testing.T) {
+	// SSE spec allows empty lines between events
+	sseBody := "\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte(sseBody))
+	}))
+	defer server.Close()
+
+	client := NewProviderClient(Provider{Endpoint: server.URL, Model: "m"})
+	ch, err := client.CompleteStream(context.Background(), "sys", "user")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var chunks []StreamChunk
+	for chunk := range ch {
+		chunks = append(chunks, chunk)
+	}
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 chunk, got %d", len(chunks))
+	}
+	if chunks[0].Content != "ok" {
+		t.Errorf("Content = %q, want %q", chunks[0].Content, "ok")
+	}
+}
