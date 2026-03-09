@@ -22,3 +22,29 @@ const (
 	EventRunComplete       = "run_complete"
 	EventRunAwaitingReview = "run_awaiting_review"
 )
+
+// EventSink receives events emitted during a pipeline run.
+type EventSink interface {
+	Emit(event RunEvent)
+}
+
+// NoOpSink discards all events.
+type NoOpSink struct{}
+
+// Emit implements EventSink by doing nothing.
+func (n *NoOpSink) Emit(event RunEvent) {}
+
+// ChannelSink writes events to a channel.
+type ChannelSink struct {
+	ch chan RunEvent
+}
+
+// NewChannelSink creates a ChannelSink that writes to the provided channel.
+func NewChannelSink(ch chan RunEvent) *ChannelSink {
+	return &ChannelSink{ch: ch}
+}
+
+// Emit implements EventSink by sending the event to the channel.
+func (s *ChannelSink) Emit(event RunEvent) {
+	s.ch <- event
+}

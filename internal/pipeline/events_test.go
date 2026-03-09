@@ -44,3 +44,52 @@ func TestEventTypeConstants(t *testing.T) {
 		}
 	}
 }
+
+func TestNoOpSink_Emit(t *testing.T) {
+	var sink EventSink = &NoOpSink{}
+	// Must not panic.
+	sink.Emit(RunEvent{
+		RunID:     "run-1",
+		Type:      EventPhaseStart,
+		Payload:   nil,
+		Timestamp: time.Now(),
+	})
+}
+
+func TestChannelSink_Emit(t *testing.T) {
+	ch := make(chan RunEvent, 1)
+	sink := NewChannelSink(ch)
+
+	now := time.Now()
+	ev := RunEvent{
+		RunID:     "run-456",
+		Type:      EventRunComplete,
+		Payload:   "done",
+		Timestamp: now,
+	}
+
+	sink.Emit(ev)
+
+	select {
+	case got := <-ch:
+		if got.RunID != "run-456" {
+			t.Errorf("RunID = %q, want %q", got.RunID, "run-456")
+		}
+		if got.Type != EventRunComplete {
+			t.Errorf("Type = %q, want %q", got.Type, EventRunComplete)
+		}
+		if got.Payload != "done" {
+			t.Errorf("Payload = %v, want %q", got.Payload, "done")
+		}
+		if got.Timestamp != now {
+			t.Errorf("Timestamp mismatch")
+		}
+	default:
+		t.Fatal("expected event on channel, got nothing")
+	}
+}
+
+func TestChannelSink_ImplementsEventSink(t *testing.T) {
+	ch := make(chan RunEvent, 1)
+	var _ EventSink = NewChannelSink(ch)
+}
