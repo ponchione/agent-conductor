@@ -119,11 +119,17 @@ type assistantEvent struct {
 }
 
 type resultEvent struct {
-	CostUSD           float64 `json:"cost_usd"`
-	SessionID         string  `json:"session_id"`
-	Model             string  `json:"model"`
-	TotalInputTokens  int     `json:"total_input_tokens"`
-	TotalOutputTokens int     `json:"total_output_tokens"`
+	CostUSD   float64 `json:"total_cost_usd"`
+	SessionID string  `json:"session_id"`
+	Model     string  `json:"model"`
+	Duration  int64   `json:"duration_ms"`
+	IsError   bool    `json:"is_error"`
+	Usage     struct {
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	} `json:"usage"`
 }
 
 type streamResult struct {
@@ -174,8 +180,8 @@ func parseNDJSON(r io.Reader, logWriter io.Writer) streamResult {
 				slog.Warn("NDJSON: failed to parse result event", "error", err)
 				continue
 			}
-			sr.TokensIn = re.TotalInputTokens
-			sr.TokensOut = re.TotalOutputTokens
+			sr.TokensIn = re.Usage.InputTokens + re.Usage.CacheReadInputTokens + re.Usage.CacheCreationInputTokens
+			sr.TokensOut = re.Usage.OutputTokens
 			sr.Model = re.Model
 			sr.CostUSD = re.CostUSD
 			sr.SessionID = re.SessionID

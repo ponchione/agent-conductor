@@ -29,10 +29,12 @@ executor:
   tool: claude-code
   timeout_minutes: 30
 
-# Legacy prompts — loaded for backward compatibility but not used by the
-# recursive scope/verify orchestrators.  The recursive pipeline steps
-# (scope_decompose, scope_analyze, etc.) resolve through the three-tier
-# system: .prompts/ override → project.yaml path → compiled default.
+git:
+  base_branch: main
+  branch_prefix: "feature/conducted"
+  commit_author_name: "Agent Conductor"
+  commit_author_email: "conductor@local"
+
 prompts:
   scope: templates/scope-prompt.md
   verify: templates/verify-prompt.md

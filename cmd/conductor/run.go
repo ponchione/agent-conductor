@@ -76,6 +76,15 @@ var runCmd = &cobra.Command{
 		defer db.Close()
 
 		gitMgr := git.New(cfg)
+
+		clean, err := gitMgr.WorktreeClean(cfg.Project.Path)
+		if err != nil {
+			return fmt.Errorf("failed to check worktree status: %w", err)
+		}
+		if !clean {
+			return fmt.Errorf("worktree has uncommitted changes in %s — commit or stash before running conductor", cfg.Project.Path)
+		}
+
 		q := queue.New(cfg, db)
 		runner := executor.NewExecutor(cfg)
 

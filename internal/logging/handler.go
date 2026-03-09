@@ -46,11 +46,11 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 	m["msg"] = r.Message
 
 	for _, a := range h.attrs {
-		m[a.Key] = a.Value.Any()
+		m[a.Key] = attrVal(a)
 	}
 
 	r.Attrs(func(a slog.Attr) bool {
-		m[a.Key] = a.Value.Any()
+		m[a.Key] = attrVal(a)
 		return true
 	})
 
@@ -63,6 +63,33 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 	defer h.mu.Unlock()
 	_, err = h.w.Write(append(b, '\n'))
 	return err
+}
+
+// attrVal resolves a slog.Attr's value into a JSON-serializable form.
+func attrVal(a slog.Attr) any {
+	return resolveVal(a.Value.Resolve())
+}
+
+// resolveVal converts a resolved slog.Value into a type that
+// encoding/json can marshal. slog.Value itself has no exported fields,
+// so we must extract concrete types for every Kind.
+func resolveVal(v slog.Value) any {
+	switch v.Kind() {
+	case slog.KindGroup:
+		attrs := v.Group()
+		m := make(map[string]any, len(attrs))
+		for _, a := range attrs {
+			m[a.Key] = resolveVal(a.Value.Resolve())
+		}
+		return m
+	case slog.KindAny:
+		if err, ok := v.Any().(error); ok {
+			return err.Error()
+		}
+		return v.Any()
+	default:
+		return v.Any()
+	}
 }
 
 // WithAttrs returns a new Handler with the given attrs appended.

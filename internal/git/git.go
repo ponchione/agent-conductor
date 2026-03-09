@@ -2,6 +2,8 @@ package git
 
 import (
 	"fmt"
+	"os/exec"
+	"strings"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -9,60 +11,21 @@ import (
 )
 
 // CreateBranch creates a new branch at the head of baseBranch.
-// Returns an error if the branch already exists.
 func (g *GitManager) CreateBranch(repoPath, branchName, baseBranch string) error {
-	r, err := git.PlainOpen(repoPath)
-	if err != nil {
-		return fmt.Errorf("open repo: %w", err)
-	}
-
-	baseRef, err := r.Reference(plumbing.NewBranchReferenceName(baseBranch), true)
-	if err != nil {
-		return fmt.Errorf("resolve base branch %s: %w", baseBranch, err)
-	}
-
-	newRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), baseRef.Hash())
-	if err := r.Storer.SetReference(newRef); err != nil {
-		return fmt.Errorf("create branch %s: %w", branchName, err)
-	}
-
-	return nil
+	return g.run(repoPath, "branch", branchName, baseBranch)
 }
 
 // CheckoutBranch switches the worktree to the named branch.
 func (g *GitManager) CheckoutBranch(repoPath, branchName string) error {
-	r, err := git.PlainOpen(repoPath)
-	if err != nil {
-		return fmt.Errorf("open repo: %w", err)
-	}
-
-	wt, err := r.Worktree()
-	if err != nil {
-		return fmt.Errorf("get worktree: %w", err)
-	}
-
-	if err := wt.Checkout(&git.CheckoutOptions{
-		Branch: plumbing.NewBranchReferenceName(branchName),
-	}); err != nil {
-		return fmt.Errorf("checkout %s: %w", branchName, err)
-	}
-
-	return nil
+	return g.run(repoPath, "checkout", branchName)
 }
 
 // BranchExists reports whether a local branch reference exists.
 func (g *GitManager) BranchExists(repoPath, branchName string) (bool, error) {
-	r, err := git.PlainOpen(repoPath)
+	err := g.run(repoPath, "rev-parse", "--verify", "refs/heads/"+branchName)
 	if err != nil {
-		return false, fmt.Errorf("open repo: %w", err)
-	}
-
-	_, err = r.Reference(plumbing.NewBranchReferenceName(branchName), true)
-	if err == plumbing.ErrReferenceNotFound {
+		// rev-parse exits non-zero if the ref doesn't exist.
 		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("check branch %s: %w", branchName, err)
 	}
 	return true, nil
 }
@@ -70,55 +33,18 @@ func (g *GitManager) BranchExists(repoPath, branchName string) (bool, error) {
 // MergeBranch fast-forward merges target into base within the given repo.
 // Only fast-forward merges are supported; returns an error if branches have diverged.
 func (g *GitManager) MergeBranch(repoPath, base, target string) error {
-	r, err := git.PlainOpen(repoPath)
-	if err != nil {
-		return fmt.Errorf("open repo: %w", err)
-	}
-
-	wt, err := r.Worktree()
-	if err != nil {
-		return fmt.Errorf("get worktree: %w", err)
-	}
-
-	if err := wt.Checkout(&git.CheckoutOptions{
-		Branch: plumbing.NewBranchReferenceName(base),
-	}); err != nil {
+	if err := g.run(repoPath, "checkout", base); err != nil {
 		return fmt.Errorf("checkout %s: %w", base, err)
 	}
-
-	targetRef, err := r.Reference(plumbing.NewBranchReferenceName(target), true)
-	if err != nil {
-		return fmt.Errorf("resolve branch %s: %w", target, err)
-	}
-
-	if err := r.Merge(*targetRef, git.MergeOptions{
-		Strategy: git.FastForwardMerge,
-	}); err != nil {
+	if err := g.run(repoPath, "merge", "--ff-only", target); err != nil {
 		return fmt.Errorf("merge %s into %s: %w", target, base, err)
 	}
-
-	head, err := r.Head()
-	if err != nil {
-		return fmt.Errorf("get HEAD after merge: %w", err)
-	}
-	if err := wt.Reset(&git.ResetOptions{
-		Commit: head.Hash(),
-		Mode:   git.HardReset,
-	}); err != nil {
-		return fmt.Errorf("reset worktree: %w", err)
-	}
-
 	return nil
 }
 
-// DeleteBranch removes a local branch reference from the repository.
+// DeleteBranch removes a local branch.
 func (g *GitManager) DeleteBranch(repoPath, branchName string) error {
-	r, err := git.PlainOpen(repoPath)
-	if err != nil {
-		return fmt.Errorf("open repo: %w", err)
-	}
-
-	return r.Storer.RemoveReference(plumbing.NewBranchReferenceName(branchName))
+	return g.run(repoPath, "branch", "-d", branchName)
 }
 
 type GitManager struct {
@@ -127,6 +53,37 @@ type GitManager struct {
 
 func New(cfg *gitconfig.ProjectConfig) *GitManager {
 	return &GitManager{cfg: cfg}
+}
+
+// run executes a git command in the given repo directory.
+func (g *GitManager) run(repoPath string, args ...string) error {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, string(out))
+	}
+	return nil
+}
+
+// runOutput executes a git command and returns its stdout.
+func (g *GitManager) runOutput(repoPath string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// WorktreeClean returns true if there are no uncommitted or unstaged changes.
+func (g *GitManager) WorktreeClean(repoPath string) (bool, error) {
+	out, err := g.runOutput(repoPath, "status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	return out == "", nil
 }
 
 // GetDiff returns the diff between two branches.
