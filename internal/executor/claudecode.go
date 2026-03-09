@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ponchione/agent-conductor/internal/config"
+	"github.com/ponchione/agent-conductor/internal/streaming"
 )
 
 // BuildExecutor is the interface implemented by all executor backends.
@@ -100,49 +101,6 @@ func runResult(ctx context.Context, err error, duration time.Duration, stderrFil
 	}, nil
 }
 
-// NDJSON stream types for claude --output-format stream-json
-
-type streamEvent struct {
-	Type string `json:"type"`
-}
-
-type resultEvent struct {
-	CostUSD   float64 `json:"total_cost_usd"`
-	SessionID string  `json:"session_id"`
-	Model     string  `json:"model"`
-	Duration  int64   `json:"duration_ms"`
-	IsError   bool    `json:"is_error"`
-	Usage     struct {
-		InputTokens              int `json:"input_tokens"`
-		OutputTokens             int `json:"output_tokens"`
-		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	} `json:"usage"`
-}
-
-type streamResult struct {
-	TokensIn  int
-	TokensOut int
-	Model     string
-	CostUSD   float64
-	SessionID string
-	ToolCalls map[string]int
-}
-
-// toolCallSummary extracts a short description from tool input for logging.
-func toolCallSummary(name string, input map[string]any) string {
-	for _, key := range []string{"file_path", "command", "pattern", "query", "url"} {
-		if v, ok := input[key]; ok {
-			s := fmt.Sprintf("%v", v)
-			if len(s) > 80 {
-				s = s[:80] + "…"
-			}
-			return s
-		}
-	}
-	return ""
-}
-
 // ClaudeCodeExecutor runs work orders via the claude CLI in non-interactive mode.
 type ClaudeCodeExecutor struct {
 	cfg *config.ProjectConfig
@@ -225,9 +183,9 @@ func (e *ClaudeCodeExecutor) Run(ctx context.Context, runCfg RunConfig) (*RunRes
 		return nil, fmt.Errorf("failed to start claude: %w", err)
 	}
 
-	parser := NewStreamParser(ConsoleCallback(os.Stdout))
+	parser := streaming.NewStreamParser(streaming.ConsoleCallback(os.Stdout))
 	parser.Parse(stdoutPipe, stdoutFile)
-	sr := parser.Result()
+	sr := parser.GetResult()
 
 	waitErr := cmd.Wait()
 	duration := time.Since(start)

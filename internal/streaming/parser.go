@@ -1,4 +1,4 @@
-package executor
+package streaming
 
 import (
 	"bufio"
@@ -8,58 +8,18 @@ import (
 	"log/slog"
 )
 
-// ConsoleCallback returns an event callback that writes human-readable
-// output to w. Tool results are suppressed (too noisy for console).
-func ConsoleCallback(w io.Writer) func(StreamEvent) {
-	return func(ev StreamEvent) {
-		switch ev.Type {
-		case "assistant":
-			if ev.Content != "" {
-				fmt.Fprint(w, ev.Content)
-			}
-		case "tool_use":
-			fmt.Fprintf(w, "\nTool: %s(%s)\n", ev.ToolName, ev.ToolInput)
-		case "tool_result":
-			// Suppressed — too noisy for console output.
-		case "result":
-			if ev.Usage != nil {
-				fmt.Fprintf(w, "\n--- Done: %d tokens in, %d tokens out, $%.4f ---\n",
-					ev.Usage.InputTokens, ev.Usage.OutputTokens, ev.Usage.CostUSD)
-			}
-		}
-	}
-}
-
-// StreamEvent is a parsed event emitted by the stream parser callback.
-type StreamEvent struct {
-	Type       string          // event type: assistant, tool_use, tool_result, result, etc.
-	Content    string          // text content for assistant events
-	ToolName   string          // tool name for tool_use and tool_result events
-	ToolInput  string          // summarized tool input for tool_use events
-	ToolOutput string          // tool output for tool_result events
-	Usage      *TokenUsage     // token usage for result events
-	Raw        json.RawMessage // raw JSON of the original line
-}
-
-// TokenUsage holds token counts and cost from a result event.
-type TokenUsage struct {
-	InputTokens  int
-	OutputTokens int
-	CostUSD      float64
-}
-
 // StreamParser reads NDJSON from a claude stream, emits typed StreamEvent
-// values via a callback, and accumulates a streamResult.
+// values via a callback, and accumulates a Result.
 type StreamParser struct {
 	callback func(StreamEvent)
-	result   streamResult
+	result   Result
 }
 
 // NewStreamParser creates a StreamParser that calls callback for each parsed event.
 func NewStreamParser(callback func(StreamEvent)) *StreamParser {
 	return &StreamParser{
 		callback: callback,
-		result:   streamResult{ToolCalls: make(map[string]int)},
+		result:   Result{ToolCalls: make(map[string]int)},
 	}
 }
 
@@ -80,7 +40,7 @@ func (p *StreamParser) Parse(r io.Reader, logWriter io.Writer) {
 		raw := make([]byte, len(line))
 		copy(raw, line)
 
-		var env streamEvent
+		var env streamEventType
 		if err := json.Unmarshal(raw, &env); err != nil {
 			slog.Warn("StreamParser: malformed line", "error", err)
 			continue
@@ -110,20 +70,19 @@ func (p *StreamParser) Parse(r io.Reader, logWriter io.Writer) {
 	}
 }
 
-// Result returns the accumulated stream metadata.
-func (p *StreamParser) Result() streamResult {
+// GetResult returns the accumulated stream metadata.
+func (p *StreamParser) GetResult() Result {
 	return p.result
 }
 
 // parseAssistant extracts text content from an assistant event.
 func (p *StreamParser) parseAssistant(raw []byte, ev *StreamEvent) {
-	// assistantEvent doesn't include a Text field, so parse with a fuller struct.
 	var full struct {
 		Message struct {
 			Content []struct {
-				Type string         `json:"type"`
-				Text string         `json:"text"`
-				Name string         `json:"name"`
+				Type  string         `json:"type"`
+				Text  string         `json:"text"`
+				Name  string         `json:"name"`
 				Input map[string]any `json:"input"`
 			} `json:"content"`
 		} `json:"message"`
@@ -139,37 +98,21 @@ func (p *StreamParser) parseAssistant(raw []byte, ev *StreamEvent) {
 	}
 }
 
-// toolUseEvent is used to parse tool_use NDJSON events.
-type toolUseEvent struct {
-	Tool struct {
-		Name  string         `json:"name"`
-		Input map[string]any `json:"input"`
-	} `json:"tool"`
-}
-
-// toolResultNDJSON is used to parse tool_result NDJSON events.
-type toolResultNDJSON struct {
-	Tool struct {
-		Name   string `json:"name"`
-		Output string `json:"output"`
-	} `json:"tool"`
-}
-
 // parseToolUse extracts tool name and summarized input.
 func (p *StreamParser) parseToolUse(raw []byte, ev *StreamEvent) {
-	var te toolUseEvent
+	var te toolUseEventJSON
 	if err := json.Unmarshal(raw, &te); err != nil {
 		slog.Warn("StreamParser: failed to parse tool_use event", "error", err)
 		return
 	}
 	ev.ToolName = te.Tool.Name
-	ev.ToolInput = toolCallSummary(te.Tool.Name, te.Tool.Input)
+	ev.ToolInput = ToolCallSummary(te.Tool.Name, te.Tool.Input)
 	p.result.ToolCalls[te.Tool.Name]++
 }
 
 // parseToolResult extracts tool name and output.
 func (p *StreamParser) parseToolResult(raw []byte, ev *StreamEvent) {
-	var tr toolResultNDJSON
+	var tr toolResultEventJSON
 	if err := json.Unmarshal(raw, &tr); err != nil {
 		slog.Warn("StreamParser: failed to parse tool_result event", "error", err)
 		return
@@ -180,7 +123,7 @@ func (p *StreamParser) parseToolResult(raw []byte, ev *StreamEvent) {
 
 // parseResult extracts token usage, cost, model, and session from result events.
 func (p *StreamParser) parseResult(raw []byte, ev *StreamEvent) {
-	var re resultEvent
+	var re resultEventJSON
 	if err := json.Unmarshal(raw, &re); err != nil {
 		slog.Warn("StreamParser: failed to parse result event", "error", err)
 		return
@@ -206,4 +149,18 @@ func (p *StreamParser) parseResult(raw []byte, ev *StreamEvent) {
 		"tokens_in", totalIn,
 		"tokens_out", re.Usage.OutputTokens,
 	)
+}
+
+// ToolCallSummary extracts a short description from tool input for logging.
+func ToolCallSummary(name string, input map[string]any) string {
+	for _, key := range []string{"file_path", "command", "pattern", "query", "url"} {
+		if v, ok := input[key]; ok {
+			s := fmt.Sprintf("%v", v)
+			if len(s) > 80 {
+				s = s[:80] + "..."
+			}
+			return s
+		}
+	}
+	return ""
 }

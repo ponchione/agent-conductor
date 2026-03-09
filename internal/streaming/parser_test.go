@@ -1,4 +1,4 @@
-package executor
+package streaming
 
 import (
 	"bytes"
@@ -237,7 +237,7 @@ func TestConsoleCallback_Result(t *testing.T) {
 	}
 }
 
-func TestStreamParser_Result(t *testing.T) {
+func TestStreamParser_GetResult(t *testing.T) {
 	lines := []string{
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"},{"type":"tool_use","name":"Read","input":{"file_path":"f.go"}}]}}`,
 		`{"type":"tool_use","tool":{"name":"Read","input":{"file_path":"f.go"}}}`,
@@ -250,7 +250,7 @@ func TestStreamParser_Result(t *testing.T) {
 	p := NewStreamParser(func(ev StreamEvent) {})
 	p.Parse(strings.NewReader(input), &logBuf)
 
-	sr := p.Result()
+	sr := p.GetResult()
 	if sr.TokensIn != 100 {
 		t.Errorf("TokensIn = %d, want 100", sr.TokensIn)
 	}
