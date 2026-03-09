@@ -67,7 +67,10 @@ var runCmd = &cobra.Command{
 		}
 
 		dbPath := filepath.Join(cfg.Project.DataDir, "db", "conductor.db")
-		slog.Info("Initializing database", "path", dbPath)
+		if dbPath == "" {
+			slog.Info("Initializing database", "path", dbPath)
+		}
+		slog.Info("Using database", "path", dbPath)
 
 		db, err := database.NewDB(dbPath)
 		if err != nil {

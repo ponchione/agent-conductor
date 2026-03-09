@@ -45,9 +45,9 @@ func (c *ClaudeCLIClient) Complete(ctx context.Context, systemPrompt string, use
 	// the CLI arg parser to swallow the next positional argument (the user message).
 	// --max-turns 1 is sufficient to prevent agentic tool-use loops.
 	args := []string{
-		"--print",
+		"--print", "--verbose",
 		"--model", c.model,
-		"--output-format", "json",
+		"--output-format", "stream-json",
 		"--system-prompt", systemPrompt,
 		"--dangerously-skip-permissions",
 		"--max-turns", "1",
