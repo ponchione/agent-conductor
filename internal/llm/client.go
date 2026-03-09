@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -79,6 +80,14 @@ type Usage struct {
 	CompletionTokens int `json:"completion_tokens"`
 }
 
+// StreamChunk represents a single chunk from a streaming LLM response.
+type StreamChunk struct {
+	Content string
+	Done    bool
+	Usage   *Usage
+	Error   error
+}
+
 // Complete sends a chat completion request to the LLM.
 func (c *ProviderClient) Complete(ctx context.Context, systemPrompt string, userMessage string) (*CompletionResult, error) {
 	reqBody := chatCompletionRequest{
@@ -143,6 +152,110 @@ func (c *ProviderClient) Complete(ctx context.Context, systemPrompt string, user
 		Provider:  endpoint,
 		Model:     c.provider.Model,
 	}, nil
+}
+
+// CompleteStream sends a streaming chat completion request and returns a channel
+// of StreamChunk values. The channel is always closed by the producer goroutine.
+func (c *ProviderClient) CompleteStream(ctx context.Context, systemPrompt string, userMessage string) (<-chan StreamChunk, error) {
+	reqBody := streamingChatCompletionRequest{
+		Model:       c.provider.Model,
+		Temperature: c.provider.Temperature,
+		Stream:      true,
+		Messages: []message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userMessage},
+		},
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	endpoint := strings.TrimRight(c.provider.Endpoint, "/")
+	targetURL, err := url.JoinPath(endpoint, "chat", "completions")
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct URL: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	if c.provider.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.provider.APIKey)
+	}
+
+	// Use a client without Timeout for streaming — the overall http.Client.Timeout
+	// covers the entire transaction including body reads, which kills long-lived
+	// SSE connections. Context cancellation handles timeouts instead.
+	streamClient := &http.Client{Transport: c.httpClient.Transport}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request failed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("api returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	ch := make(chan StreamChunk, 64)
+
+	go func() {
+		defer close(ch)
+		defer resp.Body.Close()
+
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			payload := strings.TrimPrefix(line, "data: ")
+			if payload == "[DONE]" {
+				return
+			}
+
+			var chunk streamChunkResponse
+			if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+				ch <- StreamChunk{Error: fmt.Errorf("failed to parse stream chunk: %w", err)}
+				return
+			}
+
+			sc := StreamChunk{}
+			if len(chunk.Choices) > 0 {
+				sc.Content = chunk.Choices[0].Delta.Content
+				if chunk.Choices[0].FinishReason != nil {
+					sc.Done = true
+				}
+			}
+			if chunk.Usage != nil {
+				sc.Usage = chunk.Usage
+			}
+
+			select {
+			case ch <- sc:
+			case <-ctx.Done():
+				select {
+				case ch <- StreamChunk{Error: ctx.Err()}:
+				default:
+				}
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			select {
+			case ch <- StreamChunk{Error: fmt.Errorf("scanner error: %w", err)}:
+			default:
+			}
+		}
+	}()
+
+	return ch, nil
 }
 
 // RoleResolver maps role names to LLM Client implementations.
@@ -222,4 +335,28 @@ type chatCompletionResponse struct {
 
 type choice struct {
 	Message message `json:"message"`
+}
+
+// streamingChatCompletionRequest is like chatCompletionRequest but includes
+// the stream field. Kept separate so Complete() never sends "stream":false.
+type streamingChatCompletionRequest struct {
+	Model       string    `json:"model"`
+	Messages    []message `json:"messages"`
+	Temperature float64   `json:"temperature"`
+	Stream      bool      `json:"stream"`
+}
+
+// streamChunkResponse represents a single SSE chunk from the streaming API.
+type streamChunkResponse struct {
+	Choices []streamChoice `json:"choices"`
+	Usage   *Usage         `json:"usage,omitempty"`
+}
+
+type streamChoice struct {
+	Delta        streamDelta `json:"delta"`
+	FinishReason *string     `json:"finish_reason,omitempty"`
+}
+
+type streamDelta struct {
+	Content string `json:"content,omitempty"`
 }

@@ -300,3 +300,71 @@ func TestRAGCompleterAdapter(t *testing.T) {
 		}
 	})
 }
+
+func TestCompleteStream_HappyPath(t *testing.T) {
+	sseBody := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"Hello"}}]}`,
+		`data: {"choices":[{"delta":{"content":" world"}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req streamingChatCompletionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Errorf("failed to parse request: %v", err)
+		}
+		if !req.Stream {
+			t.Error("expected stream=true in request")
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseBody))
+	}))
+	defer server.Close()
+
+	client := NewProviderClient(Provider{
+		Endpoint: server.URL,
+		Model:    "test-model",
+	})
+
+	ch, err := client.CompleteStream(context.Background(), "sys", "user")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var chunks []StreamChunk
+	for chunk := range ch {
+		chunks = append(chunks, chunk)
+	}
+
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(chunks))
+	}
+	if chunks[0].Content != "Hello" {
+		t.Errorf("chunk[0].Content = %q, want %q", chunks[0].Content, "Hello")
+	}
+	if chunks[1].Content != " world" {
+		t.Errorf("chunk[1].Content = %q, want %q", chunks[1].Content, " world")
+	}
+	if !chunks[2].Done {
+		t.Error("expected final chunk to have Done=true")
+	}
+	if chunks[2].Usage == nil {
+		t.Fatal("expected final chunk to have Usage set")
+	}
+	if chunks[2].Usage.PromptTokens != 10 {
+		t.Errorf("Usage.PromptTokens = %d, want 10", chunks[2].Usage.PromptTokens)
+	}
+	if chunks[2].Usage.CompletionTokens != 2 {
+		t.Errorf("Usage.CompletionTokens = %d, want 2", chunks[2].Usage.CompletionTokens)
+	}
+	for _, chunk := range chunks {
+		if chunk.Error != nil {
+			t.Errorf("unexpected error in chunk: %v", chunk.Error)
+		}
+	}
+}
