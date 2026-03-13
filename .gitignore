@@ -32,3 +32,8 @@ Thumbs.db
 *.db
 .env
 .worktrees/
+
+CLAUDE.md
+*.claude
+
+docs/plans/**

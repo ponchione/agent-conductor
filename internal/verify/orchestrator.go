@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/scope"
+	"github.com/ponchione/agent-conductor/internal/streaming"
 )
 
 // VerifyPrompts holds the system prompts for each verify pipeline step.
@@ -167,7 +169,17 @@ func (o *VerifyOrchestrator) callLLM(
 		return "", err
 	}
 
-	result, err := client.Complete(ctx, systemPrompt, userMessage)
+	var callback func(streaming.StreamEvent)
+	if _, ok := client.(llm.EventStreamingClient); ok {
+		fmt.Fprintf(os.Stdout, "\n[%s/%s", phase, step)
+		if targetPath != "" {
+			fmt.Fprintf(os.Stdout, " %s", targetPath)
+		}
+		fmt.Fprintln(os.Stdout, "]")
+		callback = streaming.ConsoleCallback(os.Stdout)
+	}
+
+	result, err := llm.CompleteWithOptionalStreaming(ctx, client, systemPrompt, userMessage, callback)
 	if err != nil {
 		rec := scope.SubCallRecord{
 			Phase:        phase,

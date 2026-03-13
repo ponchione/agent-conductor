@@ -1,0 +1,157 @@
+# Reusable Agent Conductor project template.
+# Copy this file into another repo as project.yaml and then replace the example values.
+#
+# Notes:
+# - project.path should be an absolute path to the target repository.
+# - DataDir is computed automatically; there is no YAML key for it.
+# - Prompt keys may be left empty to use the built-in defaults.
+# - Scope/verify console streaming happens when those roles map to a provider with type: claude-cli.
+
+project:
+  name: your-project-name
+  path: /absolute/path/to/your-project
+  language: go
+  framework: ""
+
+index:
+  include:
+    - "**/*.go"
+    - "**/*.sql"
+    - "**/*.md"
+  exclude:
+    - "**/.git/**"
+    - "**/vendor/**"
+    - "**/node_modules/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/.conductor/**"
+  max_rag_results: 30
+  max_tree_lines: 200
+  auto_reindex: true
+  max_file_size_bytes: 51200
+  max_total_file_size_bytes: 524288
+
+conventions:
+  module_path: "github.com/your-org/your-project"
+  module_structure:
+    - "orchestrator.go"
+    - "types.go"
+    - "service.go"
+  shared_path: "internal/shared/"
+  sql_path: "sql/"
+  docs_path: "docs/"
+
+prompts:
+  # Top-level phase prompts
+  scope: ""
+  verify: ""
+  build: ""
+
+  # Recursive scope/verify prompt overrides
+  scope_decompose: ""
+  scope_analyze: ""
+  scope_crosscut: ""
+  scope_synthesize: ""
+  verify_analyze: ""
+  verify_synthesize: ""
+  describe: ""
+  bootstrap: ""
+
+# Legacy fallback path used only when models.providers is omitted entirely.
+local_model:
+  endpoint: "http://localhost:8080/v1"
+  model_name: "deepseek-r1"
+  temperature: 0.0
+  timeout_seconds: 120
+
+embed_model:
+  endpoint: "http://localhost:8081/v1"
+  model_name: "nomic-embed-text-v1.5"
+  timeout_seconds: 30
+
+safety:
+  forbidden_paths:
+    - ".github/workflows/"
+    - "infra/terraform/"
+  max_files_changed: 50
+  max_duration_mins: 60
+
+git:
+  base_branch: main
+  branch_prefix: "feature/conducted"
+  commit_author_name: "Agent Conductor"
+  commit_author_email: "conductor@local"
+
+executor:
+  # Build phase executor. Current implementation uses claude-code.
+  tool: claude-code
+  timeout_minutes: 30
+  claude_code:
+    model: "claude-sonnet-4-6"
+    # false = replace Claude Code system prompt with the build prompt
+    # true  = append build prompt to Claude Code defaults
+    append_system_prompt: false
+
+models:
+  providers:
+    # OpenAI-compatible provider example
+    local-openai:
+      type: openai
+      endpoint: "http://localhost:8080/v1"
+      model: "deepseek-r1"
+      api_key: ""
+      timeout_seconds: 120
+      max_context_tokens: 128000
+      temperature: 0.0
+      pricing:
+        input_per_million: 0.50
+        output_per_million: 2.00
+        cached_input_per_million: 0.00
+
+    # Claude CLI provider example
+    # Requires `claude` on PATH and authenticated locally.
+    # Use this for live console streaming during scope/verify.
+    claude-sonnet:
+      type: claude-cli
+      endpoint: ""
+      model: "claude-sonnet-4-6"
+      api_key: ""
+      timeout_seconds: 300
+      max_context_tokens: 0
+      temperature: 0.0
+      pricing:
+        input_per_million: 3.00
+        output_per_million: 15.00
+        cached_input_per_million: 0.30
+
+    # Remote OpenAI-compatible provider example with env var expansion
+    remote-openai:
+      type: openai
+      endpoint: "https://api.openai.com/v1"
+      model: "gpt-4.1"
+      api_key: "${OPENAI_API_KEY}"
+      timeout_seconds: 120
+      max_context_tokens: 128000
+      temperature: 0.0
+      pricing:
+        input_per_million: 2.00
+        output_per_million: 8.00
+        cached_input_per_million: 0.50
+
+  roles:
+    # Map roles to a provider name above.
+    # If you want live Claude CLI streaming in scope/verify, point these to claude-sonnet.
+    decompose: claude-sonnet
+    analyze: claude-sonnet
+    crosscut: claude-sonnet
+    synthesize: claude-sonnet
+    describe: claude-sonnet
+    verify_analyze: claude-sonnet
+    verify_synthesize: claude-sonnet
+
+guardrails:
+  max_investigation_targets: 6
+  max_sub_calls_total: 12
+  phase_timeout_seconds: 300
+  max_cost_per_phase_usd: 0.50
+  warn_cost_per_phase_usd: 0.10
