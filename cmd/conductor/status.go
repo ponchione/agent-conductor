@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"text/tabwriter"
+	"time"
 
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/spf13/cobra"
@@ -51,6 +54,15 @@ shown by 'conductor list').`,
 		if wf.CompletedAt.Valid {
 			fmt.Printf("Completed At:   %s\n", wf.CompletedAt.String)
 		}
+		if wf.StartedAt.Valid && !wf.CompletedAt.Valid {
+			started, err := time.Parse("2006-01-02 15:04:05", wf.StartedAt.String)
+			if err == nil {
+				elapsed := time.Since(started)
+				mins := int(elapsed.Minutes())
+				secs := int(elapsed.Seconds()) % 60
+				fmt.Printf("Elapsed:        %dm %ds\n", mins, secs)
+			}
+		}
 		fmt.Printf("\n--- ARTIFACTS ---\n")
 		fmt.Printf("Work Order:     %s\n", wf.OriginalFile)
 
@@ -64,6 +76,36 @@ shown by 'conductor list').`,
 			fmt.Printf("Verify Report:  %s\n", wf.VerificationReportPath.String)
 		} else {
 			fmt.Printf("Verify Report:  (Pending)\n")
+		}
+
+		tasks, err := db.ListTasksByWorkflow(ctx, resolvedID)
+		if err != nil {
+			return fmt.Errorf("failed to list tasks: %w", err)
+		}
+
+		fmt.Printf("\n--- TASKS ---\n")
+		if len(tasks) == 0 {
+			fmt.Printf("(no tasks)\n")
+		} else {
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "SEQ\tPHASE\tSTATE\tATTEMPTS\tSTARTED\tCOMPLETED")
+			for _, t := range tasks {
+				started := "-"
+				if t.StartedAt.Valid {
+					started = t.StartedAt.String
+				}
+				completed := "-"
+				if t.CompletedAt.Valid {
+					completed = t.CompletedAt.String
+				}
+				fmt.Fprintf(w, "%d\t%s\t%s\t%d/%d\t%s\t%s\n",
+					t.SequenceNum, t.Phase, t.State,
+					t.Attempts, t.MaxAttempts,
+					started, completed)
+			}
+			if err := w.Flush(); err != nil {
+				return fmt.Errorf("flush output: %w", err)
+			}
 		}
 
 		if wf.ErrorMessage.Valid {
