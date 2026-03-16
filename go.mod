@@ -4,6 +4,7 @@ go 1.25.5
 
 require (
 	github.com/apache/arrow/go/v17 v17.0.0
+	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-git/go-git/v5 v5.17.0
 	github.com/google/uuid v1.6.0
 	github.com/lancedb/lancedb-go v0.1.2

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/ponchione/agent-conductor/internal/database"
 )
 
@@ -26,14 +27,14 @@ type Server struct {
 // NewServer builds the HTTP handler tree for observability reads.
 func NewServer(db *database.DB) http.Handler {
 	s := &Server{db: db}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", s.handleIndex)
-	mux.HandleFunc("GET /observability", s.handleObservabilityPage)
-	mux.Handle("GET /assets/", s.staticAssetsHandler())
-	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
-	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
-	mux.HandleFunc("GET /api/stats/plan-audit", s.handleGetPlanAuditStats)
-	return mux
+	r := chi.NewRouter()
+	r.Get("/", s.handleIndex)
+	r.Get("/observability", s.handleObservabilityPage)
+	r.Mount("/assets/", s.staticAssetsHandler())
+	r.Get("/api/sessions", s.handleListSessions)
+	r.Get("/api/sessions/{id}", s.handleGetSession)
+	r.Get("/api/stats/plan-audit", s.handleGetPlanAuditStats)
+	return r
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +72,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	detail, err := s.db.GetSessionDetail(r.Context(), r.PathValue("id"))
+	detail, err := s.db.GetSessionDetail(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "session not found")
