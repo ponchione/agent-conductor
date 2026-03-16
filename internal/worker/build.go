@@ -51,6 +51,15 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	}
 	slog.Info("Branch ready", "branch", wf.GitBranch, "base", w.cfg.Git.BaseBranch)
 
+	// Capture CLAUDE.md contents for audit logging.
+	var claudeMDContent sql.NullString
+	claudeMDPath := filepath.Join(w.cfg.Project.Path, "CLAUDE.md")
+	if data, readErr := os.ReadFile(claudeMDPath); readErr == nil {
+		claudeMDContent = sql.NullString{String: string(data), Valid: true}
+	} else if !os.IsNotExist(readErr) {
+		slog.Warn("Failed to read CLAUDE.md for audit", "path", claudeMDPath, "error", readErr)
+	}
+
 	workOrderPath := wf.OriginalFile
 
 	prompt := w.prompts.Build
@@ -153,16 +162,17 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	}
 
 	if err := w.db.UpdatePipelineRunBuild(ctx, database.UpdatePipelineRunBuildParams{
-		WorkflowID:        task.WorkflowID,
-		BuildStartedAt:    sql.NullString{String: buildStartedAt.UTC().Format(time.RFC3339), Valid: true},
-		BuildCompletedAt:  sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
-		BuildFilesChanged: sql.NullInt64{Int64: int64(changedFilesCount), Valid: true},
-		BuildTokensIn:     sql.NullInt64{Int64: int64(result.TokensIn), Valid: result.TokensIn > 0},
-		BuildTokensOut:    sql.NullInt64{Int64: int64(result.TokensOut), Valid: result.TokensOut > 0},
-		BuildModel:        sql.NullString{String: result.Model, Valid: result.Model != ""},
-		BuildCostUsd:      sql.NullFloat64{Float64: result.CostUSD, Valid: result.CostUSD > 0},
-		BuildSessionID:    sql.NullString{String: result.SessionID, Valid: result.SessionID != ""},
-		BuildToolCalls:    sql.NullString{String: toolCallsJSON, Valid: toolCallsJSON != ""},
+		WorkflowID:           task.WorkflowID,
+		BuildStartedAt:       sql.NullString{String: buildStartedAt.UTC().Format(time.RFC3339), Valid: true},
+		BuildCompletedAt:     sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
+		BuildFilesChanged:    sql.NullInt64{Int64: int64(changedFilesCount), Valid: true},
+		BuildTokensIn:        sql.NullInt64{Int64: int64(result.TokensIn), Valid: result.TokensIn > 0},
+		BuildTokensOut:       sql.NullInt64{Int64: int64(result.TokensOut), Valid: result.TokensOut > 0},
+		BuildModel:           sql.NullString{String: result.Model, Valid: result.Model != ""},
+		BuildCostUsd:         sql.NullFloat64{Float64: result.CostUSD, Valid: result.CostUSD > 0},
+		BuildSessionID:       sql.NullString{String: result.SessionID, Valid: result.SessionID != ""},
+		BuildToolCalls:       sql.NullString{String: toolCallsJSON, Valid: toolCallsJSON != ""},
+		BuildClaudeMdContent: claudeMDContent,
 	}); err != nil {
 		slog.Warn("Failed to update pipeline run build metrics", "error", err)
 	}
