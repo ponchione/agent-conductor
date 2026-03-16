@@ -105,7 +105,7 @@ var runCmd = &cobra.Command{
 			}
 		} else {
 			for name, pc := range cfg.Models.Providers {
-				client, err := llm.NewClientFromProvider(pc)
+				client, err := llm.NewClientFromProvider(pc, cfg.Project.Path)
 				if err != nil {
 					return fmt.Errorf("provider %q: %w", name, err)
 				}

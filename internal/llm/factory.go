@@ -11,7 +11,7 @@ import (
 // NewClientFromProvider creates the appropriate Client implementation based on
 // the provider config's Type field. An empty type defaults to "openai" for
 // backward compatibility.
-func NewClientFromProvider(pc config.ProviderConfig) (Client, error) {
+func NewClientFromProvider(pc config.ProviderConfig, projectPath string) (Client, error) {
 	switch pc.Type {
 	case "", "openai":
 		return NewProviderClient(Provider{
@@ -28,7 +28,7 @@ func NewClientFromProvider(pc config.ProviderConfig) (Client, error) {
 		if pc.TimeoutSeconds == 0 {
 			timeout = 120 * time.Second
 		}
-		return NewClaudeCLIClient(pc.Model, timeout), nil
+		return NewClaudeCLIClient(pc.Model, timeout, projectPath), nil
 
 	default:
 		return nil, fmt.Errorf("unknown provider type %q", pc.Type)

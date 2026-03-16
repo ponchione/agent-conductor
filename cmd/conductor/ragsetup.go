@@ -42,7 +42,7 @@ func buildRAGStack(ctx context.Context, cfg *config.ProjectConfig) (*rag.Store, 
 	var describeClient llm.Client
 	if provName, ok := cfg.Models.Roles["describe"]; ok {
 		if pc, ok := cfg.Models.Providers[provName]; ok {
-			c, err := llm.NewClientFromProvider(pc)
+			c, err := llm.NewClientFromProvider(pc, cfg.Project.Path)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("describe provider %q: %w", provName, err)
 			}

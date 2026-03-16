@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 type ClaudeCLIClient struct {
 	model   string
 	timeout time.Duration
+	workDir string
 }
 
 // Compile-time check that ClaudeCLIClient satisfies Client.
@@ -22,10 +24,11 @@ var _ Client = (*ClaudeCLIClient)(nil)
 
 // NewClaudeCLIClient creates a new ClaudeCLIClient with the given model alias
 // and command timeout.
-func NewClaudeCLIClient(model string, timeout time.Duration) *ClaudeCLIClient {
+func NewClaudeCLIClient(model string, timeout time.Duration, workDir string) *ClaudeCLIClient {
 	return &ClaudeCLIClient{
 		model:   model,
 		timeout: timeout,
+		workDir: workDir,
 	}
 }
 
@@ -98,6 +101,13 @@ func (c *ClaudeCLIClient) CompleteStream(ctx context.Context, systemPrompt strin
 	}
 
 	cmd := exec.CommandContext(ctx, claudeBin, args...)
+	if c.workDir != "" {
+		cmd.Dir = c.workDir
+	}
+	// Explicitly set env to preserve parent environment while disabling auto-memory.
+	// Claude Code would otherwise load CLAUDE.md and memory from the cwd hierarchy,
+	// which is undesirable for non-build invocations (scope, verify, describe).
+	cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
