@@ -18,6 +18,7 @@ type Querier interface {
 	CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) error
 	FailTask(ctx context.Context, arg FailTaskParams) error
 	GetPendingTask(ctx context.Context) (string, error)
+	GetPipelineRunByWorkflowID(ctx context.Context, workflowID string) (GetPipelineRunByWorkflowIDRow, error)
 	GetPipelineRunIDByWorkflowID(ctx context.Context, workflowID string) (string, error)
 	GetPipelineStats(ctx context.Context) (GetPipelineStatsRow, error)
 	GetRecentPipelineRuns(ctx context.Context) ([]GetRecentPipelineRunsRow, error)

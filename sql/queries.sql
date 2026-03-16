@@ -110,6 +110,7 @@ SET build_started_at = ?, build_completed_at = ?,
     build_model = ?,
     build_cost_usd = ?, build_session_id = ?,
     build_tool_calls = ?,
+    build_claude_md_content = ?,
     updated_at = datetime('now')
 WHERE workflow_id = ?;
 
@@ -235,6 +236,12 @@ ORDER BY created_at;
 
 -- name: GetPipelineRunIDByWorkflowID :one
 SELECT id FROM pipeline_runs WHERE workflow_id = ? LIMIT 1;
+
+-- name: GetPipelineRunByWorkflowID :one
+SELECT id, build_claude_md_content
+FROM pipeline_runs
+WHERE workflow_id = ?
+LIMIT 1;
 
 -- name: GetSubCallAggregatesByProvider :many
 SELECT

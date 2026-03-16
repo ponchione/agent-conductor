@@ -35,6 +35,7 @@ type UpdateWorkflowStateParams = dbgen.UpdateWorkflowStateParams
 type UpdateWorkflowVerificationParams = dbgen.UpdateWorkflowVerificationParams
 
 // Row types
+type GetPipelineRunByWorkflowIDRow = dbgen.GetPipelineRunByWorkflowIDRow
 type GetPipelineStatsRow = dbgen.GetPipelineStatsRow
 type GetRecentPipelineRunsRow = dbgen.GetRecentPipelineRunsRow
 type GetScopeQualityStatsRow = dbgen.GetScopeQualityStatsRow

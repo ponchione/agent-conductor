@@ -209,6 +209,25 @@ func (q *Queries) GetPendingTask(ctx context.Context) (string, error) {
 	return id, err
 }
 
+const getPipelineRunByWorkflowID = `-- name: GetPipelineRunByWorkflowID :one
+SELECT id, build_claude_md_content
+FROM pipeline_runs
+WHERE workflow_id = ?
+LIMIT 1
+`
+
+type GetPipelineRunByWorkflowIDRow struct {
+	ID                   string         `json:"id"`
+	BuildClaudeMdContent sql.NullString `json:"build_claude_md_content"`
+}
+
+func (q *Queries) GetPipelineRunByWorkflowID(ctx context.Context, workflowID string) (GetPipelineRunByWorkflowIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getPipelineRunByWorkflowID, workflowID)
+	var i GetPipelineRunByWorkflowIDRow
+	err := row.Scan(&i.ID, &i.BuildClaudeMdContent)
+	return i, err
+}
+
 const getPipelineRunIDByWorkflowID = `-- name: GetPipelineRunIDByWorkflowID :one
 SELECT id FROM pipeline_runs WHERE workflow_id = ? LIMIT 1
 `
@@ -919,21 +938,23 @@ SET build_started_at = ?, build_completed_at = ?,
     build_model = ?,
     build_cost_usd = ?, build_session_id = ?,
     build_tool_calls = ?,
+    build_claude_md_content = ?,
     updated_at = datetime('now')
 WHERE workflow_id = ?
 `
 
 type UpdatePipelineRunBuildParams struct {
-	BuildStartedAt    sql.NullString  `json:"build_started_at"`
-	BuildCompletedAt  sql.NullString  `json:"build_completed_at"`
-	BuildFilesChanged sql.NullInt64   `json:"build_files_changed"`
-	BuildTokensIn     sql.NullInt64   `json:"build_tokens_in"`
-	BuildTokensOut    sql.NullInt64   `json:"build_tokens_out"`
-	BuildModel        sql.NullString  `json:"build_model"`
-	BuildCostUsd      sql.NullFloat64 `json:"build_cost_usd"`
-	BuildSessionID    sql.NullString  `json:"build_session_id"`
-	BuildToolCalls    sql.NullString  `json:"build_tool_calls"`
-	WorkflowID        string          `json:"workflow_id"`
+	BuildStartedAt       sql.NullString  `json:"build_started_at"`
+	BuildCompletedAt     sql.NullString  `json:"build_completed_at"`
+	BuildFilesChanged    sql.NullInt64   `json:"build_files_changed"`
+	BuildTokensIn        sql.NullInt64   `json:"build_tokens_in"`
+	BuildTokensOut       sql.NullInt64   `json:"build_tokens_out"`
+	BuildModel           sql.NullString  `json:"build_model"`
+	BuildCostUsd         sql.NullFloat64 `json:"build_cost_usd"`
+	BuildSessionID       sql.NullString  `json:"build_session_id"`
+	BuildToolCalls       sql.NullString  `json:"build_tool_calls"`
+	BuildClaudeMdContent sql.NullString  `json:"build_claude_md_content"`
+	WorkflowID           string          `json:"workflow_id"`
 }
 
 func (q *Queries) UpdatePipelineRunBuild(ctx context.Context, arg UpdatePipelineRunBuildParams) error {
@@ -947,6 +968,7 @@ func (q *Queries) UpdatePipelineRunBuild(ctx context.Context, arg UpdatePipeline
 		arg.BuildCostUsd,
 		arg.BuildSessionID,
 		arg.BuildToolCalls,
+		arg.BuildClaudeMdContent,
 		arg.WorkflowID,
 	)
 	return err
