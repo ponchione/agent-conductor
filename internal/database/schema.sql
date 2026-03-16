@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     build_cost_usd          REAL,
     build_session_id        TEXT,
     build_tool_calls        TEXT,
+    build_claude_md_content TEXT,
 
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at              TEXT NOT NULL DEFAULT (datetime('now'))

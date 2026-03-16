@@ -37,7 +37,7 @@ func NewDB(dsn string) (*DB, error) {
 		return nil, err
 	}
 
-	if _, err := conn.Exec(ddl); err != nil {
+	if err := applyDDL(conn); err != nil {
 		return nil, fmt.Errorf("migration failed: %w", err)
 	}
 
@@ -70,6 +70,7 @@ func NewDB(dsn string) (*DB, error) {
 		"ALTER TABLE plan_runs ADD COLUMN pre_audit_work_order_count INTEGER",
 		"ALTER TABLE plan_runs ADD COLUMN post_audit_work_order_count INTEGER",
 		"ALTER TABLE plan_runs ADD COLUMN audit_change_text TEXT",
+		"ALTER TABLE pipeline_runs ADD COLUMN build_claude_md_content TEXT",
 	}
 	for _, m := range migrations {
 		_, migErr := conn.Exec(m)
@@ -87,4 +88,22 @@ func NewDB(dsn string) (*DB, error) {
 
 func (db *DB) Close() error {
 	return db.conn.Close()
+}
+
+func applyDDL(conn *sql.DB) error {
+	statements := strings.Split(ddl, ";")
+	for _, stmt := range statements {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		if _, err := conn.Exec(stmt); err != nil {
+			upperStmt := strings.ToUpper(stmt)
+			if strings.HasPrefix(upperStmt, "CREATE INDEX IF NOT EXISTS") && strings.Contains(err.Error(), "no such column") {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
 }

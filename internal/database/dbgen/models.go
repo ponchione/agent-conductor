@@ -64,6 +64,7 @@ type PipelineRun struct {
 	BuildCostUsd             sql.NullFloat64 `json:"build_cost_usd"`
 	BuildSessionID           sql.NullString  `json:"build_session_id"`
 	BuildToolCalls           sql.NullString  `json:"build_tool_calls"`
+	BuildClaudeMdContent     sql.NullString  `json:"build_claude_md_content"`
 	CreatedAt                string          `json:"created_at"`
 	UpdatedAt                string          `json:"updated_at"`
 }
