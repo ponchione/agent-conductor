@@ -134,6 +134,9 @@ func (w *Worker) runBootstrapScope(ctx context.Context, task *database.Task) err
 	if err := os.WriteFile(pkgPath, pkgData, 0644); err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to write context package: %w", err)
 	}
+	w.registerWorkflowArtifact(ctx, task.WorkflowID, task.ID, database.ArtifactTypeContextPackage, pkgPath, map[string]any{
+		"phase": "scope",
+	})
 
 	if err := w.db.UpdatePipelineRunScope(ctx, database.UpdatePipelineRunScopeParams{
 		WorkflowID:               task.WorkflowID,
@@ -167,10 +170,7 @@ func (w *Worker) runBootstrapScope(ctx context.Context, task *database.Task) err
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to update workflow budget: %w", err)
 	}
 
-	if err := w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
-		ID:           task.WorkflowID,
-		CurrentState: "scope_complete",
-	}); err != nil {
+	if err := w.db.TransitionWorkflowState(ctx, task.WorkflowID, "scope_complete"); err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID,
 			"failed to update workflow state to scope_complete: %w", err)
 	}
@@ -300,6 +300,9 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	if err := os.WriteFile(pkgPath, pkgData, 0644); err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to write context package: %w", err)
 	}
+	w.registerWorkflowArtifact(ctx, task.WorkflowID, task.ID, database.ArtifactTypeContextPackage, pkgPath, map[string]any{
+		"phase": "scope",
+	})
 
 	agg := aggregateTokens(records, "synthesize")
 
@@ -337,10 +340,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "failed to update workflow budget: %w", err)
 	}
 
-	if err := w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
-		ID:           task.WorkflowID,
-		CurrentState: "scope_complete",
-	}); err != nil {
+	if err := w.db.TransitionWorkflowState(ctx, task.WorkflowID, "scope_complete"); err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID,
 			"failed to update workflow state to scope_complete: %w", err)
 	}

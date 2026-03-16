@@ -137,59 +137,25 @@ var runCmd = &cobra.Command{
 }
 
 // runSync executes a work order synchronously.
-func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database.DB, cfg *config.ProjectConfig) error {
+func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database.DB, cfg *config.ProjectConfig) (err error) {
 	fmt.Printf("Starting synchronous execution for: %s\n\n", absPath)
 
 	ctx := context.Background()
 
-	wfID := uuid.New().String()
-	taskID := uuid.New().String()
-	branchName := fmt.Sprintf("%s-%s", cfg.Git.BranchPrefix, wfID[:8])
-
-	err := db.CreateWorkflow(ctx, database.CreateWorkflowParams{
-		ID:                     wfID,
-		OriginalIntent:         "Work Order: " + filepath.Base(absPath),
-		OriginalFile:           absPath,
-		CurrentState:           "pending",
-		TargetRepo:             cfg.Project.Name,
-		GitBranch:              branchName,
-		ContextPackagePath:     sql.NullString{},
-		VerificationReportPath: sql.NullString{},
-		MaxDepth:               5,
-		MaxFilesChanged:        int64(cfg.Safety.MaxFilesChanged),
-		MaxDurationMins:        int64(cfg.Safety.MaxDurationMins),
-	})
+	sessionID, wfID, err := initializeRunSession(ctx, db, cfg, absPath, wo)
+	defer func() {
+		if err == nil || sessionID == "" {
+			return
+		}
+		if transitionErr := db.TransitionSessionState(ctx, sessionID, database.SessionStateFailed, err.Error()); transitionErr != nil {
+			slog.Warn("failed to update run session state", "session_id", sessionID, "state", database.SessionStateFailed, "error", transitionErr)
+		}
+	}()
 	if err != nil {
-		return fmt.Errorf("failed to create workflow: %w", err)
+		return err
 	}
 
-	pipelineRunID := uuid.New().String()
-	if err := db.CreatePipelineRun(ctx, database.CreatePipelineRunParams{
-		ID:            pipelineRunID,
-		WorkflowID:    wfID,
-		Project:       cfg.Project.Name,
-		WorkOrderType: sql.NullString{String: wo.Type, Valid: wo.Type != ""},
-	}); err != nil {
-		slog.Warn("Failed to create pipeline_run", "workflow", wfID, "error", err)
-	}
-
-	err = db.CreateTask(ctx, database.CreateTaskParams{
-		ID:            taskID,
-		WorkflowID:    wfID,
-		SequenceNum:   1,
-		TaskType:      "execution",
-		AgentType:     "claude-code",
-		TargetRepo:    cfg.Project.Name,
-		Phase:         "scope",
-		InputArtifact: absPath,
-		State:         "pending",
-		MaxAttempts:   2,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create task: %w", err)
-	}
-
-	fmt.Printf("Workflow %s created. Processing phases...\n", wfID)
+	fmt.Printf("Workflow %s created in session %s. Processing phases...\n", wfID, sessionID)
 
 	for {
 		w.ProcessNextTask(ctx)
@@ -209,4 +175,61 @@ func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database
 	}
 
 	return nil
+}
+
+func initializeRunSession(ctx context.Context, db *database.DB, cfg *config.ProjectConfig, absPath string, wo models.WorkOrder) (string, string, error) {
+	sessionID, err := db.StartSession(ctx, database.SessionKindRunOnly, cfg.Project.Name, absPath)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create session: %w", err)
+	}
+
+	wfID := uuid.New().String()
+	branchName := fmt.Sprintf("%s-%s", cfg.Git.BranchPrefix, wfID[:8])
+
+	if err := db.CreateWorkflow(ctx, database.CreateWorkflowParams{
+		ID:                     wfID,
+		OriginalIntent:         "Work Order: " + filepath.Base(absPath),
+		OriginalFile:           absPath,
+		CurrentState:           "pending",
+		TargetRepo:             cfg.Project.Name,
+		GitBranch:              branchName,
+		ContextPackagePath:     sql.NullString{},
+		VerificationReportPath: sql.NullString{},
+		MaxDepth:               5,
+		MaxFilesChanged:        int64(cfg.Safety.MaxFilesChanged),
+		MaxDurationMins:        int64(cfg.Safety.MaxDurationMins),
+	}); err != nil {
+		return sessionID, "", fmt.Errorf("failed to create workflow: %w", err)
+	}
+
+	pipelineRunID := uuid.New().String()
+	if err := db.CreatePipelineRun(ctx, database.CreatePipelineRunParams{
+		ID:            pipelineRunID,
+		WorkflowID:    wfID,
+		Project:       cfg.Project.Name,
+		WorkOrderType: sql.NullString{String: wo.Type, Valid: wo.Type != ""},
+	}); err != nil {
+		return sessionID, "", fmt.Errorf("failed to create pipeline_run: %w", err)
+	}
+	if err := db.LinkPipelineRunToSession(ctx, pipelineRunID, sessionID); err != nil {
+		return sessionID, "", fmt.Errorf("failed to link pipeline_run to session: %w", err)
+	}
+
+	taskID := uuid.New().String()
+	if err := db.CreateTask(ctx, database.CreateTaskParams{
+		ID:            taskID,
+		WorkflowID:    wfID,
+		SequenceNum:   1,
+		TaskType:      "execution",
+		AgentType:     "claude-code",
+		TargetRepo:    cfg.Project.Name,
+		Phase:         "scope",
+		InputArtifact: absPath,
+		State:         "pending",
+		MaxAttempts:   2,
+	}); err != nil {
+		return sessionID, "", fmt.Errorf("failed to create task: %w", err)
+	}
+
+	return sessionID, wfID, nil
 }

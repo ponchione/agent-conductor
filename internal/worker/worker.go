@@ -112,15 +112,15 @@ func (w *Worker) ProcessNextTask(ctx stdctx.Context) {
 			}
 		case pipelineerrors.NeedsHuman:
 			w.q.FailTask(task.ID, result)
-			w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
-				ID: task.WorkflowID, CurrentState: "human_review",
-			})
+			if err := w.db.TransitionWorkflowState(ctx, task.WorkflowID, "human_review"); err != nil {
+				slog.Error("Failed to transition workflow to human_review", "workflow", task.WorkflowID, "error", err)
+			}
 			return
 		}
 		w.q.FailTask(task.ID, result)
-		w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
-			ID: task.WorkflowID, CurrentState: "failed",
-		})
+		if err := w.db.TransitionWorkflowState(ctx, task.WorkflowID, "failed"); err != nil {
+			slog.Error("Failed to transition workflow to failed", "workflow", task.WorkflowID, "error", err)
+		}
 	}
 }
 

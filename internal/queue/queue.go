@@ -132,10 +132,9 @@ func (q *Queue) triggerGate(workflowID, gateType, details string) {
 	slog.Info("Triggering gate", "wf", workflowID, "type", gateType)
 
 	ctx := context.Background()
-	q.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
-		ID:           workflowID,
-		CurrentState: StateReviewNeeded,
-	})
+	if err := q.db.TransitionWorkflowState(ctx, workflowID, StateReviewNeeded); err != nil {
+		slog.Warn("Failed to transition workflow to human_review", "workflow", workflowID, "error", err)
+	}
 
 	q.db.LogEvent(workflowID, "", "gate_triggered", map[string]any{
 		"gate_type": gateType,

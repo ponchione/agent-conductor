@@ -267,9 +267,15 @@ GROUP BY phase;
 
 -- name: InsertPlanRun :exec
 INSERT INTO plan_runs (
-    id, spec_file, generation_model, audit_model,
+    id, spec_file, project, spec_fingerprint,
+    generation_model, audit_model,
+    generation_session_id, audit_session_id,
     work_orders_generated,
+    pre_audit_work_order_count, post_audit_work_order_count, audit_change_text,
     audit_work_orders_added, audit_work_orders_modified, audit_work_orders_unchanged,
+    generation_cost_usd, audit_cost_usd,
+    generation_duration_ms, audit_duration_ms,
+    generation_retry_count,
     generation_tokens_in, generation_tokens_out,
     audit_tokens_in, audit_tokens_out
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);

@@ -3,6 +3,7 @@ package git
 import (
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
@@ -182,4 +183,108 @@ func (g *GitManager) GetChangedFilesBetween(repoPath, base, target string) ([]st
 		}
 	}
 	return files, nil
+}
+
+// GetWorktreeDiffAgainstBase returns a unified diff between the named base ref
+// and the current worktree. Unlike GetDiff, this includes uncommitted edits.
+func (g *GitManager) GetWorktreeDiffAgainstBase(repoPath, base string) (string, error) {
+	trackedDiff, err := g.runOutputAllowExitCodes(repoPath, []int{0}, "diff", "--no-ext-diff", "--find-renames", base)
+	if err != nil {
+		return "", err
+	}
+
+	untrackedFiles, err := g.listUntrackedFiles(repoPath)
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+	if trackedDiff != "" {
+		sb.WriteString(trackedDiff)
+		if !strings.HasSuffix(trackedDiff, "\n") {
+			sb.WriteString("\n")
+		}
+	}
+
+	for _, file := range untrackedFiles {
+		patch, diffErr := g.runOutputAllowExitCodes(repoPath, []int{1}, "diff", "--no-index", "--", "/dev/null", file)
+		if diffErr != nil {
+			return "", fmt.Errorf("git diff for untracked file %s: %w", file, diffErr)
+		}
+		sb.WriteString(patch)
+		if !strings.HasSuffix(patch, "\n") {
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String(), nil
+}
+
+// GetChangedFilesAgainstBase returns the file paths that differ between the
+// named base ref and the current worktree, including untracked files.
+func (g *GitManager) GetChangedFilesAgainstBase(repoPath, base string) ([]string, error) {
+	out, err := g.runOutput(repoPath, "diff", "--name-only", "--find-renames", base)
+	if err != nil {
+		return nil, err
+	}
+
+	files := make(map[string]struct{})
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		files[line] = struct{}{}
+	}
+
+	untrackedFiles, err := g.listUntrackedFiles(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range untrackedFiles {
+		files[file] = struct{}{}
+	}
+
+	result := make([]string, 0, len(files))
+	for file := range files {
+		result = append(result, file)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func (g *GitManager) listUntrackedFiles(repoPath string) ([]string, error) {
+	out, err := g.runOutput(repoPath, "ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	files := strings.Split(out, "\n")
+	for i, file := range files {
+		files[i] = strings.TrimSpace(file)
+	}
+	return files, nil
+}
+
+func (g *GitManager) runOutputAllowExitCodes(repoPath string, allowed []int, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err == nil {
+		return string(out), nil
+	}
+
+	var exitCode int
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		exitCode = exitErr.ExitCode()
+		for _, allowedCode := range allowed {
+			if exitCode == allowedCode {
+				return string(out), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 }

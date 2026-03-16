@@ -81,13 +81,25 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "build execution failed: %w", err)
 	}
 
+	w.registerWorkflowArtifact(ctx, task.WorkflowID, task.ID, database.ArtifactTypeBuildStdout, result.StdoutPath, map[string]any{
+		"phase": "build",
+	})
+	w.registerWorkflowArtifact(ctx, task.WorkflowID, task.ID, database.ArtifactTypeBuildStderr, result.StderrPath, map[string]any{
+		"phase": "build",
+	})
+
 	if !result.Success {
 		return pipelineerrors.NeedsHumanf("build", task.WorkflowID, task.ID,
 			"build agent exited with code %d", result.ExitCode)
 	}
 
+	if err := w.git.CheckoutBranch(w.cfg.Project.Path, wf.GitBranch); err != nil {
+		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID,
+			"failed to ensure branch %s after build: %w", wf.GitBranch, err)
+	}
+
 	baseBranch := w.cfg.Git.BaseBranch
-	changedFiles, changedFilesErr := w.git.GetChangedFilesBetween(w.cfg.Project.Path, baseBranch, wf.GitBranch)
+	changedFiles, changedFilesErr := w.git.GetChangedFilesAgainstBase(w.cfg.Project.Path, baseBranch)
 
 	if len(w.cfg.Safety.ForbiddenPaths) > 0 {
 		if changedFilesErr != nil {
@@ -123,10 +135,7 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	// Intentionally non-transactional: state update and metrics are written
 	// separately. If the state update fails we return fatal; metric writes
 	// are best-effort and logged on failure.
-	if err := w.db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
-		ID:           task.WorkflowID,
-		CurrentState: "build_complete",
-	}); err != nil {
+	if err := w.db.TransitionWorkflowState(ctx, task.WorkflowID, "build_complete"); err != nil {
 		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID,
 			"failed to update workflow state to build_complete: %w", err)
 	}

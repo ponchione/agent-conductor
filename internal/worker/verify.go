@@ -85,8 +85,13 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "workflow missing: %w", err)
 	}
 
+	if err := w.git.CheckoutBranch(w.cfg.Project.Path, wf.GitBranch); err != nil {
+		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID,
+			"failed to checkout branch %s for verify: %w", wf.GitBranch, err)
+	}
+
 	baseBranch := w.cfg.Git.BaseBranch
-	diff, err := w.git.GetDiff(w.cfg.Project.Path, baseBranch, wf.GitBranch)
+	diff, err := w.git.GetWorktreeDiffAgainstBase(w.cfg.Project.Path, baseBranch)
 	if err != nil {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "git diff failed: %w", err)
 	}
@@ -193,12 +198,12 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 	if err != nil {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "%s", err)
 	}
+	w.registerWorkflowArtifact(ctx, task.WorkflowID, task.ID, database.ArtifactTypeVerifyReport, reportPath, map[string]any{
+		"phase":  "verify",
+		"status": report.Status,
+	})
 
-	if err := w.db.UpdateWorkflowVerification(ctx, database.UpdateWorkflowVerificationParams{
-		ID:                     task.WorkflowID,
-		VerificationReportPath: sql.NullString{String: reportPath, Valid: true},
-		CurrentState:           "human_review",
-	}); err != nil {
+	if err := w.db.SetWorkflowVerificationAndTransition(ctx, task.WorkflowID, sql.NullString{String: reportPath, Valid: true}); err != nil {
 		return pipelineerrors.Fatalf("verify", task.WorkflowID, task.ID, "failed to update workflow verification: %w", err)
 	}
 

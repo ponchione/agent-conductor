@@ -135,6 +135,18 @@ var statsCmd = &cobra.Command{
 			printScopeQualitySection(sqStats)
 		}
 
+		// --- PLAN AUDIT EFFECTIVENESS ---
+		planStats, err := db.GetPlanAuditChangeStats(ctx)
+		if err != nil {
+			slog.Warn("failed to fetch plan audit change stats", "error", err)
+		} else {
+			recentPlanRuns, recErr := db.ListPlanRunUsefulness(ctx, 5)
+			if recErr != nil {
+				slog.Warn("failed to fetch recent plan usefulness rows", "error", recErr)
+			}
+			printPlanAuditSection(planStats, recentPlanRuns)
+		}
+
 		// --- SUB-CALL SUMMARY ---
 		printSubCallSummary(ctx, db)
 
@@ -234,6 +246,55 @@ func printScopeQualitySection(s database.GetScopeQualityStatsRow) {
 		nullF64ToInt(s.ComplexityMedium),
 		nullF64ToInt(s.ComplexityHigh),
 	)
+}
+
+func printPlanAuditSection(stats database.PlanAuditChangeStats, rows []database.PlanRunUsefulness) {
+	fmt.Println()
+	fmt.Println("--- PLAN AUDIT EFFECTIVENESS ---")
+	fmt.Printf("Total plan runs: %d\n", stats.TotalRuns)
+	fmt.Printf("Audit changed:   %d (%d%%)\n", stats.ChangedRuns, pct(stats.ChangedRuns, stats.TotalRuns))
+	fmt.Printf("Audit unchanged: %d\n", stats.UnchangedRuns)
+
+	if len(rows) == 0 {
+		return
+	}
+
+	fmt.Println()
+	fmt.Printf("%-10s  %-18s  %-8s  %-6s  %-8s  %s\n", "ID", "SPEC", "CHANGED", "DELTA", "ORDERS", "CREATED")
+	for _, row := range rows {
+		id := row.ID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		spec := filepath.Base(row.SpecFile)
+		if len(spec) > 18 {
+			spec = spec[:18]
+		}
+
+		changed := "no"
+		if row.AuditChanged {
+			changed = "yes"
+		}
+
+		delta := "-"
+		if row.WorkOrderDelta.Valid {
+			delta = fmt.Sprintf("%+d", row.WorkOrderDelta.Int64)
+		}
+
+		orders := "-"
+		if row.PostAuditWorkOrderCount.Valid {
+			orders = fmt.Sprintf("%d", row.PostAuditWorkOrderCount.Int64)
+		} else if row.WorkOrdersGenerated.Valid {
+			orders = fmt.Sprintf("%d", row.WorkOrdersGenerated.Int64)
+		}
+
+		created := row.CreatedAt
+		if len(created) > 16 {
+			created = created[:16]
+		}
+
+		fmt.Printf("%-10s  %-18s  %-8s  %-6s  %-8s  %s\n", id, spec, changed, delta, orders, created)
+	}
 }
 
 func printSubCallSummary(ctx context.Context, db *database.DB) {

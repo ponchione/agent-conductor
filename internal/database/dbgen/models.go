@@ -8,6 +8,18 @@ import (
 	"database/sql"
 )
 
+type Artifact struct {
+	ID           string         `json:"id"`
+	SessionID    sql.NullString `json:"session_id"`
+	WorkflowID   sql.NullString `json:"workflow_id"`
+	TaskID       sql.NullString `json:"task_id"`
+	ArtifactType string         `json:"artifact_type"`
+	Path         string         `json:"path"`
+	SizeBytes    sql.NullInt64  `json:"size_bytes"`
+	MetadataJson sql.NullString `json:"metadata_json"`
+	CreatedAt    string         `json:"created_at"`
+}
+
 type Event struct {
 	ID         int64          `json:"id"`
 	WorkflowID sql.NullString `json:"workflow_id"`
@@ -19,6 +31,7 @@ type Event struct {
 
 type PipelineRun struct {
 	ID                       string          `json:"id"`
+	SessionID                sql.NullString  `json:"session_id"`
 	WorkflowID               string          `json:"workflow_id"`
 	Project                  string          `json:"project"`
 	WorkOrderType            sql.NullString  `json:"work_order_type"`
@@ -56,19 +69,45 @@ type PipelineRun struct {
 }
 
 type PlanRun struct {
-	ID                       string         `json:"id"`
-	SpecFile                 string         `json:"spec_file"`
-	GenerationModel          sql.NullString `json:"generation_model"`
-	AuditModel               sql.NullString `json:"audit_model"`
-	WorkOrdersGenerated      sql.NullInt64  `json:"work_orders_generated"`
-	AuditWorkOrdersAdded     sql.NullInt64  `json:"audit_work_orders_added"`
-	AuditWorkOrdersModified  sql.NullInt64  `json:"audit_work_orders_modified"`
-	AuditWorkOrdersUnchanged sql.NullInt64  `json:"audit_work_orders_unchanged"`
-	AuditTokensIn            sql.NullInt64  `json:"audit_tokens_in"`
-	AuditTokensOut           sql.NullInt64  `json:"audit_tokens_out"`
-	GenerationTokensIn       sql.NullInt64  `json:"generation_tokens_in"`
-	GenerationTokensOut      sql.NullInt64  `json:"generation_tokens_out"`
-	CreatedAt                string         `json:"created_at"`
+	ID                       string          `json:"id"`
+	SessionID                sql.NullString  `json:"session_id"`
+	SpecFile                 string          `json:"spec_file"`
+	Project                  sql.NullString  `json:"project"`
+	SpecFingerprint          sql.NullString  `json:"spec_fingerprint"`
+	GenerationModel          sql.NullString  `json:"generation_model"`
+	AuditModel               sql.NullString  `json:"audit_model"`
+	GenerationSessionID      sql.NullString  `json:"generation_session_id"`
+	AuditSessionID           sql.NullString  `json:"audit_session_id"`
+	WorkOrdersGenerated      sql.NullInt64   `json:"work_orders_generated"`
+	PreAuditWorkOrderCount   sql.NullInt64   `json:"pre_audit_work_order_count"`
+	PostAuditWorkOrderCount  sql.NullInt64   `json:"post_audit_work_order_count"`
+	AuditChangeText          sql.NullString  `json:"audit_change_text"`
+	AuditWorkOrdersAdded     sql.NullInt64   `json:"audit_work_orders_added"`
+	AuditWorkOrdersModified  sql.NullInt64   `json:"audit_work_orders_modified"`
+	AuditWorkOrdersUnchanged sql.NullInt64   `json:"audit_work_orders_unchanged"`
+	GenerationCostUsd        sql.NullFloat64 `json:"generation_cost_usd"`
+	AuditCostUsd             sql.NullFloat64 `json:"audit_cost_usd"`
+	GenerationDurationMs     sql.NullInt64   `json:"generation_duration_ms"`
+	AuditDurationMs          sql.NullInt64   `json:"audit_duration_ms"`
+	GenerationRetryCount     int64           `json:"generation_retry_count"`
+	AuditTokensIn            sql.NullInt64   `json:"audit_tokens_in"`
+	AuditTokensOut           sql.NullInt64   `json:"audit_tokens_out"`
+	GenerationTokensIn       sql.NullInt64   `json:"generation_tokens_in"`
+	GenerationTokensOut      sql.NullInt64   `json:"generation_tokens_out"`
+	CreatedAt                string          `json:"created_at"`
+}
+
+type Session struct {
+	ID             string         `json:"id"`
+	Kind           string         `json:"kind"`
+	Project        string         `json:"project"`
+	SourceSpecPath sql.NullString `json:"source_spec_path"`
+	State          string         `json:"state"`
+	ErrorMessage   sql.NullString `json:"error_message"`
+	StartedAt      sql.NullString `json:"started_at"`
+	CompletedAt    sql.NullString `json:"completed_at"`
+	CreatedAt      string         `json:"created_at"`
+	UpdatedAt      string         `json:"updated_at"`
 }
 
 type SubCall struct {

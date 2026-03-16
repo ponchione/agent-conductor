@@ -26,11 +26,7 @@ func (q *Queries) ClaimTask(ctx context.Context, arg ClaimTaskParams) (int64, er
 	if err != nil {
 		return 0, err
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	return rows, nil
+	return result.RowsAffected()
 }
 
 const completeTask = `-- name: CompleteTask :exec
@@ -742,39 +738,69 @@ func (q *Queries) GetWorkflow(ctx context.Context, id string) (Workflow, error) 
 
 const insertPlanRun = `-- name: InsertPlanRun :exec
 INSERT INTO plan_runs (
-    id, spec_file, generation_model, audit_model,
+    id, spec_file, project, spec_fingerprint,
+    generation_model, audit_model,
+    generation_session_id, audit_session_id,
     work_orders_generated,
+    pre_audit_work_order_count, post_audit_work_order_count, audit_change_text,
     audit_work_orders_added, audit_work_orders_modified, audit_work_orders_unchanged,
+    generation_cost_usd, audit_cost_usd,
+    generation_duration_ms, audit_duration_ms,
+    generation_retry_count,
     generation_tokens_in, generation_tokens_out,
     audit_tokens_in, audit_tokens_out
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertPlanRunParams struct {
-	ID                       string         `json:"id"`
-	SpecFile                 string         `json:"spec_file"`
-	GenerationModel          sql.NullString `json:"generation_model"`
-	AuditModel               sql.NullString `json:"audit_model"`
-	WorkOrdersGenerated      sql.NullInt64  `json:"work_orders_generated"`
-	AuditWorkOrdersAdded     sql.NullInt64  `json:"audit_work_orders_added"`
-	AuditWorkOrdersModified  sql.NullInt64  `json:"audit_work_orders_modified"`
-	AuditWorkOrdersUnchanged sql.NullInt64  `json:"audit_work_orders_unchanged"`
-	GenerationTokensIn       sql.NullInt64  `json:"generation_tokens_in"`
-	GenerationTokensOut      sql.NullInt64  `json:"generation_tokens_out"`
-	AuditTokensIn            sql.NullInt64  `json:"audit_tokens_in"`
-	AuditTokensOut           sql.NullInt64  `json:"audit_tokens_out"`
+	ID                       string          `json:"id"`
+	SpecFile                 string          `json:"spec_file"`
+	Project                  sql.NullString  `json:"project"`
+	SpecFingerprint          sql.NullString  `json:"spec_fingerprint"`
+	GenerationModel          sql.NullString  `json:"generation_model"`
+	AuditModel               sql.NullString  `json:"audit_model"`
+	GenerationSessionID      sql.NullString  `json:"generation_session_id"`
+	AuditSessionID           sql.NullString  `json:"audit_session_id"`
+	WorkOrdersGenerated      sql.NullInt64   `json:"work_orders_generated"`
+	PreAuditWorkOrderCount   sql.NullInt64   `json:"pre_audit_work_order_count"`
+	PostAuditWorkOrderCount  sql.NullInt64   `json:"post_audit_work_order_count"`
+	AuditChangeText          sql.NullString  `json:"audit_change_text"`
+	AuditWorkOrdersAdded     sql.NullInt64   `json:"audit_work_orders_added"`
+	AuditWorkOrdersModified  sql.NullInt64   `json:"audit_work_orders_modified"`
+	AuditWorkOrdersUnchanged sql.NullInt64   `json:"audit_work_orders_unchanged"`
+	GenerationCostUsd        sql.NullFloat64 `json:"generation_cost_usd"`
+	AuditCostUsd             sql.NullFloat64 `json:"audit_cost_usd"`
+	GenerationDurationMs     sql.NullInt64   `json:"generation_duration_ms"`
+	AuditDurationMs          sql.NullInt64   `json:"audit_duration_ms"`
+	GenerationRetryCount     int64           `json:"generation_retry_count"`
+	GenerationTokensIn       sql.NullInt64   `json:"generation_tokens_in"`
+	GenerationTokensOut      sql.NullInt64   `json:"generation_tokens_out"`
+	AuditTokensIn            sql.NullInt64   `json:"audit_tokens_in"`
+	AuditTokensOut           sql.NullInt64   `json:"audit_tokens_out"`
 }
 
 func (q *Queries) InsertPlanRun(ctx context.Context, arg InsertPlanRunParams) error {
 	_, err := q.db.ExecContext(ctx, insertPlanRun,
 		arg.ID,
 		arg.SpecFile,
+		arg.Project,
+		arg.SpecFingerprint,
 		arg.GenerationModel,
 		arg.AuditModel,
+		arg.GenerationSessionID,
+		arg.AuditSessionID,
 		arg.WorkOrdersGenerated,
+		arg.PreAuditWorkOrderCount,
+		arg.PostAuditWorkOrderCount,
+		arg.AuditChangeText,
 		arg.AuditWorkOrdersAdded,
 		arg.AuditWorkOrdersModified,
 		arg.AuditWorkOrdersUnchanged,
+		arg.GenerationCostUsd,
+		arg.AuditCostUsd,
+		arg.GenerationDurationMs,
+		arg.AuditDurationMs,
+		arg.GenerationRetryCount,
 		arg.GenerationTokensIn,
 		arg.GenerationTokensOut,
 		arg.AuditTokensIn,

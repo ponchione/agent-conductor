@@ -30,10 +30,7 @@ func Approve(ctx context.Context, db *database.DB, gitMgr *git.GitManager, workf
 		slog.Warn("Failed to delete conducted branch", "branch", wf.GitBranch, "error", err)
 	}
 
-	if err := db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
-		ID:           workflowID,
-		CurrentState: "completed",
-	}); err != nil {
+	if err := db.TransitionWorkflowState(ctx, workflowID, "completed"); err != nil {
 		return fmt.Errorf("failed to approve workflow: %w", err)
 	}
 
@@ -70,10 +67,7 @@ func Reject(ctx context.Context, db *database.DB, workflowID, reason string) err
 		reason = "rejected by human reviewer"
 	}
 
-	if err := db.UpdateWorkflowState(ctx, database.UpdateWorkflowStateParams{
-		ID:           workflowID,
-		CurrentState: "failed",
-	}); err != nil {
+	if err := db.TransitionWorkflowState(ctx, workflowID, "failed"); err != nil {
 		return fmt.Errorf("failed to reject workflow: %w", err)
 	}
 

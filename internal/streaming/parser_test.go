@@ -186,6 +186,43 @@ func TestStreamParser_RawFieldPopulated(t *testing.T) {
 	}
 }
 
+func TestCollectText_AssemblesTextAndMetadata(t *testing.T) {
+	lines := []string{
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello "}]}}`,
+		`{"type":"tool_use","tool":{"name":"Read","input":{"file_path":"cmd/conductor/plan.go"}}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"world"}]}}`,
+		`{"type":"result","total_cost_usd":0.05,"session_id":"sess-1","model":"claude-opus-4","usage":{"input_tokens":100,"output_tokens":20}}`,
+	}
+	input := strings.Join(lines, "\n") + "\n"
+
+	var events []StreamEvent
+	text, result := CollectText(strings.NewReader(input), nil, func(ev StreamEvent) {
+		events = append(events, ev)
+	})
+
+	if text != "Hello world" {
+		t.Fatalf("text = %q, want %q", text, "Hello world")
+	}
+	if result.TokensIn != 100 {
+		t.Fatalf("TokensIn = %d, want 100", result.TokensIn)
+	}
+	if result.TokensOut != 20 {
+		t.Fatalf("TokensOut = %d, want 20", result.TokensOut)
+	}
+	if result.CostUSD != 0.05 {
+		t.Fatalf("CostUSD = %f, want 0.05", result.CostUSD)
+	}
+	if result.SessionID != "sess-1" {
+		t.Fatalf("SessionID = %q, want %q", result.SessionID, "sess-1")
+	}
+	if result.ToolCalls["Read"] != 1 {
+		t.Fatalf("ToolCalls[Read] = %d, want 1", result.ToolCalls["Read"])
+	}
+	if len(events) != 4 {
+		t.Fatalf("expected 4 callback events, got %d", len(events))
+	}
+}
+
 func TestConsoleCallback_AssistantText(t *testing.T) {
 	var buf bytes.Buffer
 	cb := ConsoleCallback(&buf)

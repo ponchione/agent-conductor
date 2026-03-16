@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/ponchione/agent-conductor/internal/streaming"
@@ -73,21 +72,7 @@ type claudeUsage struct {
 // assistant text content, calls callback for each event (if non-nil),
 // and returns the assembled text and stream result.
 func parseStreamOutput(r io.Reader, callback func(streaming.StreamEvent)) (string, streaming.Result) {
-	var text strings.Builder
-
-	wrappedCallback := func(ev streaming.StreamEvent) {
-		if ev.Type == "assistant" && ev.Content != "" {
-			text.WriteString(ev.Content)
-		}
-		if callback != nil {
-			callback(ev)
-		}
-	}
-
-	parser := streaming.NewStreamParser(wrappedCallback)
-	parser.Parse(r, io.Discard)
-
-	return text.String(), parser.GetResult()
+	return streaming.CollectText(r, io.Discard, callback)
 }
 
 // CompleteStream runs the claude CLI with streaming output and calls callback

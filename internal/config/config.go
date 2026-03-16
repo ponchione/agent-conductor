@@ -254,6 +254,7 @@ func EnsureDataDirs(cfg *ProjectConfig) error {
 	dirs := []string{
 		filepath.Join(cfg.Project.DataDir, "db"),
 		filepath.Join(cfg.Project.DataDir, "rag"),
+		filepath.Join(cfg.Project.DataDir, "artifacts", "plans"),
 		filepath.Join(cfg.Project.DataDir, "artifacts", "context-packages"),
 		filepath.Join(cfg.Project.DataDir, "artifacts", "verify-reports"),
 		filepath.Join(cfg.Project.DataDir, "artifacts", "work-orders"),

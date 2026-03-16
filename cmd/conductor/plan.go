@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -21,6 +23,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/logging"
 	"github.com/ponchione/agent-conductor/internal/models"
+	"github.com/ponchione/agent-conductor/internal/streaming"
 	"github.com/ponchione/agent-conductor/internal/templates"
 	"github.com/ponchione/agent-conductor/internal/util"
 	"github.com/spf13/cobra"
@@ -65,12 +68,44 @@ func init() {
 	planCmd.Flags().BoolVar(&planSkipAudit, "skip-audit", false, "Skip the audit pass that reviews generated work orders for completeness")
 }
 
-func runPlan(cmd *cobra.Command, args []string) error {
+func runPlan(cmd *cobra.Command, args []string) (err error) {
 	specPath := args[0]
 	specData, err := os.ReadFile(specPath)
 	if err != nil {
 		return fmt.Errorf("failed to read spec file %q: %w", specPath, err)
 	}
+
+	if err := config.EnsureDataDirs(cfg); err != nil {
+		return fmt.Errorf("failed to create data directories: %w", err)
+	}
+
+	dbPath := filepath.Join(cfg.Project.DataDir, "db", "conductor.db")
+	db, err := database.NewDB(dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	sessionID, err := db.StartSession(ctx, database.SessionKindPlanOnly, cfg.Project.Name, specPath)
+	if err != nil {
+		return fmt.Errorf("create session: %w", err)
+	}
+	defer func() {
+		if sessionID == "" {
+			return
+		}
+
+		state := database.SessionStateCompleted
+		errorMessage := ""
+		if err != nil {
+			state = database.SessionStateFailed
+			errorMessage = err.Error()
+		}
+		if transitionErr := db.TransitionSessionState(ctx, sessionID, state, errorMessage); transitionErr != nil {
+			slog.Warn("failed to update plan session state", "session_id", sessionID, "state", state, "error", transitionErr)
+		}
+	}()
 
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
@@ -81,12 +116,14 @@ func runPlan(cmd *cobra.Command, args []string) error {
 	userMsg := buildPlanUserMessage(string(specData), cfg)
 	timeout := time.Duration(planTimeout) * time.Second
 
-	slog.Info("invoking Claude for planning", "timeout", timeout)
-	genResult, err := invokeClaudeWithStats(claudePath, templates.DefaultPlanPrompt, userMsg, timeout)
+	slog.Info("invoking Claude", "phase", "planning", "timeout", timeout)
+	genResult, err := invokeClaudeWithStats(claudePath, templates.DefaultPlanPrompt, userMsg, timeout, newPlanStreamObserver("planning"))
 	if err != nil {
 		return fmt.Errorf("claude invocation failed: %w", err)
 	}
+	logPlanInvocationComplete("planning", genResult)
 	raw := genResult.Content
+	genRetryCount := 0
 
 	workOrders, parseErr := parsePlanResponse(raw)
 	if parseErr != nil {
@@ -97,16 +134,14 @@ func runPlan(cmd *cobra.Command, args []string) error {
 			userMsg, parseErr.Error(), raw,
 		)
 
-		retryResult, retryErr := invokeClaudeWithStats(claudePath, templates.DefaultPlanPrompt, correctionMsg, timeout)
+		slog.Info("invoking Claude", "phase", "planning_retry", "timeout", timeout)
+		retryResult, retryErr := invokeClaudeWithStats(claudePath, templates.DefaultPlanPrompt, correctionMsg, timeout, newPlanStreamObserver("planning_retry"))
 		if retryErr != nil {
 			return fmt.Errorf("claude retry invocation failed: %w", retryErr)
 		}
-		// Accumulate tokens from retry into generation totals.
-		genResult.TokensIn += retryResult.TokensIn
-		genResult.TokensOut += retryResult.TokensOut
-		if retryResult.Model != "" {
-			genResult.Model = retryResult.Model
-		}
+		logPlanInvocationComplete("planning_retry", retryResult)
+		mergeInvokeClaudeResults(genResult, retryResult)
+		genRetryCount++
 		raw = retryResult.Content
 
 		workOrders, parseErr = parsePlanResponse(raw)
@@ -118,16 +153,21 @@ func runPlan(cmd *cobra.Command, args []string) error {
 			if wErr := os.WriteFile(rawPath, []byte(raw), 0644); wErr != nil {
 				return fmt.Errorf("parse failed and could not write raw output: parse=%w, write=%v", parseErr, wErr)
 			}
+			registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanParseFailure, rawPath, map[string]any{
+				"phase": "planning_retry",
+			})
 			return fmt.Errorf("could not parse plan response after retry: %w\nRaw output saved to: %s", parseErr, rawPath)
 		}
 	}
+
+	preAuditWorkOrderCount := len(workOrders)
 
 	var summary *auditSummary
 	var auditResult *invokeClaudeResult
 	if planSkipAudit {
 		slog.Info("skipping audit pass (--skip-audit)")
 	} else {
-		slog.Info("auditing generated work orders", "count", len(workOrders))
+		slog.Info("invoking Claude", "phase", "audit", "count", len(workOrders), "timeout", timeout)
 		auditedOrders, auditSummary, auditRes, auditErr := auditWorkOrders(claudePath, string(specData), workOrders, cfg, timeout)
 		if auditErr != nil {
 			slog.Warn("audit pass failed, using unaudited work orders", "error", auditErr)
@@ -135,16 +175,48 @@ func runPlan(cmd *cobra.Command, args []string) error {
 			workOrders = auditedOrders
 			summary = auditSummary
 			auditResult = auditRes
+			logPlanInvocationComplete("audit", auditResult)
 		}
 	}
 
 	// Persist metrics (best-effort).
-	if err := recordPlanRun(cfg, specPath, genResult, auditResult, len(workOrders), summary); err != nil {
-		slog.Warn("failed to record plan run metrics", "error", err)
+	if recErr := recordPlanRun(db, sessionID, cfg.Project.Name, specPath, specData, genResult, auditResult, preAuditWorkOrderCount, len(workOrders), summary, genRetryCount); recErr != nil {
+		slog.Warn("failed to record plan run metrics", "error", recErr)
 	}
 
-	if err := writeWorkOrderFiles(workOrders, planOutputDir); err != nil {
+	generationRawPath, err := writePlanSessionArtifact(cfg.Project.DataDir, sessionID, "generation-raw.txt", []byte(raw))
+	if err != nil {
+		slog.Warn("failed to persist raw generation output", "session_id", sessionID, "error", err)
+	} else {
+		registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanRawGeneration, generationRawPath, map[string]any{
+			"phase": "planning",
+		})
+	}
+	if auditResult != nil && auditResult.Content != "" {
+		auditRawPath, writeErr := writePlanSessionArtifact(cfg.Project.DataDir, sessionID, "audit-raw.txt", []byte(auditResult.Content))
+		if writeErr != nil {
+			slog.Warn("failed to persist raw audit output", "session_id", sessionID, "error", writeErr)
+		} else {
+			registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanRawAudit, auditRawPath, map[string]any{
+				"phase": "audit",
+			})
+		}
+	}
+
+	workOrderPaths, err := writeWorkOrderFiles(workOrders, planOutputDir)
+	if err != nil {
 		return fmt.Errorf("failed to write work order files: %w", err)
+	}
+	for i, path := range workOrderPaths {
+		metadata := map[string]any{
+			"index": i + 1,
+			"title": workOrders[i].Title,
+			"type":  workOrders[i].Type,
+		}
+		if workOrders[i].AuditSource != "" {
+			metadata["audit_source"] = workOrders[i].AuditSource
+		}
+		registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypeGeneratedWorkOrder, path, metadata)
 	}
 
 	fmt.Printf("\nGenerated %d work order(s) in %s:\n\n", len(workOrders), planOutputDir)
@@ -165,39 +237,55 @@ func runPlan(cmd *cobra.Command, args []string) error {
 }
 
 // recordPlanRun persists plan metrics to the plan_runs table (best-effort).
-func recordPlanRun(cfg *config.ProjectConfig, specFile string, genResult *invokeClaudeResult, auditResult *invokeClaudeResult, workOrdersGenerated int, summary *auditSummary) error {
-	dbPath := filepath.Join(cfg.Project.DataDir, "db", "conductor.db")
-	db, err := database.NewDB(dbPath)
-	if err != nil {
-		return fmt.Errorf("open database: %w", err)
-	}
-	defer db.Close()
-
+func recordPlanRun(db *database.DB, sessionID, project, specFile string, specData []byte, genResult *invokeClaudeResult, auditResult *invokeClaudeResult, preAuditWorkOrderCount, workOrdersGenerated int, summary *auditSummary, generationRetryCount int) error {
 	id := uuid.New().String()
+	specFingerprint := sha256.Sum256(specData)
 
 	params := database.InsertPlanRunParams{
-		ID:                  id,
-		SpecFile:            specFile,
-		WorkOrdersGenerated: database.Int64(workOrdersGenerated),
+		ID:                      id,
+		SpecFile:                specFile,
+		Project:                 database.String(project),
+		SpecFingerprint:         database.String(hex.EncodeToString(specFingerprint[:])),
+		WorkOrdersGenerated:     database.Int64(workOrdersGenerated),
+		PreAuditWorkOrderCount:  database.Int64(preAuditWorkOrderCount),
+		PostAuditWorkOrderCount: database.Int64(workOrdersGenerated),
+		GenerationRetryCount:    int64(generationRetryCount),
 	}
 	if genResult != nil {
 		params.GenerationModel = database.String(genResult.Model)
 		params.GenerationTokensIn = database.Int64(genResult.TokensIn)
 		params.GenerationTokensOut = database.Int64(genResult.TokensOut)
+		params.GenerationSessionID = database.String(genResult.SessionID)
+		params.GenerationCostUsd = database.Float64(genResult.CostUSD)
+		params.GenerationDurationMs = database.Int64Value(genResult.Duration.Milliseconds())
 	}
 	if auditResult != nil {
 		params.AuditModel = database.String(auditResult.Model)
 		params.AuditTokensIn = database.Int64(auditResult.TokensIn)
 		params.AuditTokensOut = database.Int64(auditResult.TokensOut)
+		params.AuditSessionID = database.String(auditResult.SessionID)
+		params.AuditCostUsd = database.Float64(auditResult.CostUSD)
+		params.AuditDurationMs = database.Int64Value(auditResult.Duration.Milliseconds())
 	}
 	if summary != nil {
 		params.AuditWorkOrdersAdded = database.Int64(summary.Added)
 		params.AuditWorkOrdersModified = database.Int64(summary.Modified)
 		params.AuditWorkOrdersUnchanged = database.Int64(summary.Unchanged)
+		if len(summary.Changes) > 0 {
+			payload, err := json.Marshal(summary.Changes)
+			if err != nil {
+				return fmt.Errorf("marshal audit changes: %w", err)
+			}
+			params.AuditChangeText = database.String(string(payload))
+		}
 	}
 
-	if err := db.InsertPlanRun(context.Background(), params); err != nil {
+	ctx := context.Background()
+	if err := db.InsertPlanRun(ctx, params); err != nil {
 		return fmt.Errorf("insert plan_runs: %w", err)
+	}
+	if err := db.LinkPlanRunToSession(ctx, id, sessionID); err != nil {
+		return fmt.Errorf("link plan_run to session: %w", err)
 	}
 
 	slog.Debug("recorded plan run", "id", id)
@@ -332,80 +420,144 @@ func planBuildFileTree(cfg *config.ProjectConfig) (string, int) {
 	return sb.String(), totalFiles
 }
 
-// invokeClaude runs the claude binary with --print mode and returns stdout.
-// It delegates to invokeClaudeWithStats and discards token metadata.
-func invokeClaude(claudePath, systemPrompt, userMsg string, timeout time.Duration) (string, error) {
-	result, err := invokeClaudeWithStats(claudePath, systemPrompt, userMsg, timeout)
-	if err != nil {
-		return "", err
-	}
-	return result.Content, nil
-}
-
 // invokeClaudeResult holds the text output and token usage from a Claude invocation.
 type invokeClaudeResult struct {
 	Content   string
 	TokensIn  int
 	TokensOut int
 	Model     string
+	CostUSD   float64
+	Duration  time.Duration
+	SessionID string
+	ToolCalls map[string]int
 }
 
-// planCLIResponse mirrors the JSON envelope from claude --print --output-format json.
-type planCLIResponse struct {
-	Result  string        `json:"result"`
-	IsError bool          `json:"is_error"`
-	Model   string        `json:"model"`
-	Usage   planCLIUsage  `json:"usage"`
+// invokeClaude runs the claude binary and returns the final text output.
+func invokeClaude(claudePath, systemPrompt, userMsg string, timeout time.Duration) (string, error) {
+	result, err := invokeClaudeWithStats(claudePath, systemPrompt, userMsg, timeout, nil)
+	if err != nil {
+		return "", err
+	}
+	return result.Content, nil
 }
 
-type planCLIUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-}
-
-// invokeClaudeWithStats runs the claude binary with --output-format json and returns token usage.
-func invokeClaudeWithStats(claudePath, systemPrompt, userMsg string, timeout time.Duration) (*invokeClaudeResult, error) {
+// invokeClaudeWithStats runs the claude binary with stream-json output and returns token usage.
+func invokeClaudeWithStats(claudePath, systemPrompt, userMsg string, timeout time.Duration, callback func(streaming.StreamEvent)) (*invokeClaudeResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, claudePath,
+	args := []string{
 		"--print",
-		"--output-format", "json",
+		"--verbose",
+		"--output-format", "stream-json",
 		"--dangerously-skip-permissions",
 		"--system-prompt", systemPrompt,
 		userMsg,
-	)
+	}
+	cmd := exec.CommandContext(ctx, claudePath, args...)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	start := time.Now()
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start claude: %w", err)
+	}
+
+	content, sr := streaming.CollectText(stdoutPipe, nil, callback)
+
+	if err := cmd.Wait(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return nil, fmt.Errorf("claude timed out after %s", timeout)
 		}
 		return nil, fmt.Errorf("claude exited with error: %w\nstderr: %s", err, stderr.String())
 	}
-
-	var resp planCLIResponse
-	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		// Fallback: return raw output with zero tokens.
-		slog.Warn("could not parse claude JSON output, token counts unavailable", "error", err)
-		return &invokeClaudeResult{Content: stdout.String()}, nil
-	}
-
-	if resp.IsError {
-		return nil, fmt.Errorf("claude returned error: %s", resp.Result)
-	}
+	duration := time.Since(start)
 
 	return &invokeClaudeResult{
-		Content:   resp.Result,
-		TokensIn:  resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens,
-		TokensOut: resp.Usage.OutputTokens,
-		Model:     resp.Model,
+		Content:   content,
+		TokensIn:  sr.TokensIn,
+		TokensOut: sr.TokensOut,
+		Model:     sr.Model,
+		CostUSD:   sr.CostUSD,
+		Duration:  duration,
+		SessionID: sr.SessionID,
+		ToolCalls: sr.ToolCalls,
 	}, nil
+}
+
+func newPlanStreamObserver(phase string) func(streaming.StreamEvent) {
+	var sawAssistant bool
+
+	return func(ev streaming.StreamEvent) {
+		switch ev.Type {
+		case "assistant":
+			if !sawAssistant && ev.Content != "" {
+				sawAssistant = true
+				slog.Info("Claude began emitting response", "phase", phase)
+			}
+		case "tool_use":
+			attrs := []any{"phase", phase, "tool", ev.ToolName}
+			if ev.ToolInput != "" {
+				attrs = append(attrs, "input", ev.ToolInput)
+			}
+			slog.Info("Claude tool use", attrs...)
+		}
+	}
+}
+
+func logPlanInvocationComplete(phase string, result *invokeClaudeResult) {
+	if result == nil {
+		return
+	}
+
+	attrs := []any{
+		"phase", phase,
+		"duration", result.Duration,
+		"tokens_in", result.TokensIn,
+		"tokens_out", result.TokensOut,
+		"cost_usd", result.CostUSD,
+	}
+	if result.Model != "" {
+		attrs = append(attrs, "model", result.Model)
+	}
+	if result.SessionID != "" {
+		attrs = append(attrs, "session_id", result.SessionID)
+	}
+	if len(result.ToolCalls) > 0 {
+		attrs = append(attrs, "tool_calls", result.ToolCalls)
+	}
+
+	slog.Info("Claude invocation complete", attrs...)
+}
+
+func mergeInvokeClaudeResults(dst, src *invokeClaudeResult) {
+	if dst == nil || src == nil {
+		return
+	}
+
+	dst.Content = src.Content
+	dst.TokensIn += src.TokensIn
+	dst.TokensOut += src.TokensOut
+	dst.CostUSD += src.CostUSD
+	dst.Duration += src.Duration
+	if src.Model != "" {
+		dst.Model = src.Model
+	}
+	if src.SessionID != "" {
+		dst.SessionID = src.SessionID
+	}
+	if dst.ToolCalls == nil {
+		dst.ToolCalls = make(map[string]int)
+	}
+	for tool, count := range src.ToolCalls {
+		dst.ToolCalls[tool] += count
+	}
 }
 
 // planWorkOrder is the JSON deserialization type for a single work order from Claude's response.
@@ -511,7 +663,7 @@ func auditWorkOrders(claudePath string, spec string, workOrders []models.WorkOrd
 
 	userMsg := sb.String()
 
-	result, err := invokeClaudeWithStats(claudePath, templates.DefaultPlanAuditPrompt, userMsg, timeout)
+	result, err := invokeClaudeWithStats(claudePath, templates.DefaultPlanAuditPrompt, userMsg, timeout, newPlanStreamObserver("audit"))
 	if err != nil {
 		return workOrders, nil, nil, fmt.Errorf("audit invocation failed: %w", err)
 	}
@@ -571,11 +723,12 @@ type orderedWorkOrder struct {
 }
 
 // writeWorkOrderFiles writes each work order to a numbered YAML file.
-func writeWorkOrderFiles(workOrders []models.WorkOrder, outputDir string) error {
+func writeWorkOrderFiles(workOrders []models.WorkOrder, outputDir string) ([]string, error) {
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create output directory %q: %w", outputDir, err)
+		return nil, fmt.Errorf("failed to create output directory %q: %w", outputDir, err)
 	}
 
+	paths := make([]string, 0, len(workOrders))
 	for i, wo := range workOrders {
 		ordered := orderedWorkOrder{
 			Title:              wo.Title,
@@ -590,7 +743,7 @@ func writeWorkOrderFiles(workOrders []models.WorkOrder, outputDir string) error 
 
 		data, err := yaml.Marshal(ordered)
 		if err != nil {
-			return fmt.Errorf("failed to marshal work order %d: %w", i+1, err)
+			return nil, fmt.Errorf("failed to marshal work order %d: %w", i+1, err)
 		}
 
 		slug := slugify(wo.Title)
@@ -598,12 +751,41 @@ func writeWorkOrderFiles(workOrders []models.WorkOrder, outputDir string) error 
 		path := filepath.Join(outputDir, filename)
 
 		if err := os.WriteFile(path, data, 0644); err != nil {
-			return fmt.Errorf("failed to write %s: %w", path, err)
+			return nil, fmt.Errorf("failed to write %s: %w", path, err)
 		}
 		slog.Debug("wrote work order file", "path", path)
+		paths = append(paths, path)
 	}
 
-	return nil
+	return paths, nil
+}
+
+func writePlanSessionArtifact(dataDir, sessionID, filename string, content []byte) (string, error) {
+	artifactDir := filepath.Join(dataDir, "artifacts", "plans", sessionID)
+	if err := os.MkdirAll(artifactDir, 0755); err != nil {
+		return "", fmt.Errorf("create plan artifact dir: %w", err)
+	}
+
+	path := filepath.Join(artifactDir, filename)
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		return "", fmt.Errorf("write plan artifact: %w", err)
+	}
+
+	return path, nil
+}
+
+func registerPlanArtifact(ctx context.Context, db *database.DB, sessionID, artifactType, path string, metadata map[string]any) {
+	if sessionID == "" || path == "" {
+		return
+	}
+	if _, err := db.RegisterArtifact(ctx, database.RegisterArtifactParams{
+		SessionID:    sessionID,
+		ArtifactType: artifactType,
+		Path:         path,
+		Metadata:     metadata,
+	}); err != nil {
+		slog.Warn("failed to register plan artifact", "session_id", sessionID, "artifact_type", artifactType, "path", path, "error", err)
+	}
 }
 
 var nonAlphanumRe = regexp.MustCompile(`[^a-z0-9]+`)

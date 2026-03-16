@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 )
 
 // StreamParser reads NDJSON from a claude stream, emits typed StreamEvent
@@ -26,6 +27,10 @@ func NewStreamParser(callback func(StreamEvent)) *StreamParser {
 // Parse reads NDJSON lines from r, writes each raw line to logWriter,
 // parses events, and invokes the callback for each one.
 func (p *StreamParser) Parse(r io.Reader, logWriter io.Writer) {
+	if logWriter == nil {
+		logWriter = io.Discard
+	}
+
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
@@ -68,6 +73,26 @@ func (p *StreamParser) Parse(r io.Reader, logWriter io.Writer) {
 	if err := scanner.Err(); err != nil {
 		slog.Warn("StreamParser: scanner error", "error", err)
 	}
+}
+
+// CollectText parses a Claude stream, returns the assembled assistant text,
+// and accumulates result metadata.
+func CollectText(r io.Reader, logWriter io.Writer, callback func(StreamEvent)) (string, Result) {
+	var text strings.Builder
+
+	wrappedCallback := func(ev StreamEvent) {
+		if ev.Type == "assistant" && ev.Content != "" {
+			text.WriteString(ev.Content)
+		}
+		if callback != nil {
+			callback(ev)
+		}
+	}
+
+	parser := NewStreamParser(wrappedCallback)
+	parser.Parse(r, logWriter)
+
+	return text.String(), parser.GetResult()
 }
 
 // GetResult returns the accumulated stream metadata.
