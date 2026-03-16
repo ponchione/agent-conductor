@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conductor Observability</title>
+  <link rel="stylesheet" href="/assets/observability.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Agent Conductor</p>
+        <h1>Observability Console</h1>
+        <p class="lede">Polling-backed visibility into planning sessions, execution runs, and audit effectiveness.</p>
+      </div>
+      <div class="hero-meta">
+        <div class="meta-card">
+          <span class="meta-label">Refresh</span>
+          <strong>5s poll cadence</strong>
+        </div>
+        <div class="meta-card">
+          <span class="meta-label">Scope</span>
+          <strong>Sessions + Audit</strong>
+        </div>
+      </div>
+    </header>
+
+    <main class="dashboard">
+      <section class="panel panel-list">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Live Sessions</p>
+            <h2>Session Feed</h2>
+          </div>
+          <label class="filter">
+            <span>State</span>
+            <select id="state-filter">
+              <option value="">All</option>
+              <option value="running">running</option>
+              <option value="awaiting_review">awaiting_review</option>
+              <option value="completed">completed</option>
+              <option value="failed">failed</option>
+              <option value="partial">partial</option>
+            </select>
+          </label>
+        </div>
+        <div id="session-list-status" class="status-line">Loading sessions...</div>
+        <div id="session-list" class="session-list"></div>
+      </section>
+
+      <section class="panel panel-detail">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Selected Session</p>
+            <h2>Session Detail</h2>
+          </div>
+          <div id="detail-status" class="status-chip">Waiting for selection</div>
+        </div>
+
+        <div id="session-overview" class="detail-hero empty-state">
+          Pick a session to inspect plan runs, pipeline runs, and artifacts.
+        </div>
+
+        <div id="session-summary" class="summary-grid empty-state">
+          Pick a session to inspect plan runs, pipeline runs, and artifacts.
+        </div>
+
+        <div class="detail-columns">
+          <section>
+            <h3>Plan Runs</h3>
+            <div id="plan-runs" class="stack-list empty-state">No plan runs loaded.</div>
+          </section>
+          <section>
+            <h3>Execution Runs</h3>
+            <div id="pipeline-runs" class="stack-list empty-state">No execution runs loaded.</div>
+          </section>
+          <section>
+            <h3>Artifacts</h3>
+            <div id="artifacts" class="stack-list empty-state">No artifacts loaded.</div>
+          </section>
+        </div>
+      </section>
+
+      <section class="panel panel-audit">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Planning Quality</p>
+            <h2>Plan Audit Effectiveness</h2>
+          </div>
+        </div>
+        <div id="audit-summary" class="audit-summary"></div>
+        <div>
+          <h3>Recent Audit Outcomes</h3>
+          <div id="audit-runs" class="stack-list empty-state">Loading audit effectiveness...</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/assets/observability.js" defer></script>
+</body>
+</html>
