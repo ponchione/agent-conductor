@@ -117,7 +117,7 @@ func runPlan(cmd *cobra.Command, args []string) (err error) {
 	timeout := time.Duration(planTimeout) * time.Second
 
 	slog.Info("invoking Claude", "phase", "planning", "timeout", timeout)
-	genResult, err := invokeClaudeWithStats(claudePath, templates.DefaultPlanPrompt, userMsg, timeout, newPlanStreamObserver("planning"))
+	genResult, err := invokeClaudeWithStats(claudePath, templates.DefaultPlanPrompt, userMsg, timeout, cfg.Project.Path, newPlanStreamObserver("planning"))
 	if err != nil {
 		return fmt.Errorf("claude invocation failed: %w", err)
 	}
@@ -135,7 +135,7 @@ func runPlan(cmd *cobra.Command, args []string) (err error) {
 		)
 
 		slog.Info("invoking Claude", "phase", "planning_retry", "timeout", timeout)
-		retryResult, retryErr := invokeClaudeWithStats(claudePath, templates.DefaultPlanPrompt, correctionMsg, timeout, newPlanStreamObserver("planning_retry"))
+		retryResult, retryErr := invokeClaudeWithStats(claudePath, templates.DefaultPlanPrompt, correctionMsg, timeout, cfg.Project.Path, newPlanStreamObserver("planning_retry"))
 		if retryErr != nil {
 			return fmt.Errorf("claude retry invocation failed: %w", retryErr)
 		}
@@ -433,8 +433,8 @@ type invokeClaudeResult struct {
 }
 
 // invokeClaude runs the claude binary and returns the final text output.
-func invokeClaude(claudePath, systemPrompt, userMsg string, timeout time.Duration) (string, error) {
-	result, err := invokeClaudeWithStats(claudePath, systemPrompt, userMsg, timeout, nil)
+func invokeClaude(claudePath, systemPrompt, userMsg string, timeout time.Duration, workDir string) (string, error) {
+	result, err := invokeClaudeWithStats(claudePath, systemPrompt, userMsg, timeout, workDir, nil)
 	if err != nil {
 		return "", err
 	}
@@ -442,7 +442,7 @@ func invokeClaude(claudePath, systemPrompt, userMsg string, timeout time.Duratio
 }
 
 // invokeClaudeWithStats runs the claude binary with stream-json output and returns token usage.
-func invokeClaudeWithStats(claudePath, systemPrompt, userMsg string, timeout time.Duration, callback func(streaming.StreamEvent)) (*invokeClaudeResult, error) {
+func invokeClaudeWithStats(claudePath, systemPrompt, userMsg string, timeout time.Duration, workDir string, callback func(streaming.StreamEvent)) (*invokeClaudeResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -455,6 +455,10 @@ func invokeClaudeWithStats(claudePath, systemPrompt, userMsg string, timeout tim
 		userMsg,
 	}
 	cmd := exec.CommandContext(ctx, claudePath, args...)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	cmd.Env = append(os.Environ(), "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -663,7 +667,7 @@ func auditWorkOrders(claudePath string, spec string, workOrders []models.WorkOrd
 
 	userMsg := sb.String()
 
-	result, err := invokeClaudeWithStats(claudePath, templates.DefaultPlanAuditPrompt, userMsg, timeout, newPlanStreamObserver("audit"))
+	result, err := invokeClaudeWithStats(claudePath, templates.DefaultPlanAuditPrompt, userMsg, timeout, cfg.Project.Path, newPlanStreamObserver("audit"))
 	if err != nil {
 		return workOrders, nil, nil, fmt.Errorf("audit invocation failed: %w", err)
 	}

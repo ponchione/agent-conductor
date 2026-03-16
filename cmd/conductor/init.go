@@ -95,7 +95,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	timeout := time.Duration(initTimeout) * time.Second
 
 	slog.Info("invoking Claude for init", "timeout", timeout)
-	raw, err := invokeClaude(claudePath, templates.DefaultInitPrompt, userMsg, timeout)
+	raw, err := invokeClaude(claudePath, templates.DefaultInitPrompt, userMsg, timeout, "")
 	if err != nil {
 		return fmt.Errorf("claude invocation failed: %w", err)
 	}
@@ -109,7 +109,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 			userMsg, parseErr.Error(), raw,
 		)
 
-		raw, err = invokeClaude(claudePath, templates.DefaultInitPrompt, correctionMsg, timeout)
+		raw, err = invokeClaude(claudePath, templates.DefaultInitPrompt, correctionMsg, timeout, "")
 		if err != nil {
 			return fmt.Errorf("claude retry invocation failed: %w", err)
 		}
