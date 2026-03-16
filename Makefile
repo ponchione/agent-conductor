@@ -35,3 +35,6 @@ smokesearch:
 index:
 	LD_LIBRARY_PATH=$(CURDIR)/lib/linux_amd64 \
 	./bin/conductor index --project ./project.yaml
+
+sqlc:
+	sqlc generate
