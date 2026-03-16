@@ -78,6 +78,15 @@ shown by 'conductor list').`,
 			fmt.Printf("Verify Report:  (Pending)\n")
 		}
 
+		pr, prErr := db.GetPipelineRunByWorkflowID(ctx, resolvedID)
+		if prErr == nil {
+			if pr.BuildClaudeMdContent.Valid {
+				fmt.Printf("CLAUDE.md:      present (%s bytes)\n", fmtInt(int64(len(pr.BuildClaudeMdContent.String))))
+			} else {
+				fmt.Printf("CLAUDE.md:      (none)\n")
+			}
+		}
+
 		tasks, err := db.ListTasksByWorkflow(ctx, resolvedID)
 		if err != nil {
 			return fmt.Errorf("failed to list tasks: %w", err)
