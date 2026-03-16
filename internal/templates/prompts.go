@@ -69,7 +69,7 @@ Arrays that are NOT empty MUST contain objects with these exact keys:
 unscoped_files — WRONG: ["internal/foo.go"]
 unscoped_files — RIGHT: [{"path": "internal/foo.go", "reason_concerning": "not in scope"}]
 
-criteria_results: [{"criterion": "string", "met": true, "notes": "string"}]
+criteria_results: [{"criterion_id": "string", "description": "string", "required": true, "result": "met | unmet | unassessable", "verification_kind": "string", "notes": "string"}]
 issues: ["string"]
 concerns: ["string"]
 
@@ -93,12 +93,13 @@ concerns: ["string"]
 }
 
 Status definitions:
-- "PASS": all acceptance criteria met, no scope drift, follows conventions
-- "WARN": minor issues (e.g., small unscoped change with clear justification, one criterion partially met) but core feature works
-- "FAIL": one or more acceptance criteria unmet, broken code, or significant unscoped changes
+- "PASS": all required acceptance criteria met, no scope drift, follows conventions
+- "WARN": one or more criteria are unassessable, or only advisory criteria are unmet
+- "FAIL": one or more required acceptance criteria are unmet, broken code, or significant unscoped changes
 
-Set "status" to "FAIL" if critical requirements are missing or the code appears broken.
-Set "status" to "WARN" if there are minor issues but the core feature is functional.
+Do not collapse "unassessable" into "unmet".
+Set "status" to "FAIL" if a required criterion is unmet or the code appears broken.
+Set "status" to "WARN" if required criteria are unassessable or only advisory criteria are unmet.
 
 You must respond with json only. Absolutely no markdown is allowed
 `
@@ -222,64 +223,6 @@ BOOTSTRAP WORK ORDER RULES:
 Respond ONLY with the JSON object. No markdown fences, no commentary.
 `
 
-// DefaultPlanPrompt is the system prompt for the plan command.
-// It instructs Claude to decompose a specification into work orders.
-// Not wired into LoadPrompts — used as a standalone constant by the plan command.
-const DefaultPlanPrompt = `
-You are a senior software architect decomposing a feature specification into
-discrete, ordered work orders for an AI coding agent pipeline.
-
-You will be given the specification along with PROJECT CONTEXT that describes the
-existing project (language, conventions, file tree). Use this context to produce
-accurate, grounded work orders.
-
-Return a single JSON object (no markdown, no extra text) matching this schema:
-
-{
-  "work_orders": [
-    {
-      "title": "Short imperative title (e.g. Add user auth middleware)",
-      "type": "new_feature | bug_fix | refactor | schema_change | docs",
-      "target_module": "primary directory/package this WO changes",
-      "reference_module": "existing module to use as a pattern (optional, empty string if none)",
-      "known_files": ["files the agent should definitely read or modify"],
-      "acceptance_criteria": ["verifiable assertions that prove the WO is done"],
-      "constraints": ["things the agent must NOT do or must avoid"]
-    }
-  ]
-}
-
-SIZING RULES:
-- Each work order addresses ONE focused concern.
-- Prefer 1-3 files changed per work order. If you need more, split the work order.
-- Schema changes (migrations, new tables) go in a separate work order from the code that consumes them.
-- Large features should be split into 3-7 work orders; trivial features may be 1-2.
-
-DEPENDENCY ORDERING:
-- Order work orders so each can be built and verified independently in sequence.
-- Shared utilities and types before callers.
-- Config and schema before consumers.
-- Lower layers before upper layers.
-
-ACCEPTANCE CRITERIA STANDARDS:
-- Each criterion must be objectively verifiable (not subjective like "clean code").
-- Derive language-appropriate build/test commands from the project context:
-  Python: "poetry install succeeds", "poetry run pytest passes" (or pip equivalent)
-  Go: "go build ./... passes", "go vet ./... passes", "go test ./... passes"
-  TypeScript: "npm install succeeds", "npm run build passes", "npm test passes"
-  Rust: "cargo build passes", "cargo test passes"
-- Describe observable behavior, not implementation details.
-- Include negative criteria where relevant ("X does NOT happen when Y").
-
-CONSTRAINT STANDARDS:
-- Name specific files that must NOT be modified (e.g. "Do NOT modify cmd/root.go").
-- Name specific packages that must NOT be imported.
-- Include "No new external dependencies" when applicable.
-- Include build/test commands that must keep passing.
-
-Respond ONLY with the JSON object. No markdown fences, no commentary.
-`
-
 //go:embed defaults/build.md
 var defaultBuild string
 
@@ -307,15 +250,20 @@ var defaultVerifySynthesize string
 //go:embed defaults/bootstrap.md
 var defaultBootstrap string
 
+//go:embed defaults/plan.md
+var DefaultPlanPrompt string
+
 //go:embed defaults/plan_audit.md
 var DefaultPlanAuditPrompt string
 
 // LoadedPrompts holds the resolved prompt strings for all pipeline phases.
 type LoadedPrompts struct {
 	// Existing (backward-compatible)
-	Scope  string
-	Verify string
-	Build  string
+	Scope     string
+	Verify    string
+	Build     string
+	Plan      string
+	PlanAudit string
 
 	// Per-step fields for recursive pipeline
 	ScopeDecompose   string
@@ -341,6 +289,14 @@ func LoadPrompts(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
 	build, err := loadPrompt(cfg.Project.Path, "build", cfg.Prompts.Build, defaultBuild)
 	if err != nil {
 		return nil, fmt.Errorf("build prompt: %w", err)
+	}
+	plan, err := loadPrompt(cfg.Project.Path, "plan", cfg.Prompts.Plan, DefaultPlanPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("plan prompt: %w", err)
+	}
+	planAudit, err := loadPrompt(cfg.Project.Path, "plan_audit", cfg.Prompts.PlanAudit, DefaultPlanAuditPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("plan_audit prompt: %w", err)
 	}
 
 	scopeDecompose, err := loadPrompt(cfg.Project.Path, "scope_decompose", cfg.Prompts.ScopeDecompose, defaultScopeDecompose)
@@ -376,6 +332,8 @@ func LoadPrompts(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
 		Scope:            scope,
 		Verify:           verify,
 		Build:            build,
+		Plan:             plan,
+		PlanAudit:        planAudit,
 		ScopeDecompose:   scopeDecompose,
 		ScopeAnalyze:     scopeAnalyze,
 		ScopeCrosscut:    scopeCrosscut,
@@ -383,6 +341,23 @@ func LoadPrompts(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
 		VerifyAnalyze:    verifyAnalyze,
 		VerifySynthesize: verifySynthesize,
 		Describe:         describe,
+	}, nil
+}
+
+// LoadPromptsForPlan loads only the prompts needed by conductor plan.
+func LoadPromptsForPlan(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
+	plan, err := loadPrompt(cfg.Project.Path, "plan", cfg.Prompts.Plan, DefaultPlanPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("plan prompt: %w", err)
+	}
+	planAudit, err := loadPrompt(cfg.Project.Path, "plan_audit", cfg.Prompts.PlanAudit, DefaultPlanAuditPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("plan_audit prompt: %w", err)
+	}
+
+	return &LoadedPrompts{
+		Plan:      plan,
+		PlanAudit: planAudit,
 	}, nil
 }
 

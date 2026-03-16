@@ -3,6 +3,8 @@ package verify
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -71,7 +73,7 @@ const validSynthesizeResponse = `{
   "scope_drift": {"detected": false, "unscoped_files": []},
   "completeness": {
     "all_criteria_met": true,
-    "criteria_results": [{"criterion": "go test passes", "met": true, "notes": "verified"}]
+    "criteria_results": [{"description": "go test passes", "result": "met", "notes": "verified"}]
   },
   "pattern_consistency": {"follows_conventions": true, "issues": []},
   "concerns": []
@@ -180,7 +182,7 @@ func TestExecute_HappyPath(t *testing.T) {
 	}}
 
 	orch := newOrchestrator(client)
-	report, records, err := orch.Execute(context.Background(), testWorkOrder(), multiSegmentDiff, nil)
+	report, records, err := orch.Execute(context.Background(), testWorkOrder(), multiSegmentDiff, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -217,7 +219,7 @@ func TestExecute_TestFileGrouping(t *testing.T) {
 	}}
 
 	orch := newOrchestrator(client)
-	report, records, err := orch.Execute(context.Background(), testWorkOrder(), sampleDiff, nil)
+	report, records, err := orch.Execute(context.Background(), testWorkOrder(), sampleDiff, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -243,14 +245,14 @@ func TestExecute_TestFileGrouping(t *testing.T) {
 func TestExecute_PartialAnalyzeFailure(t *testing.T) {
 	// multiSegmentDiff → 3 segments; segment 1 fails, others succeed
 	client := &mockClient{responses: []mockResponse{
-		{err: fmt.Errorf("analyze error")},  // analyze segment 1 fails
-		{content: validAnalyzeResponse},     // analyze segment 2 succeeds
-		{content: validAnalyzeResponse},     // analyze segment 3 succeeds
-		{content: validSynthesizeResponse},  // synthesize
+		{err: fmt.Errorf("analyze error")}, // analyze segment 1 fails
+		{content: validAnalyzeResponse},    // analyze segment 2 succeeds
+		{content: validAnalyzeResponse},    // analyze segment 3 succeeds
+		{content: validSynthesizeResponse}, // synthesize
 	}}
 
 	orch := newOrchestrator(client)
-	report, records, err := orch.Execute(context.Background(), testWorkOrder(), multiSegmentDiff, nil)
+	report, records, err := orch.Execute(context.Background(), testWorkOrder(), multiSegmentDiff, nil, nil)
 	if err != nil {
 		t.Fatalf("expected no error on partial failure, got: %v", err)
 	}
@@ -279,7 +281,7 @@ func TestExecute_AllAnalyzeFail(t *testing.T) {
 	}}
 
 	orch := newOrchestrator(client)
-	report, records, err := orch.Execute(context.Background(), testWorkOrder(), multiSegmentDiff, nil)
+	report, records, err := orch.Execute(context.Background(), testWorkOrder(), multiSegmentDiff, nil, nil)
 	if err != nil {
 		t.Fatalf("expected no error when all analyze fail (synthesize still runs), got: %v", err)
 	}
@@ -312,13 +314,13 @@ func TestExecute_AllAnalyzeFail(t *testing.T) {
 func TestExecute_SynthesizeRetrySuccess(t *testing.T) {
 	// sampleDiff → 1 segment
 	client := &mockClient{responses: []mockResponse{
-		{content: validAnalyzeResponse},               // analyze
-		{err: fmt.Errorf("first attempt fails")},      // synthesize attempt 1
-		{content: validSynthesizeResponse},             // synthesize attempt 2
+		{content: validAnalyzeResponse},          // analyze
+		{err: fmt.Errorf("first attempt fails")}, // synthesize attempt 1
+		{content: validSynthesizeResponse},       // synthesize attempt 2
 	}}
 
 	orch := newOrchestrator(client)
-	report, records, err := orch.Execute(context.Background(), testWorkOrder(), sampleDiff, nil)
+	report, records, err := orch.Execute(context.Background(), testWorkOrder(), sampleDiff, nil, nil)
 	if err != nil {
 		t.Fatalf("expected success on retry, got: %v", err)
 	}
@@ -346,7 +348,7 @@ func TestExecute_SynthesizeBothFail(t *testing.T) {
 	}}
 
 	orch := newOrchestrator(client)
-	_, _, err := orch.Execute(context.Background(), testWorkOrder(), sampleDiff, nil)
+	_, _, err := orch.Execute(context.Background(), testWorkOrder(), sampleDiff, nil, nil)
 	if err == nil {
 		t.Fatal("expected error when both synthesize attempts fail")
 	}
@@ -359,7 +361,7 @@ func TestExecute_EmptyDiff(t *testing.T) {
 	client := &mockClient{responses: []mockResponse{}}
 
 	orch := newOrchestrator(client)
-	_, _, err := orch.Execute(context.Background(), testWorkOrder(), "", nil)
+	_, _, err := orch.Execute(context.Background(), testWorkOrder(), "", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for empty diff")
 	}
@@ -383,7 +385,7 @@ func TestExecute_PhaseTimeout(t *testing.T) {
 	})
 
 	// Use multiSegmentDiff so we get past the segment step
-	_, _, err := orch.Execute(ctx, testWorkOrder(), multiSegmentDiff, nil)
+	_, _, err := orch.Execute(ctx, testWorkOrder(), multiSegmentDiff, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for expired context")
 	}
@@ -451,11 +453,11 @@ func TestExecute_PreChecksPassedThrough(t *testing.T) {
 	// We use sampleDiff (1 segment) so there's exactly 1 analyze + 1 synthesize call.
 	orch := newOrchestrator(client)
 	preChecks := []PreCheckResult{
-		{Criterion: "go test passes", Met: true, Notes: "exit code 0"},
-		{Criterion: "go vet passes", Met: false, Notes: "vet found issues"},
+		{Criterion: "go test passes", Result: models.CriterionResultMet, Notes: "exit code 0"},
+		{Criterion: "go vet passes", Result: models.CriterionResultUnmet, Notes: "vet found issues"},
 	}
 
-	report, _, err := orch.Execute(context.Background(), testWorkOrder(), sampleDiff, preChecks)
+	report, _, err := orch.Execute(context.Background(), testWorkOrder(), sampleDiff, preChecks, nil)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -465,15 +467,151 @@ func TestExecute_PreChecksPassedThrough(t *testing.T) {
 
 	// Verify that buildSynthesizeUserMessage includes the pre-checks.
 	wo := testWorkOrder()
-	msg := buildSynthesizeUserMessage(wo, preChecks, []string{validAnalyzeResponse})
+	msg := buildSynthesizeUserMessage(wo, preChecks, nil, []string{validAnalyzeResponse})
 	if !strings.Contains(msg, "PRE-CHECK RESULTS") {
 		t.Error("synthesize message should contain PRE-CHECK RESULTS section")
 	}
-	if !strings.Contains(msg, "[PASS] go test passes") {
+	if !strings.Contains(msg, "[MET] go test passes") {
 		t.Error("synthesize message should contain passing pre-check")
 	}
-	if !strings.Contains(msg, "[FAIL] go vet passes") {
+	if !strings.Contains(msg, "[UNMET] go vet passes") {
 		t.Error("synthesize message should contain failing pre-check")
+	}
+}
+
+func TestPrepareSegmentsAddsSyntheticCompatibilitySegmentForUnchangedSubject(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectDir, "internal", "verify"), 0755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	subjectPath := filepath.Join(projectDir, "internal", "verify", "orchestrator.go")
+	refPath := filepath.Join(projectDir, "internal", "verify", "types.go")
+	if err := os.WriteFile(subjectPath, []byte("package verify\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(subject) error = %v", err)
+	}
+	if err := os.WriteFile(refPath, []byte("package verify\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(reference) error = %v", err)
+	}
+
+	required := true
+	wo := &models.WorkOrder{
+		SchemaVersion: 2,
+		KnownFiles:    []string{"internal/verify/types.go"},
+		TypedAcceptanceCriteria: []models.TypedAcceptanceCriterion{
+			{
+				ID:             "AC-1",
+				Description:    "Public compatibility remains intact",
+				RequirementIDs: []string{"REQ-1"},
+				Required:       &required,
+				Verification: models.AcceptanceVerification{
+					Kind:        "file_compatibility",
+					Subject:     "internal/verify/orchestrator.go",
+					Expectation: "public_api_unchanged",
+				},
+			},
+		},
+	}
+
+	cfg := testConfig()
+	cfg.Project.Path = projectDir
+	orch := NewVerifyOrchestrator(
+		llm.NewRoleResolver(map[string]llm.Client{"test-provider": &mockClient{}}, cfg.Models.Roles),
+		cfg,
+		testGuardrails(),
+		VerifyPrompts{},
+	)
+
+	segments, referenceResults, err := orch.prepareSegments(wo, sampleDiff)
+	if err != nil {
+		t.Fatalf("prepareSegments() error = %v", err)
+	}
+	if len(referenceResults) != 0 {
+		t.Fatalf("referenceResults = %+v, want empty", referenceResults)
+	}
+	if len(segments) != 2 {
+		t.Fatalf("len(segments) = %d, want 2", len(segments))
+	}
+	synthetic := segments[1]
+	if len(synthetic.ReferenceFiles) != 2 {
+		t.Fatalf("len(ReferenceFiles) = %d, want 2", len(synthetic.ReferenceFiles))
+	}
+	if synthetic.Files[0] != "internal/verify/orchestrator.go" {
+		t.Fatalf("synthetic file = %q, want subject path", synthetic.Files[0])
+	}
+}
+
+func TestPrepareSegmentsMarksMissingCompatibilitySubjectUnassessable(t *testing.T) {
+	required := true
+	wo := &models.WorkOrder{
+		SchemaVersion: 2,
+		TypedAcceptanceCriteria: []models.TypedAcceptanceCriterion{
+			{
+				ID:             "AC-1",
+				Description:    "Public compatibility remains intact",
+				RequirementIDs: []string{"REQ-1"},
+				Required:       &required,
+				Verification: models.AcceptanceVerification{
+					Kind:    "file_compatibility",
+					Subject: "internal/verify/missing.go",
+				},
+			},
+		},
+	}
+
+	cfg := testConfig()
+	cfg.Project.Path = t.TempDir()
+	orch := NewVerifyOrchestrator(
+		llm.NewRoleResolver(map[string]llm.Client{"test-provider": &mockClient{}}, cfg.Models.Roles),
+		cfg,
+		testGuardrails(),
+		VerifyPrompts{},
+	)
+
+	segments, referenceResults, err := orch.prepareSegments(wo, sampleDiff)
+	if err != nil {
+		t.Fatalf("prepareSegments() error = %v", err)
+	}
+	if len(segments) != 1 {
+		t.Fatalf("len(segments) = %d, want 1 original diff segment", len(segments))
+	}
+	if len(referenceResults) != 1 {
+		t.Fatalf("len(referenceResults) = %d, want 1", len(referenceResults))
+	}
+	if referenceResults[0].NormalizedResult() != models.CriterionResultUnassessable {
+		t.Fatalf("result = %q, want unassessable", referenceResults[0].NormalizedResult())
+	}
+}
+
+func TestBuildAnalyzeUserMessageIncludesReferenceFiles(t *testing.T) {
+	msg := buildAnalyzeUserMessage(testWorkOrder(), DiffSegment{
+		Files: []string{"internal/verify/orchestrator.go"},
+		Diff:  "(No diff for subject)",
+		ReferenceFiles: []models.FileWithContent{
+			{Path: "internal/verify/orchestrator.go", Source: "package verify\n"},
+		},
+	})
+
+	if !strings.Contains(msg, "=== REFERENCE FILES ===") {
+		t.Fatal("analyze message missing REFERENCE FILES section")
+	}
+	if !strings.Contains(msg, "--- internal/verify/orchestrator.go ---") {
+		t.Fatal("analyze message missing reference file label")
+	}
+}
+
+func TestBuildSynthesizeUserMessageIncludesBuildValidationEvidence(t *testing.T) {
+	msg := buildSynthesizeUserMessage(testWorkOrder(), nil, &ValidationEvidence{
+		Phase: "build",
+		Commands: []ValidationEvidenceEntry{
+			{Name: "make test", Result: "met", Notes: "recorded during build"},
+		},
+	}, []string{validAnalyzeResponse})
+
+	if !strings.Contains(msg, "=== BUILD VALIDATION EVIDENCE ===") {
+		t.Fatal("synthesize message missing build evidence section")
+	}
+	if !strings.Contains(msg, "[COMMAND] make test => met") {
+		t.Fatal("synthesize message missing build evidence entry")
 	}
 }
 

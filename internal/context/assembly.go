@@ -200,13 +200,16 @@ func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder, scopePkg
 
 	full := &models.FullContextPackage{
 		WorkOrder: models.WorkOrderContext{
-			Title:              wo.Title,
-			Type:               wo.Type,
-			TargetModule:       wo.TargetModule,
-			ReferenceModule:    wo.ReferenceModule,
-			AcceptanceCriteria: wo.AcceptanceCriteria,
-			Constraints:        wo.Constraints,
-			KnownFiles:         wo.KnownFiles,
+			SchemaVersion:           wo.EffectiveSchemaVersion(),
+			Title:                   wo.Title,
+			Type:                    wo.Type,
+			TargetModule:            wo.TargetModule,
+			ReferenceModule:         wo.ReferenceModule,
+			Requirements:            wo.Requirements,
+			AcceptanceCriteria:      wo.AcceptanceCriteria,
+			TypedAcceptanceCriteria: wo.TypedAcceptanceCriteria,
+			Constraints:             wo.Constraints,
+			KnownFiles:              wo.KnownFiles,
 		},
 		Scope: models.ScopeContext{
 			FilesToModify:       scopePkg.FilesToModify,
@@ -248,13 +251,16 @@ func (a *Assembler) AssembleBootstrap(wo *models.WorkOrder, branchName string) *
 
 	return &models.FullContextPackage{
 		WorkOrder: models.WorkOrderContext{
-			Title:              wo.Title,
-			Type:               wo.Type,
-			TargetModule:       wo.TargetModule,
-			ReferenceModule:    wo.ReferenceModule,
-			AcceptanceCriteria: wo.AcceptanceCriteria,
-			Constraints:        wo.Constraints,
-			KnownFiles:         wo.KnownFiles,
+			SchemaVersion:           wo.EffectiveSchemaVersion(),
+			Title:                   wo.Title,
+			Type:                    wo.Type,
+			TargetModule:            wo.TargetModule,
+			ReferenceModule:         wo.ReferenceModule,
+			Requirements:            wo.Requirements,
+			AcceptanceCriteria:      wo.AcceptanceCriteria,
+			TypedAcceptanceCriteria: wo.TypedAcceptanceCriteria,
+			Constraints:             wo.Constraints,
+			KnownFiles:              wo.KnownFiles,
 		},
 		Scope: models.ScopeContext{
 			Summary:             wo.Title,

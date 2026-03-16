@@ -77,3 +77,62 @@ project:
 		t.Errorf("WarnCostPerPhaseUSD = %f, want 0.10", cfg.Guardrails.WarnCostPerPhaseUSD)
 	}
 }
+
+func TestLoadVerifyCommandConfig(t *testing.T) {
+	yaml := `
+project:
+  name: test-project
+  path: /tmp/test
+verify:
+  commands:
+    build:
+      argv: ["make", "build"]
+      workdir: .
+      timeout_seconds: 120
+    test:
+      argv: ["make", "test"]
+  smoke:
+    assets:
+      command:
+        argv: ["go", "test", "./internal/api", "-run", "TestSmokeAssets"]
+        timeout_seconds: 180
+`
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "project.yaml")
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0644); err != nil {
+		t.Fatalf("writing temp config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	build, ok := cfg.Verify.Commands["build"]
+	if !ok {
+		t.Fatal("expected verify.commands.build to exist")
+	}
+	if got := len(build.Argv); got != 2 {
+		t.Fatalf("len(build.Argv) = %d, want 2", got)
+	}
+	if build.Argv[0] != "make" || build.Argv[1] != "build" {
+		t.Fatalf("build.Argv = %#v, want [\"make\", \"build\"]", build.Argv)
+	}
+	if build.Workdir != "." {
+		t.Fatalf("build.Workdir = %q, want \".\"", build.Workdir)
+	}
+	if build.TimeoutSeconds != 120 {
+		t.Fatalf("build.TimeoutSeconds = %d, want 120", build.TimeoutSeconds)
+	}
+
+	smoke, ok := cfg.Verify.Smoke["assets"]
+	if !ok {
+		t.Fatal("expected verify.smoke.assets to exist")
+	}
+	if got := len(smoke.Command.Argv); got != 5 {
+		t.Fatalf("len(smoke.Command.Argv) = %d, want 5", got)
+	}
+	if smoke.Command.TimeoutSeconds != 180 {
+		t.Fatalf("smoke.Command.TimeoutSeconds = %d, want 180", smoke.Command.TimeoutSeconds)
+	}
+}

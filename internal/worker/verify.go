@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/database"
 	pipelineerrors "github.com/ponchione/agent-conductor/internal/errors"
 	"github.com/ponchione/agent-conductor/internal/models"
@@ -22,6 +23,18 @@ import (
 	"github.com/ponchione/agent-conductor/internal/verify"
 )
 
+const defaultPrecheckTimeoutSeconds = 300
+
+var runVerifyCommand = func(ctx context.Context, dir string, env []string, argv []string) ([]byte, error) {
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("command argv must not be empty")
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = dir
+	cmd.Env = env
+	return cmd.CombinedOutput()
+}
+
 func boolToInt(b bool) int64 {
 	if b {
 		return 1
@@ -29,49 +42,228 @@ func boolToInt(b bool) int64 {
 	return 0
 }
 
-type criterionPreCheck struct {
-	criterion string
-	met       bool
-	notes     string
+func (w *Worker) runPreChecks(ctx context.Context, wo *models.WorkOrder) []verify.PreCheckResult {
+	if wo != nil && wo.EffectiveSchemaVersion() >= 2 && len(wo.TypedAcceptanceCriteria) > 0 {
+		return w.runTypedPreChecks(ctx, wo.TypedAcceptanceCriteria)
+	}
+	if wo == nil {
+		return nil
+	}
+	return w.runLegacyPreChecks(ctx, wo.AcceptanceCriteria)
 }
 
-// TODO: refactor to use structured pre-check config instead of string matching
-func (w *Worker) runPreChecks(ctx context.Context, criteria []string) []criterionPreCheck {
-	var results []criterionPreCheck
-	for _, c := range criteria {
-		lower := strings.ToLower(c)
-		var args []string
-		if strings.Contains(lower, "go test") {
-			args = []string{"test", "./..."}
-		} else if strings.Contains(lower, "go build") {
-			args = []string{"build", "./..."}
-		} else if strings.Contains(lower, "go vet") {
-			args = []string{"vet", "./..."}
-		} else {
-			continue
+func (w *Worker) runTypedPreChecks(ctx context.Context, criteria []models.TypedAcceptanceCriterion) []verify.PreCheckResult {
+	var results []verify.PreCheckResult
+	for _, criterion := range criteria {
+		switch strings.TrimSpace(criterion.Verification.Kind) {
+		case "precheck":
+			results = append(results, w.runConfiguredPreCheck(ctx, criterion))
+		case "http_smoke":
+			results = append(results, w.runConfiguredSmokeCheck(ctx, criterion))
 		}
-		cmd := exec.CommandContext(ctx, "go", args...)
-		cmd.Dir = w.cfg.Project.Path
-		//cmd.Env = append(os.Environ(),
-		//	"CGO_CFLAGS=-I"+filepath.Join(w.cfg.Project.Path, "include"),
-		//	"CGO_LDFLAGS=-L"+filepath.Join(w.cfg.Project.Path, "lib/linux_amd64")+" -llancedb_go -lm -ldl -lpthread",
-		//)
-		cmd.Env = os.Environ()
-		out, err := cmd.CombinedOutput()
-		met := err == nil
-		var notes string
-		if met {
-			notes = "verified: exit code 0"
-		} else {
-			outStr := strings.TrimSpace(string(out))
-			if len(outStr) > 200 {
-				outStr = outStr[:200] + "..."
-			}
-			notes = fmt.Sprintf("verified: exit code non-zero, error: %s", outStr)
-		}
-		results = append(results, criterionPreCheck{criterion: c, met: met, notes: notes})
 	}
 	return results
+}
+
+func (w *Worker) runLegacyPreChecks(ctx context.Context, criteria []string) []verify.PreCheckResult {
+	var results []verify.PreCheckResult
+	for _, criterion := range criteria {
+		argv, ok := legacyPrecheckArgv(criterion)
+		if !ok {
+			continue
+		}
+		required := true
+		results = append(results, w.executePreCheckCommand(
+			ctx,
+			verify.PreCheckResult{
+				Criterion:        criterion,
+				Required:         &required,
+				VerificationKind: "legacy",
+			},
+			"",
+			config.VerifyCommand{Argv: argv},
+			false,
+		))
+	}
+	return results
+}
+
+func legacyPrecheckArgv(criterion string) ([]string, bool) {
+	lower := strings.ToLower(criterion)
+	switch {
+	case strings.Contains(lower, "go test"):
+		return []string{"go", "test", "./..."}, true
+	case strings.Contains(lower, "go build"):
+		return []string{"go", "build", "./..."}, true
+	case strings.Contains(lower, "go vet"):
+		return []string{"go", "vet", "./..."}, true
+	default:
+		return nil, false
+	}
+}
+
+func (w *Worker) runConfiguredPreCheck(ctx context.Context, criterion models.TypedAcceptanceCriterion) verify.PreCheckResult {
+	checkName := strings.TrimSpace(criterion.Verification.Check)
+	if w.cfg == nil {
+		return verify.PreCheckResult{
+			CriterionID:      criterion.ID,
+			Criterion:        criterion.Description,
+			Required:         criterion.Required,
+			Result:           models.CriterionResultUnassessable,
+			VerificationKind: criterion.Verification.Kind,
+			Notes:            fmt.Sprintf("precheck %q cannot run because worker config is unavailable", checkName),
+		}
+	}
+	command, ok := w.cfg.Verify.Commands[checkName]
+	if !ok {
+		return verify.PreCheckResult{
+			CriterionID:      criterion.ID,
+			Criterion:        criterion.Description,
+			Required:         criterion.Required,
+			Result:           models.CriterionResultUnassessable,
+			VerificationKind: criterion.Verification.Kind,
+			Notes:            fmt.Sprintf("precheck %q is not configured under verify.commands", checkName),
+		}
+	}
+	if len(command.Argv) == 0 {
+		return verify.PreCheckResult{
+			CriterionID:      criterion.ID,
+			Criterion:        criterion.Description,
+			Required:         criterion.Required,
+			Result:           models.CriterionResultUnassessable,
+			VerificationKind: criterion.Verification.Kind,
+			Notes:            fmt.Sprintf("precheck %q has empty argv in verify.commands", checkName),
+		}
+	}
+	return w.executePreCheckCommand(
+		ctx,
+		verify.PreCheckResult{
+			CriterionID:      criterion.ID,
+			Criterion:        criterion.Description,
+			Required:         criterion.Required,
+			VerificationKind: criterion.Verification.Kind,
+		},
+		checkName,
+		command,
+		true,
+	)
+}
+
+func (w *Worker) runConfiguredSmokeCheck(ctx context.Context, criterion models.TypedAcceptanceCriterion) verify.PreCheckResult {
+	routeName := strings.TrimSpace(criterion.Verification.Route)
+	baseResult := verify.PreCheckResult{
+		CriterionID:      criterion.ID,
+		Criterion:        criterion.Description,
+		Required:         criterion.Required,
+		VerificationKind: criterion.Verification.Kind,
+	}
+	if w.cfg == nil {
+		baseResult.Result = models.CriterionResultUnassessable
+		baseResult.Notes = fmt.Sprintf("http_smoke %q cannot run because worker config is unavailable", routeName)
+		return baseResult
+	}
+	smoke, ok := w.cfg.Verify.Smoke[routeName]
+	if !ok {
+		baseResult.Result = models.CriterionResultUnassessable
+		baseResult.Notes = fmt.Sprintf("http_smoke %q is not configured under verify.smoke", routeName)
+		return baseResult
+	}
+	if len(smoke.Command.Argv) == 0 {
+		baseResult.Result = models.CriterionResultUnassessable
+		baseResult.Notes = fmt.Sprintf("http_smoke %q has empty argv in verify.smoke", routeName)
+		return baseResult
+	}
+	return w.executeSmokeCommand(ctx, baseResult, routeName, smoke.Command)
+}
+
+func (w *Worker) executePreCheckCommand(
+	ctx context.Context,
+	result verify.PreCheckResult,
+	checkName string,
+	command config.VerifyCommand,
+	configured bool,
+) verify.PreCheckResult {
+	commandCtx, cancel := context.WithTimeout(ctx, w.precheckTimeout(command.TimeoutSeconds))
+	defer cancel()
+
+	out, err := runVerifyCommand(commandCtx, w.precheckWorkdir(command.Workdir), os.Environ(), command.Argv)
+	if err == nil {
+		result.Result = models.CriterionResultMet
+		if configured {
+			result.Notes = fmt.Sprintf("precheck %q passed: %s", checkName, strings.Join(command.Argv, " "))
+		} else {
+			result.Notes = fmt.Sprintf("legacy precheck passed: %s", strings.Join(command.Argv, " "))
+		}
+		return result
+	}
+
+	outStr := strings.TrimSpace(string(out))
+	if len(outStr) > 200 {
+		outStr = outStr[:200] + "..."
+	}
+	if outStr == "" {
+		outStr = err.Error()
+	}
+
+	result.Result = models.CriterionResultUnmet
+	if configured {
+		result.Notes = fmt.Sprintf("precheck %q failed: %s (%s)", checkName, strings.Join(command.Argv, " "), outStr)
+		return result
+	}
+	result.Notes = fmt.Sprintf("legacy precheck failed: %s (%s)", strings.Join(command.Argv, " "), outStr)
+	return result
+}
+
+func (w *Worker) executeSmokeCommand(
+	ctx context.Context,
+	result verify.PreCheckResult,
+	routeName string,
+	command config.VerifyCommand,
+) verify.PreCheckResult {
+	commandCtx, cancel := context.WithTimeout(ctx, w.precheckTimeout(command.TimeoutSeconds))
+	defer cancel()
+
+	out, err := runVerifyCommand(commandCtx, w.precheckWorkdir(command.Workdir), os.Environ(), command.Argv)
+	if err == nil {
+		result.Result = models.CriterionResultMet
+		result.Notes = fmt.Sprintf("http_smoke %q passed: %s", routeName, strings.Join(command.Argv, " "))
+		return result
+	}
+
+	outStr := strings.TrimSpace(string(out))
+	if len(outStr) > 200 {
+		outStr = outStr[:200] + "..."
+	}
+	if outStr == "" {
+		outStr = err.Error()
+	}
+	result.Result = models.CriterionResultUnmet
+	result.Notes = fmt.Sprintf("http_smoke %q failed: %s (%s)", routeName, strings.Join(command.Argv, " "), outStr)
+	return result
+}
+
+func (w *Worker) precheckWorkdir(workdir string) string {
+	projectPath := "."
+	if w.cfg != nil && strings.TrimSpace(w.cfg.Project.Path) != "" {
+		projectPath = w.cfg.Project.Path
+	}
+	if strings.TrimSpace(workdir) == "" || workdir == "." {
+		return projectPath
+	}
+	if filepath.IsAbs(workdir) {
+		return filepath.Clean(workdir)
+	}
+	return filepath.Join(projectPath, workdir)
+}
+
+func (w *Worker) precheckTimeout(timeoutSeconds int) time.Duration {
+	if timeoutSeconds > 0 {
+		return time.Duration(timeoutSeconds) * time.Second
+	}
+	if w.cfg != nil && w.cfg.Guardrails.PhaseTimeoutSeconds > 0 {
+		return time.Duration(w.cfg.Guardrails.PhaseTimeoutSeconds) * time.Second
+	}
+	return defaultPrecheckTimeoutSeconds * time.Second
 }
 
 func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
@@ -111,16 +303,11 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		slog.Warn("Could not parse work order YAML for pre-checks", "error", err)
 	}
 
-	preChecks := w.runPreChecks(ctx, wo.AcceptanceCriteria)
-
-	preCheckedSet := make(map[string]bool, len(preChecks))
-	for _, r := range preChecks {
-		preCheckedSet[r.criterion] = true
-	}
+	preChecks := w.runPreChecks(ctx, &wo)
 
 	allPreFailed := len(preChecks) > 0
 	for _, r := range preChecks {
-		if r.met {
+		if r.NormalizedResult() != models.CriterionResultUnmet {
 			allPreFailed = false
 			break
 		}
@@ -128,36 +315,16 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 
 	var report *models.VerificationReport
 	var records []scope.SubCallRecord
+	buildEvidence := w.loadBuildValidationEvidence(ctx, task.WorkflowID)
 
 	if allPreFailed {
 		slog.Warn("All pre-checked criteria failed; skipping LLM evaluation", "task", task.ID)
-		criteriaResults := make([]models.CriterionResult, len(preChecks))
-		for i, r := range preChecks {
-			criteriaResults[i] = models.CriterionResult{
-				Criterion: r.criterion,
-				Met:       r.met,
-				Notes:     r.notes,
-			}
-		}
-		report = &models.VerificationReport{
-			Status:  "FAIL",
-			Summary: "All pre-checked criteria failed (go build/test/vet). Skipping LLM evaluation.",
-			Completeness: models.Completeness{
-				AllCriteriaMet:  false,
-				CriteriaResults: criteriaResults,
-			},
-		}
+		report = verify.BuildPrecheckOnlyReport(
+			&wo,
+			preChecks,
+			"All pre-checked criteria failed. Skipping LLM evaluation.",
+		)
 	} else {
-		// Convert pre-checks to orchestrator type.
-		verifyPreChecks := make([]verify.PreCheckResult, len(preChecks))
-		for i, r := range preChecks {
-			verifyPreChecks[i] = verify.PreCheckResult{
-				Criterion: r.criterion,
-				Met:       r.met,
-				Notes:     r.notes,
-			}
-		}
-
 		orch := verify.NewVerifyOrchestrator(
 			w.models, w.cfg, w.guardrails,
 			verify.VerifyPrompts{
@@ -167,13 +334,11 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 		)
 
 		var orchErr error
-		report, records, orchErr = orch.Execute(ctx, &wo, diff, verifyPreChecks)
+		report, records, orchErr = orch.Execute(ctx, &wo, diff, preChecks, buildEvidence)
 		if orchErr != nil {
 			return pipelineerrors.Retryablef("verify", task.WorkflowID, task.ID,
 				"verify orchestrator failed: %w", orchErr)
 		}
-
-		mergePreChecks(report, preChecks, preCheckedSet)
 	}
 
 	agg := aggregateTokens(records, "synthesize")
@@ -242,45 +407,17 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 	})
 }
 
-// mergePreChecks prepends pre-checked results into the report, deduplicates
-// against LLM entries, and recomputes the overall status.
-func mergePreChecks(report *models.VerificationReport, preChecks []criterionPreCheck, preCheckedSet map[string]bool) {
-	if len(preChecks) == 0 {
-		return
+func (w *Worker) loadBuildValidationEvidence(ctx context.Context, workflowID string) *verify.ValidationEvidence {
+	artifact, err := w.db.GetLatestArtifactByType(ctx, database.ArtifactTypeBuildValidationEvidence, "", workflowID)
+	if err != nil {
+		return nil
 	}
-
-	preResults := make([]models.CriterionResult, len(preChecks))
-	for i, r := range preChecks {
-		preResults[i] = models.CriterionResult{
-			Criterion: r.criterion,
-			Met:       r.met,
-			Notes:     r.notes,
-		}
+	evidence, err := verify.LoadValidationEvidence(artifact.Path)
+	if err != nil {
+		slog.Warn("Failed to load build validation evidence", "path", artifact.Path, "error", err)
+		return nil
 	}
-
-	var filtered []models.CriterionResult
-	for _, cr := range report.Completeness.CriteriaResults {
-		if !preCheckedSet[cr.Criterion] {
-			filtered = append(filtered, cr)
-		}
-	}
-	report.Completeness.CriteriaResults = append(preResults, filtered...)
-
-	allMet := true
-	for _, r := range report.Completeness.CriteriaResults {
-		if !r.Met {
-			allMet = false
-			break
-		}
-	}
-	report.Completeness.AllCriteriaMet = allMet
-
-	for _, r := range preChecks {
-		if !r.met {
-			report.Status = "FAIL"
-			break
-		}
-	}
+	return evidence
 }
 
 // writeVerifyReport serializes and writes the verification report to disk.

@@ -15,6 +15,7 @@ import (
 	pipelineerrors "github.com/ponchione/agent-conductor/internal/errors"
 	"github.com/ponchione/agent-conductor/internal/executor"
 	"github.com/ponchione/agent-conductor/internal/queue"
+	"github.com/ponchione/agent-conductor/internal/verify"
 )
 
 func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
@@ -96,6 +97,14 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	w.registerWorkflowArtifact(ctx, task.WorkflowID, task.ID, database.ArtifactTypeBuildStderr, result.StderrPath, map[string]any{
 		"phase": "build",
 	})
+	buildEvidencePath, evidenceErr := w.writeBuildValidationEvidence(task.WorkflowID)
+	if evidenceErr != nil {
+		slog.Warn("Failed to write build validation evidence", "error", evidenceErr)
+	} else {
+		w.registerWorkflowArtifact(ctx, task.WorkflowID, task.ID, database.ArtifactTypeBuildValidationEvidence, buildEvidencePath, map[string]any{
+			"phase": "build",
+		})
+	}
 
 	if !result.Success {
 		return pipelineerrors.NeedsHumanf("build", task.WorkflowID, task.ID,
@@ -213,4 +222,17 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	}
 
 	return nil
+}
+
+func (w *Worker) writeBuildValidationEvidence(workflowID string) (string, error) {
+	evidencePath := filepath.Join(w.cfg.Project.DataDir, "artifacts", "build-evidence", workflowID+"-build-evidence.json")
+	evidence := &verify.ValidationEvidence{
+		Phase:       "build",
+		Commands:    []verify.ValidationEvidenceEntry{},
+		SmokeChecks: []verify.ValidationEvidenceEntry{},
+	}
+	if err := verify.WriteValidationEvidence(evidencePath, evidence); err != nil {
+		return "", err
+	}
+	return evidencePath, nil
 }

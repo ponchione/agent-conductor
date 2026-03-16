@@ -12,14 +12,17 @@ import (
 )
 
 const (
-	ArtifactTypePlanRawGeneration  = "plan_raw_generation"
-	ArtifactTypePlanRawAudit       = "plan_raw_audit"
-	ArtifactTypeGeneratedWorkOrder = "generated_work_order"
-	ArtifactTypeContextPackage     = "context_package"
-	ArtifactTypeVerifyReport       = "verify_report"
-	ArtifactTypeBuildStdout        = "build_stdout"
-	ArtifactTypeBuildStderr        = "build_stderr"
-	ArtifactTypePlanParseFailure   = "plan_parse_failure_raw_output"
+	ArtifactTypePlanRawGeneration        = "plan_raw_generation"
+	ArtifactTypePlanRawAudit             = "plan_raw_audit"
+	ArtifactTypePlanStructuredGeneration = "plan_structured_generation"
+	ArtifactTypePlanStructuredAudit      = "plan_structured_audit"
+	ArtifactTypeGeneratedWorkOrder       = "generated_work_order"
+	ArtifactTypeContextPackage           = "context_package"
+	ArtifactTypeVerifyReport             = "verify_report"
+	ArtifactTypeBuildStdout              = "build_stdout"
+	ArtifactTypeBuildStderr              = "build_stderr"
+	ArtifactTypeBuildValidationEvidence  = "build_validation_evidence"
+	ArtifactTypePlanParseFailure         = "plan_parse_failure_raw_output"
 )
 
 // Artifact is a DB-backed reference to a file written on disk.

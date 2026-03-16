@@ -15,6 +15,7 @@ type ProjectConfig struct {
 	Index       Index       `yaml:"index"`
 	Conventions Conventions `yaml:"conventions"`
 	Prompts     Prompts     `yaml:"prompts"`
+	Verify      Verify      `yaml:"verify"`
 	LocalModel  LocalModel  `yaml:"local_model"`
 	EmbedModel  EmbedModel  `yaml:"embed_model"`
 	Safety      Safety      `yaml:"safety"`
@@ -54,6 +55,8 @@ type Prompts struct {
 	Scope            string `yaml:"scope"`
 	Verify           string `yaml:"verify"`
 	Build            string `yaml:"build"`
+	Plan             string `yaml:"plan"`
+	PlanAudit        string `yaml:"plan_audit"`
 	ScopeDecompose   string `yaml:"scope_decompose"`
 	ScopeAnalyze     string `yaml:"scope_analyze"`
 	ScopeCrosscut    string `yaml:"scope_crosscut"`
@@ -62,6 +65,21 @@ type Prompts struct {
 	VerifySynthesize string `yaml:"verify_synthesize"`
 	Describe         string `yaml:"describe"`
 	Bootstrap        string `yaml:"bootstrap"`
+}
+
+type Verify struct {
+	Commands map[string]VerifyCommand `yaml:"commands"`
+	Smoke    map[string]VerifySmoke   `yaml:"smoke"`
+}
+
+type VerifyCommand struct {
+	Argv           []string `yaml:"argv"`
+	Workdir        string   `yaml:"workdir"`
+	TimeoutSeconds int      `yaml:"timeout_seconds"`
+}
+
+type VerifySmoke struct {
+	Command VerifyCommand `yaml:"command"`
 }
 
 type EmbedModel struct {

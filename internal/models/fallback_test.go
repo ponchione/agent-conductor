@@ -39,3 +39,17 @@ func TestScopeDriftObjectArray(t *testing.T) {
 		t.Fatalf("unexpected reason: %s", r.ScopeDrift.UnscopedFiles[0].ReasonConcerning)
 	}
 }
+
+func TestCriterionResultLegacyBooleanFallback(t *testing.T) {
+	input := `{"criterion":"go test passes","met":true,"notes":"verified"}`
+	var result models.CriterionResult
+	if err := json.Unmarshal([]byte(input), &result); err != nil {
+		t.Fatal("unmarshal failed:", err)
+	}
+	if result.Criterion != "go test passes" {
+		t.Fatalf("Criterion = %q, want go test passes", result.Criterion)
+	}
+	if result.NormalizedResult() != models.CriterionResultMet {
+		t.Fatalf("Result = %q, want met", result.NormalizedResult())
+	}
+}

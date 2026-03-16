@@ -16,7 +16,7 @@ The conductor runs a three-phase pipeline:
 
 **Build** — Passes the context package to Claude Code, which creates a git branch, implements the changes, and commits. The conductor stays out of its way.
 
-**Verify** — A two-step pipeline that segments the git diff, analyzes each segment against the work order's acceptance criteria, runs deterministic pre-checks (build, test, vet), then synthesizes a final PASS/WARN/FAIL verdict. Analysis runs on local LLMs.
+**Verify** — A two-step pipeline that segments the git diff, analyzes each segment against the work order's acceptance criteria, runs deterministic configured checks (`precheck`, `http_smoke`, and bounded `file_compatibility` reference loading), then synthesizes a final PASS/WARN/FAIL verdict. Analysis runs on local LLMs.
 
 The workflow then sits in `human_review` until you approve or reject it.
 
@@ -52,11 +52,11 @@ Segment (Go)  →  Analyze (N LLM calls)  →  Synthesize (1 LLM call)
 
 **Segment** splits the unified diff into logical groups, pairing source files with their test files (e.g., `foo.go` and `foo_test.go` land in the same segment).
 
-**Pre-Checks** run deterministically before the LLM. If an acceptance criterion mentions `go test`, `go build`, or `go vet`, the conductor runs the command and records the result. If all pre-checked criteria fail, the LLM evaluation is skipped entirely and the report is set to FAIL.
+**Pre-Checks** run deterministically before the LLM. Version-2 work orders can name exact configured commands under `verify.commands` and smoke routines under `verify.smoke`; version-1 work orders still keep the legacy `go test` / `go build` / `go vet` compatibility shim. If all deterministic checks fail, the LLM evaluation is skipped entirely and the report is set to FAIL.
 
 **Analyze** runs one LLM call per diff segment, assessing alignment with the work order, checking acceptance criteria relevant to that segment, and flagging bugs, style issues, and concerns.
 
-**Synthesize** merges pre-check results and per-segment verdicts into a final verification report with a PASS/WARN/FAIL status, scope drift detection, completeness assessment, and pattern consistency check.
+**Synthesize** merges deterministic check results and per-segment verdicts into a final verification report with tri-state criterion outcomes (`met`, `unmet`, `unassessable`), centralized PASS/WARN/FAIL status derivation, scope drift detection, completeness assessment, and pattern consistency check.
 
 ## Planning
 
@@ -270,6 +270,33 @@ executor:
   tool: claude-code
   timeout_minutes: 30
 
+prompts:
+  plan: templates/plan-prompt.md
+  plan_audit: templates/plan-audit.md
+  scope_decompose: ""
+  scope_analyze: ""
+  scope_crosscut: ""
+  scope_synthesize: ""
+  verify_analyze: ""
+  verify_synthesize: ""
+  build: ""
+  describe: ""
+  bootstrap: ""
+
+verify:
+  commands:
+    build:
+      argv: ["make", "build"]
+      timeout_seconds: 120
+    test:
+      argv: ["make", "test"]
+      timeout_seconds: 300
+  smoke:
+    assets:
+      command:
+        argv: ["make", "smoke"]
+        timeout_seconds: 180
+
 safety:
   forbidden_paths: []
   max_files_changed: 50
@@ -309,6 +336,8 @@ The pipeline steps with independent prompts are:
 | `verify_analyze` | `defaults/verify_analyze.md` | Analyze a single diff segment |
 | `verify_synthesize` | `defaults/verify_synthesize.md` | Produce final verify report |
 | `build` | `defaults/build.md` | Instructions for Claude Code |
+| `plan` | embedded default | Spec decomposition |
+| `plan_audit` | `defaults/plan_audit.md` | Planner audit pass |
 | `describe` | `defaults/describe.md` | RAG chunk description generation |
 
 Legacy `scope` and `verify` prompts are still loaded for backward compatibility but are not used by the pipeline orchestrators.
@@ -348,7 +377,10 @@ When `index.auto_reindex` is `true`, the index is updated after each `conductor 
 
 ## Work Orders
 
-A work order is a YAML file describing what you want built:
+A work order is a YAML file describing what you want built. Version 1 uses string
+acceptance criteria; version 2 adds typed criteria and requirement mapping.
+
+Version 1 example:
 
 ```yaml
 title: "Add health check endpoint"
@@ -368,6 +400,32 @@ constraints:
   - "No new external dependencies"
 ```
 
+Version 2 example:
+
+```yaml
+schema_version: 2
+title: "Preserve observability assets"
+type: refactor
+target_module: internal/api
+reference_module: internal/http
+known_files:
+  - internal/api/server.go
+  - internal/api/static/observability.css
+requirements:
+  - id: REQ-1
+    text: Static observability assets remain reachable
+acceptance_criteria:
+  - id: AC-1
+    description: GET /assets/observability.css returns 200
+    requirement_ids: [REQ-1]
+    required: true
+    verification:
+      kind: http_smoke
+      route: assets
+constraints:
+  - "Do not change unrelated routes"
+```
+
 Fields:
 
 - **title:** Short imperative description. Also used as a RAG search query.
@@ -375,8 +433,20 @@ Fields:
 - **target_module:** Primary directory the changes will land in.
 - **reference_module:** Existing module to use as an architectural reference (optional).
 - **known_files:** Files the agent should definitely read or modify.
-- **acceptance_criteria:** Verifiable assertions. Criteria mentioning `go test`, `go build`, or `go vet` are automatically pre-checked by the verify phase.
+- **acceptance_criteria:** In version 1, verifiable string assertions. In version 2, typed criteria with `id`, `description`, `requirement_ids`, `required`, and `verification`.
+- **requirements:** Version-2 requirement IDs that acceptance criteria must map back to.
 - **constraints:** Things the agent must not do.
+
+Version-2 verification kinds currently supported:
+
+- **`precheck`** — runs an exact argv entry from `verify.commands`
+- **`diff_review`** — assessed from changed files plus structured review context
+- **`file_compatibility`** — loads the declared subject file plus a bounded subset of `known_files`
+- **`http_smoke`** — runs a named deterministic command from `verify.smoke`
+
+Verify reports store per-criterion results as `met`, `unmet`, or `unassessable`.
+Required `unmet` criteria fail the workflow, required `unassessable` criteria warn,
+and advisory criteria can warn but cannot independently fail a workflow.
 
 ## Review Workflow
 
@@ -499,6 +569,7 @@ rag/chunks.lance/                            # LanceDB — vector embeddings
 rag_file_hashes.json                         # Change detection for incremental re-indexing
 artifacts/context-packages/<wf-id>-*.json    # Scope phase output
 artifacts/verify-reports/<wf-id>-*.json      # Verify phase verdict
+artifacts/build-evidence/<wf-id>-*.json      # Structured build validation evidence
 artifacts/work-orders/<wf-id>.yaml           # Archived work orders (on approve)
 logs/<task-id>/stdout.log                    # Build agent output
 logs/<task-id>/stderr.log

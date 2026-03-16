@@ -1,10 +1,13 @@
 package verify
 
+import "github.com/ponchione/agent-conductor/internal/models"
+
 // DiffSegment is a logical group of related file diffs for analysis.
 type DiffSegment struct {
-	Files           []string `json:"files"`
-	Diff            string   `json:"diff"`
-	OriginalContent string   `json:"original_content,omitempty"`
+	Files           []string                 `json:"files"`
+	Diff            string                   `json:"diff"`
+	OriginalContent string                   `json:"original_content,omitempty"`
+	ReferenceFiles  []models.FileWithContent `json:"reference_files,omitempty"`
 }
 
 // SegmentVerdict is the per-segment output from the analyze step.
@@ -28,8 +31,4 @@ type CriterionAssessment struct {
 
 // PreCheckResult represents a pre-check outcome passed in from the worker.
 // The orchestrator does not run pre-checks — it receives them as input.
-type PreCheckResult struct {
-	Criterion string `json:"criterion"`
-	Met       bool   `json:"met"`
-	Notes     string `json:"notes"`
-}
+type PreCheckResult = models.CriterionResult

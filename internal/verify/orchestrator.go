@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -52,6 +53,7 @@ func (o *VerifyOrchestrator) Execute(
 	wo *models.WorkOrder,
 	diff string,
 	preChecks []PreCheckResult,
+	buildEvidence *ValidationEvidence,
 ) (*models.VerificationReport, []scope.SubCallRecord, error) {
 	timeout := time.Duration(o.guardrails.PhaseTimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -60,7 +62,7 @@ func (o *VerifyOrchestrator) Execute(
 	var records []scope.SubCallRecord
 
 	// Step 1 — Segment (Go, no LLM)
-	segments := segmentDiff(diff)
+	segments, referenceResults, err := o.prepareSegments(wo, diff)
 	if len(segments) == 0 {
 		return nil, records, fmt.Errorf("diff produced 0 segments")
 	}
@@ -69,9 +71,13 @@ func (o *VerifyOrchestrator) Execute(
 	rawVerdicts := o.stepAnalyze(ctx, wo, segments, &records)
 
 	// Step 3 — Synthesize (1 LLM call, role verify_synthesize, 1 retry)
-	report, err := o.stepSynthesize(ctx, wo, preChecks, rawVerdicts, &records)
+	report, err := o.stepSynthesize(ctx, wo, preChecks, buildEvidence, rawVerdicts, &records)
 	if err != nil {
 		return nil, records, fmt.Errorf("synthesize: %w", err)
+	}
+	if len(referenceResults) > 0 {
+		report.Completeness.CriteriaResults = append(report.Completeness.CriteriaResults, referenceResults...)
+		report = NormalizeVerificationReport(wo, report, nil)
 	}
 
 	return report, records, nil
@@ -120,10 +126,11 @@ func (o *VerifyOrchestrator) stepSynthesize(
 	ctx context.Context,
 	wo *models.WorkOrder,
 	preChecks []PreCheckResult,
+	buildEvidence *ValidationEvidence,
 	rawVerdicts []string,
 	records *[]scope.SubCallRecord,
 ) (*models.VerificationReport, error) {
-	userMsg := buildSynthesizeUserMessage(wo, preChecks, rawVerdicts)
+	userMsg := buildSynthesizeUserMessage(wo, preChecks, buildEvidence, rawVerdicts)
 
 	for attempt := range 2 {
 		raw, err := o.callLLM(ctx, "verify_synthesize", o.prompts.Synthesize, userMsg, "verify", "synthesize", "", records)
@@ -139,7 +146,7 @@ func (o *VerifyOrchestrator) stepSynthesize(
 			continue
 		}
 
-		return &report, nil
+		return NormalizeVerificationReport(wo, &report, preChecks), nil
 	}
 
 	return nil, fmt.Errorf("synthesize failed after 2 attempts")
@@ -309,6 +316,172 @@ func segmentDiff(diff string) []DiffSegment {
 	return segments
 }
 
+const maxReferenceFilesPerCriterion = 4
+
+func (o *VerifyOrchestrator) prepareSegments(
+	wo *models.WorkOrder,
+	diff string,
+) ([]DiffSegment, []models.CriterionResult, error) {
+	segments := segmentDiff(diff)
+	if wo == nil || wo.EffectiveSchemaVersion() < 2 || len(wo.TypedAcceptanceCriteria) == 0 {
+		return segments, nil, nil
+	}
+
+	byFile := make(map[string]int, len(segments))
+	for i, segment := range segments {
+		for _, file := range segment.Files {
+			byFile[file] = i
+		}
+	}
+
+	var referenceResults []models.CriterionResult
+	for _, criterion := range wo.TypedAcceptanceCriteria {
+		if strings.TrimSpace(criterion.Verification.Kind) != "file_compatibility" {
+			continue
+		}
+
+		referenceFiles, err := o.loadCompatibilityReferenceFiles(wo, criterion.Verification.Subject)
+		if err != nil {
+			referenceResults = append(referenceResults, models.CriterionResult{
+				CriterionID:      criterion.ID,
+				Criterion:        criterion.Description,
+				Required:         criterion.Required,
+				Result:           models.CriterionResultUnassessable,
+				VerificationKind: criterion.Verification.Kind,
+				Notes:            err.Error(),
+			})
+			continue
+		}
+
+		subject := filepath.Clean(strings.TrimSpace(criterion.Verification.Subject))
+		if idx, ok := byFile[subject]; ok {
+			segments[idx].ReferenceFiles = mergeReferenceFiles(segments[idx].ReferenceFiles, referenceFiles)
+			continue
+		}
+
+		segments = append(segments, DiffSegment{
+			Files:          []string{subject},
+			Diff:           "(No diff for declared compatibility subject. Assess compatibility using current repository contents and the reference files below.)",
+			ReferenceFiles: referenceFiles,
+		})
+		byFile[subject] = len(segments) - 1
+	}
+
+	return segments, referenceResults, nil
+}
+
+func (o *VerifyOrchestrator) loadCompatibilityReferenceFiles(
+	wo *models.WorkOrder,
+	subject string,
+) ([]models.FileWithContent, error) {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return nil, fmt.Errorf("file_compatibility criterion is missing verification.subject")
+	}
+
+	projectPath := "."
+	if o.cfg != nil && strings.TrimSpace(o.cfg.Project.Path) != "" {
+		projectPath = o.cfg.Project.Path
+	}
+	maxFileBytes := 32 * 1024
+	maxTotalBytes := 128 * 1024
+	if o.cfg != nil && o.cfg.Index.MaxFileSizeBytes > 0 {
+		maxFileBytes = o.cfg.Index.MaxFileSizeBytes
+	}
+	if o.cfg != nil && o.cfg.Index.MaxTotalFileSizeBytes > 0 {
+		maxTotalBytes = o.cfg.Index.MaxTotalFileSizeBytes
+	}
+
+	candidates := make([]string, 0, len(wo.KnownFiles)+1)
+	candidates = append(candidates, subject)
+	for _, knownFile := range wo.KnownFiles {
+		if knownFile == subject {
+			continue
+		}
+		candidates = append(candidates, knownFile)
+	}
+
+	totalBytes := 0
+	results := make([]models.FileWithContent, 0, maxReferenceFilesPerCriterion)
+	for _, candidate := range candidates {
+		if len(results) >= maxReferenceFilesPerCriterion {
+			break
+		}
+		content, size, err := readReferenceFile(projectPath, candidate, maxFileBytes)
+		if err != nil {
+			if candidate == subject {
+				return nil, fmt.Errorf("file_compatibility subject %q is unavailable: %w", subject, err)
+			}
+			continue
+		}
+		if totalBytes+size > maxTotalBytes {
+			if candidate == subject && len(results) == 0 {
+				return nil, fmt.Errorf("file_compatibility subject %q exceeds reference-file byte limits", subject)
+			}
+			break
+		}
+		results = append(results, models.FileWithContent{
+			Path:   candidate,
+			Source: content,
+		})
+		totalBytes += size
+	}
+
+	if len(results) == 0 {
+		return nil, fmt.Errorf("file_compatibility subject %q could not be loaded within configured limits", subject)
+	}
+	return results, nil
+}
+
+func readReferenceFile(projectPath, relativePath string, maxBytes int) (string, int, error) {
+	cleaned := filepath.Clean(strings.TrimSpace(relativePath))
+	if cleaned == "." || cleaned == "" {
+		return "", 0, fmt.Errorf("empty path")
+	}
+	if filepath.IsAbs(cleaned) {
+		return "", 0, fmt.Errorf("path must be relative")
+	}
+	absPath := filepath.Join(projectPath, cleaned)
+	rel, err := filepath.Rel(projectPath, absPath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", 0, fmt.Errorf("path escapes repository root")
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "", 0, err
+	}
+	if info.IsDir() {
+		return "", 0, fmt.Errorf("path must reference a file")
+	}
+	if info.Size() > int64(maxBytes) {
+		return "", 0, fmt.Errorf("file exceeds max size limit")
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return "", 0, err
+	}
+	return string(data), len(data), nil
+}
+
+func mergeReferenceFiles(existing, incoming []models.FileWithContent) []models.FileWithContent {
+	if len(incoming) == 0 {
+		return existing
+	}
+	seen := make(map[string]bool, len(existing))
+	for _, file := range existing {
+		seen[file.Path] = true
+	}
+	merged := append([]models.FileWithContent{}, existing...)
+	for _, file := range incoming {
+		if seen[file.Path] {
+			continue
+		}
+		merged = append(merged, file)
+		seen[file.Path] = true
+	}
+	return merged
+}
+
 // parseFilePath extracts the b/ path from a "diff --git a/... b/..." line.
 func parseFilePath(chunk string) string {
 	firstLine, _, _ := strings.Cut(chunk, "\n")
@@ -350,6 +523,28 @@ func buildWorkOrderSection(wo *models.WorkOrder) string {
 			fmt.Fprintf(&sb, "  - %s\n", ac)
 		}
 	}
+	if len(wo.TypedAcceptanceCriteria) > 0 {
+		sb.WriteString("\nTyped acceptance criteria:\n")
+		for _, criterion := range wo.TypedAcceptanceCriteria {
+			required := "unknown"
+			if criterion.Required != nil {
+				if *criterion.Required {
+					required = "required"
+				} else {
+					required = "advisory"
+				}
+			}
+			fmt.Fprintf(
+				&sb,
+				"  - %s | %s | %s | kind=%s | requirements=%s\n",
+				criterion.ID,
+				criterion.Description,
+				required,
+				criterion.Verification.Kind,
+				strings.Join(criterion.RequirementIDs, ", "),
+			)
+		}
+	}
 	if len(wo.Constraints) > 0 {
 		sb.WriteString("\nConstraints:\n")
 		for _, c := range wo.Constraints {
@@ -376,22 +571,47 @@ func buildAnalyzeUserMessage(wo *models.WorkOrder, segment DiffSegment) string {
 	fmt.Fprintf(&sb, "Files: %s\n\n", strings.Join(segment.Files, ", "))
 	sb.WriteString(segment.Diff)
 	sb.WriteString("\n")
+	if len(segment.ReferenceFiles) > 0 {
+		sb.WriteString("\n=== REFERENCE FILES ===\n")
+		for _, file := range segment.ReferenceFiles {
+			fmt.Fprintf(&sb, "--- %s ---\n", file.Path)
+			sb.WriteString(file.Source)
+			if !strings.HasSuffix(file.Source, "\n") {
+				sb.WriteString("\n")
+			}
+			sb.WriteString("\n")
+		}
+	}
 
 	return sb.String()
 }
 
 // buildSynthesizeUserMessage creates the user message for the verify synthesize call.
-func buildSynthesizeUserMessage(wo *models.WorkOrder, preChecks []PreCheckResult, rawVerdicts []string) string {
+func buildSynthesizeUserMessage(wo *models.WorkOrder, preChecks []PreCheckResult, buildEvidence *ValidationEvidence, rawVerdicts []string) string {
 	var sb strings.Builder
 
 	sb.WriteString(buildWorkOrderSection(wo))
 
+	if buildEvidence != nil && (len(buildEvidence.Commands) > 0 || len(buildEvidence.SmokeChecks) > 0) {
+		sb.WriteString("=== BUILD VALIDATION EVIDENCE ===\n")
+		for _, entry := range buildEvidence.Commands {
+			fmt.Fprintf(&sb, "[COMMAND] %s => %s (%s)\n", entry.Name, entry.Result, entry.Notes)
+		}
+		for _, entry := range buildEvidence.SmokeChecks {
+			fmt.Fprintf(&sb, "[SMOKE] %s => %s (%s)\n", entry.Name, entry.Result, entry.Notes)
+		}
+		sb.WriteString("\n")
+	}
+
 	if len(preChecks) > 0 {
 		sb.WriteString("=== PRE-CHECK RESULTS ===\n")
 		for _, pc := range preChecks {
-			tag := "[PASS]"
-			if !pc.Met {
-				tag = "[FAIL]"
+			tag := "[UNASSESSABLE]"
+			switch pc.NormalizedResult() {
+			case models.CriterionResultMet:
+				tag = "[MET]"
+			case models.CriterionResultUnmet:
+				tag = "[UNMET]"
 			}
 			fmt.Fprintf(&sb, "%s %s (%s)\n", tag, pc.Criterion, pc.Notes)
 		}

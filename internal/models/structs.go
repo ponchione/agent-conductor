@@ -1,18 +1,21 @@
 package models
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // ContextPackage is the output of the scope phase, written to context_package.json.
 // Schema must match ScopePrompt in internal/templates/prompts.go.
 type ContextPackage struct {
-	Summary             string       `json:"summary"`
-	EstimatedComplexity string       `json:"estimated_complexity"` // low, medium, high
-	FilesToModify       []FileRef    `json:"files_to_modify"`
-	FilesToReference    []FileRef    `json:"files_to_reference"`
-	SQLFiles            []FileRef    `json:"sql_files"`
-	NewFiles            []NewFile    `json:"new_files"`
-	Dependencies        []string     `json:"dependencies"`
-	BuildInstructions   string       `json:"build_instructions"`
+	Summary             string    `json:"summary"`
+	EstimatedComplexity string    `json:"estimated_complexity"` // low, medium, high
+	FilesToModify       []FileRef `json:"files_to_modify"`
+	FilesToReference    []FileRef `json:"files_to_reference"`
+	SQLFiles            []FileRef `json:"sql_files"`
+	NewFiles            []NewFile `json:"new_files"`
+	Dependencies        []string  `json:"dependencies"`
+	BuildInstructions   string    `json:"build_instructions"`
 }
 
 // FileWithContent pairs a file path with its inline source content.
@@ -44,8 +47,8 @@ type VerificationReport struct {
 }
 
 type ScopeDrift struct {
-	Detected       bool      `json:"detected"`
-	UnscopedFiles  []UnscopedFile `json:"unscoped_files"`
+	Detected      bool           `json:"detected"`
+	UnscopedFiles []UnscopedFile `json:"unscoped_files"`
 }
 
 func (s *ScopeDrift) UnmarshalJSON(data []byte) error {
@@ -87,9 +90,100 @@ type Completeness struct {
 }
 
 type CriterionResult struct {
-	Criterion string `json:"criterion"`
-	Met       bool   `json:"met"`
-	Notes     string `json:"notes"`
+	CriterionID      string `json:"-"`
+	Criterion        string `json:"-"`
+	Required         *bool  `json:"-"`
+	Result           string `json:"-"`
+	VerificationKind string `json:"-"`
+	Notes            string `json:"-"`
+}
+
+const (
+	CriterionResultMet          = "met"
+	CriterionResultUnmet        = "unmet"
+	CriterionResultUnassessable = "unassessable"
+)
+
+func (c CriterionResult) MarshalJSON() ([]byte, error) {
+	type payload struct {
+		CriterionID      string `json:"criterion_id,omitempty"`
+		Description      string `json:"description,omitempty"`
+		Required         *bool  `json:"required,omitempty"`
+		Result           string `json:"result,omitempty"`
+		VerificationKind string `json:"verification_kind,omitempty"`
+		Notes            string `json:"notes,omitempty"`
+	}
+	return json.Marshal(payload{
+		CriterionID:      c.CriterionID,
+		Description:      c.Criterion,
+		Required:         c.Required,
+		Result:           c.Result,
+		VerificationKind: c.VerificationKind,
+		Notes:            c.Notes,
+	})
+}
+
+func (c *CriterionResult) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		CriterionID      string `json:"criterion_id"`
+		Description      string `json:"description"`
+		Criterion        string `json:"criterion"`
+		Required         *bool  `json:"required"`
+		Result           string `json:"result"`
+		VerificationKind string `json:"verification_kind"`
+		Notes            string `json:"notes"`
+		Met              *bool  `json:"met"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	c.CriterionID = raw.CriterionID
+	c.Criterion = firstNonEmpty(raw.Description, raw.Criterion)
+	c.Required = raw.Required
+	c.Result = normalizeCriterionResult(raw.Result)
+	if c.Result == "" && raw.Met != nil {
+		c.Result = resultFromBool(*raw.Met)
+	}
+	c.VerificationKind = raw.VerificationKind
+	c.Notes = raw.Notes
+	return nil
+}
+
+func (c CriterionResult) NormalizedResult() string {
+	if normalized := normalizeCriterionResult(c.Result); normalized != "" {
+		return normalized
+	}
+	return CriterionResultUnassessable
+}
+
+func resultFromBool(met bool) string {
+	if met {
+		return CriterionResultMet
+	}
+	return CriterionResultUnmet
+}
+
+func normalizeCriterionResult(result string) string {
+	switch strings.ToLower(strings.TrimSpace(result)) {
+	case CriterionResultMet:
+		return CriterionResultMet
+	case CriterionResultUnmet:
+		return CriterionResultUnmet
+	case CriterionResultUnassessable:
+		return CriterionResultUnassessable
+	default:
+		return ""
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 type PatternConsistency struct {
@@ -107,27 +201,30 @@ type FullContextPackage struct {
 
 // WorkOrderContext is the work order fields relevant to the build agent.
 type WorkOrderContext struct {
-	Title              string   `json:"title"`
-	Type               string   `json:"type"`
-	TargetModule       string   `json:"target_module"`
-	ReferenceModule    string   `json:"reference_module,omitempty"`
-	AcceptanceCriteria []string `json:"acceptance_criteria"`
-	Constraints        []string `json:"constraints"`
-	KnownFiles         []string `json:"known_files"`
+	SchemaVersion           int                        `json:"schema_version,omitempty"`
+	Title                   string                     `json:"title"`
+	Type                    string                     `json:"type"`
+	TargetModule            string                     `json:"target_module"`
+	ReferenceModule         string                     `json:"reference_module,omitempty"`
+	Requirements            []WorkOrderRequirement     `json:"requirements,omitempty"`
+	AcceptanceCriteria      []string                   `json:"acceptance_criteria"`
+	TypedAcceptanceCriteria []TypedAcceptanceCriterion `json:"typed_acceptance_criteria,omitempty"`
+	Constraints             []string                   `json:"constraints"`
+	KnownFiles              []string                   `json:"known_files"`
 }
 
 // ScopeContext holds the scope LLM's analysis enriched with RAG results.
 type ScopeContext struct {
-	FilesToModify       []FileRef        `json:"files_to_modify"`
-	FilesToReference    []FileRef        `json:"files_to_reference"`
+	FilesToModify       []FileRef         `json:"files_to_modify"`
+	FilesToReference    []FileRef         `json:"files_to_reference"`
 	FileContents        []FileWithContent `json:"file_contents,omitempty"`
-	RelevantCode        []RelevantCode   `json:"relevant_code"`
-	Summary             string           `json:"summary"`
-	EstimatedComplexity string           `json:"estimated_complexity"`
-	BuildInstructions   string           `json:"build_instructions,omitempty"`
-	NewFiles            []NewFile        `json:"new_files,omitempty"`
-	SQLFiles            []FileRef        `json:"sql_files,omitempty"`
-	Dependencies        []string         `json:"dependencies,omitempty"`
+	RelevantCode        []RelevantCode    `json:"relevant_code"`
+	Summary             string            `json:"summary"`
+	EstimatedComplexity string            `json:"estimated_complexity"`
+	BuildInstructions   string            `json:"build_instructions,omitempty"`
+	NewFiles            []NewFile         `json:"new_files,omitempty"`
+	SQLFiles            []FileRef         `json:"sql_files,omitempty"`
+	Dependencies        []string          `json:"dependencies,omitempty"`
 }
 
 // CodeRef identifies a function or method in the codebase.

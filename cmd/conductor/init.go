@@ -231,6 +231,8 @@ func writeInitProjectYAML(pc *initProjectConfig, outputDir string) error {
 	sb.WriteString("  scope: templates/scope-prompt.md\n")
 	sb.WriteString("  verify: templates/verify-prompt.md\n")
 	sb.WriteString("  build: templates/build-prompt.md\n")
+	sb.WriteString("  plan: templates/plan-prompt.md\n")
+	sb.WriteString("  plan_audit: templates/plan-audit.md\n")
 
 	sb.WriteString("\nexecutor:\n")
 	sb.WriteString("  tool: claude-code\n")
