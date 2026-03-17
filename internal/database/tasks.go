@@ -5,6 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"strings"
+	"time"
+)
+
+const (
+	atomicClaimAttempts   = 5
+	atomicClaimRetryDelay = 10 * time.Millisecond
 )
 
 // TaskSummary holds the fields needed for task list operations.
@@ -41,9 +48,15 @@ func (db *DB) ListTasksByWorkflow(ctx context.Context, workflowID string) ([]Tas
 
 // AtomicClaimTask handles the transaction for finding and claiming a task
 func (db *DB) AtomicClaimTask(ctx context.Context, workerID string) (*Task, error) {
-	for range 5 {
+	var lastBusyErr error
+	for range atomicClaimAttempts {
 		tx, err := db.conn.Begin()
 		if err != nil {
+			if isSQLiteBusyError(err) {
+				lastBusyErr = err
+				time.Sleep(atomicClaimRetryDelay)
+				continue
+			}
 			return nil, err
 		}
 		qtx := db.WithTx(tx)
@@ -55,6 +68,11 @@ func (db *DB) AtomicClaimTask(ctx context.Context, workerID string) (*Task, erro
 		}
 		if err != nil {
 			_ = tx.Rollback()
+			if isSQLiteBusyError(err) {
+				lastBusyErr = err
+				time.Sleep(atomicClaimRetryDelay)
+				continue
+			}
 			return nil, err
 		}
 
@@ -64,6 +82,11 @@ func (db *DB) AtomicClaimTask(ctx context.Context, workerID string) (*Task, erro
 		})
 		if err != nil {
 			_ = tx.Rollback()
+			if isSQLiteBusyError(err) {
+				lastBusyErr = err
+				time.Sleep(atomicClaimRetryDelay)
+				continue
+			}
 			return nil, err
 		}
 		if rows == 0 {
@@ -74,33 +97,69 @@ func (db *DB) AtomicClaimTask(ctx context.Context, workerID string) (*Task, erro
 		task, err := qtx.GetTask(ctx, taskID)
 		if err != nil {
 			_ = tx.Rollback()
+			if isSQLiteBusyError(err) {
+				lastBusyErr = err
+				time.Sleep(atomicClaimRetryDelay)
+				continue
+			}
 			return nil, err
 		}
 
 		if err := markTaskStartedIfUnset(ctx, tx, task.ID); err != nil {
 			_ = tx.Rollback()
+			if isSQLiteBusyError(err) {
+				lastBusyErr = err
+				time.Sleep(atomicClaimRetryDelay)
+				continue
+			}
 			return nil, err
 		}
 		if err := markWorkflowStartedIfUnset(ctx, tx, task.WorkflowID); err != nil {
 			_ = tx.Rollback()
+			if isSQLiteBusyError(err) {
+				lastBusyErr = err
+				time.Sleep(atomicClaimRetryDelay)
+				continue
+			}
 			return nil, err
 		}
 
 		task, err = qtx.GetTask(ctx, taskID)
 		if err != nil {
 			_ = tx.Rollback()
+			if isSQLiteBusyError(err) {
+				lastBusyErr = err
+				time.Sleep(atomicClaimRetryDelay)
+				continue
+			}
 			return nil, err
 		}
 
 		if err := tx.Commit(); err != nil {
 			_ = tx.Rollback()
+			if isSQLiteBusyError(err) {
+				lastBusyErr = err
+				time.Sleep(atomicClaimRetryDelay)
+				continue
+			}
 			return nil, err
 		}
 
 		return &task, nil
 	}
 
+	if lastBusyErr != nil {
+		return nil, lastBusyErr
+	}
 	return nil, nil
+}
+
+func isSQLiteBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked")
 }
 
 func markTaskStartedIfUnset(ctx context.Context, q DBTX, taskID string) error {

@@ -3,28 +3,99 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/ponchione/agent-conductor/internal/config"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type blockingStreamBody struct {
+	ctx    context.Context
+	data   string
+	offset int
+}
+
+func (b *blockingStreamBody) Read(p []byte) (int, error) {
+	if b.offset < len(b.data) {
+		n := copy(p, b.data[b.offset:])
+		b.offset += n
+		return n, nil
+	}
+	<-b.ctx.Done()
+	return 0, io.EOF
+}
+
+func (b *blockingStreamBody) Close() error {
+	return nil
+}
+
+func newProviderClientForTest(provider Provider, transport roundTripFunc) *ProviderClient {
+	if provider.Endpoint == "" {
+		provider.Endpoint = "http://example.test"
+	}
+	if provider.Model == "" {
+		provider.Model = "test-model"
+	}
+	return newProviderClientWithHTTPClient(provider, &http.Client{Transport: transport})
+}
+
+func jsonResponse(statusCode int, body any) *http.Response {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		panic(err)
+	}
+	return &http.Response{
+		StatusCode: statusCode,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(string(payload))),
+	}
+}
+
+func textResponse(statusCode int, body string, contentType string) *http.Response {
+	header := http.Header{}
+	if contentType != "" {
+		header.Set("Content-Type", contentType)
+	}
+	return &http.Response{
+		StatusCode: statusCode,
+		Header:     header,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func decodeJSONBody(t *testing.T, req *http.Request, dst any) {
+	t.Helper()
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read request body: %v", err)
+	}
+	defer req.Body.Close()
+	if err := json.Unmarshal(body, dst); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+}
+
 func TestClient_Complete(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatal(err)
+	client := newProviderClientForTest(Provider{
+		Endpoint:       "http://example.test/v1",
+		Model:          "qwen-local",
+		Temperature:    0.1,
+		TimeoutSeconds: 5,
+	}, func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "http://example.test/v1/chat/completions" {
+			t.Fatalf("request URL = %q", r.URL.String())
 		}
-		defer r.Body.Close()
 
 		var req chatCompletionRequest
-		if err := json.Unmarshal(body, &req); err != nil {
-			t.Fatal(err)
-		}
+		decodeJSONBody(t, r, &req)
 
 		if req.Model != "qwen-local" {
 			t.Errorf("expected model qwen-local, got %s", req.Model)
@@ -39,27 +110,15 @@ func TestClient_Complete(t *testing.T) {
 			t.Errorf("incorrect user message")
 		}
 
-		resp := chatCompletionResponse{
+		return jsonResponse(http.StatusOK, chatCompletionResponse{
 			Choices: []choice{
 				{Message: message{Role: "assistant", Content: "Success!"}},
 			},
 			Usage: Usage{PromptTokens: 10, CompletionTokens: 5},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
+		}), nil
+	})
 
-	cfg := config.LocalModel{
-		Endpoint:       server.URL,
-		ModelName:      "qwen-local",
-		Temperature:    0.1,
-		TimeoutSeconds: 5,
-	}
-	client := New(cfg)
-
-	ctx := context.Background()
-	result, err := client.Complete(ctx, "System Prompt", "User Message")
+	result, err := client.Complete(context.Background(), "System Prompt", "User Message")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,13 +138,10 @@ func TestClient_Complete(t *testing.T) {
 
 func TestClient_Errors(t *testing.T) {
 	t.Run("server_error", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("Internal Error"))
-		}))
-		defer server.Close()
+		client := newProviderClientForTest(Provider{}, func(r *http.Request) (*http.Response, error) {
+			return textResponse(http.StatusInternalServerError, "Internal Error", "text/plain"), nil
+		})
 
-		client := New(config.LocalModel{Endpoint: server.URL, TimeoutSeconds: 1})
 		_, err := client.Complete(context.Background(), "sys", "user")
 		if err == nil {
 			t.Error("expected error, got nil")
@@ -96,13 +152,10 @@ func TestClient_Errors(t *testing.T) {
 	})
 
 	t.Run("malformed_json", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"choices": [{"message": {"content": "broken"`))
-		}))
-		defer server.Close()
+		client := newProviderClientForTest(Provider{}, func(r *http.Request) (*http.Response, error) {
+			return textResponse(http.StatusOK, `{"choices": [{"message": {"content": "broken"`, "application/json"), nil
+		})
 
-		client := New(config.LocalModel{Endpoint: server.URL, TimeoutSeconds: 1})
 		_, err := client.Complete(context.Background(), "sys", "user")
 		if err == nil {
 			t.Error("expected error, got nil")
@@ -110,13 +163,10 @@ func TestClient_Errors(t *testing.T) {
 	})
 
 	t.Run("empty_choices", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"choices": []}`))
-		}))
-		defer server.Close()
+		client := newProviderClientForTest(Provider{}, func(r *http.Request) (*http.Response, error) {
+			return textResponse(http.StatusOK, `{"choices": []}`, "application/json"), nil
+		})
 
-		client := New(config.LocalModel{Endpoint: server.URL, TimeoutSeconds: 1})
 		_, err := client.Complete(context.Background(), "sys", "user")
 		if err == nil {
 			t.Error("expected error, got nil")
@@ -128,13 +178,10 @@ func TestClient_Errors(t *testing.T) {
 }
 
 func TestClient_Timeout(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(200 * time.Millisecond)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	client := New(config.LocalModel{Endpoint: server.URL, TimeoutSeconds: 1})
+	client := newProviderClientForTest(Provider{}, func(r *http.Request) (*http.Response, error) {
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -154,21 +201,14 @@ func TestClient_Timeout(t *testing.T) {
 func TestProviderClient_AuthorizationHeader(t *testing.T) {
 	t.Run("with_api_key", func(t *testing.T) {
 		var gotAuth string
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := newProviderClientForTest(Provider{
+			APIKey: "sk-secret-123",
+		}, func(r *http.Request) (*http.Response, error) {
 			gotAuth = r.Header.Get("Authorization")
-			resp := chatCompletionResponse{
+			return jsonResponse(http.StatusOK, chatCompletionResponse{
 				Choices: []choice{{Message: message{Role: "assistant", Content: "ok"}}},
 				Usage:   Usage{PromptTokens: 1, CompletionTokens: 1},
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
-		}))
-		defer server.Close()
-
-		client := NewProviderClient(Provider{
-			Endpoint: server.URL,
-			Model:    "test-model",
-			APIKey:   "sk-secret-123",
+			}), nil
 		})
 
 		_, err := client.Complete(context.Background(), "sys", "user")
@@ -182,20 +222,12 @@ func TestProviderClient_AuthorizationHeader(t *testing.T) {
 
 	t.Run("without_api_key", func(t *testing.T) {
 		var gotAuth string
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := newProviderClientForTest(Provider{}, func(r *http.Request) (*http.Response, error) {
 			gotAuth = r.Header.Get("Authorization")
-			resp := chatCompletionResponse{
+			return jsonResponse(http.StatusOK, chatCompletionResponse{
 				Choices: []choice{{Message: message{Role: "assistant", Content: "ok"}}},
 				Usage:   Usage{PromptTokens: 1, CompletionTokens: 1},
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
-		}))
-		defer server.Close()
-
-		client := NewProviderClient(Provider{
-			Endpoint: server.URL,
-			Model:    "test-model",
+			}), nil
 		})
 
 		_, err := client.Complete(context.Background(), "sys", "user")
@@ -310,25 +342,13 @@ func TestCompleteStream_HappyPath(t *testing.T) {
 		"",
 	}, "\n")
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+	client := newProviderClientForTest(Provider{}, func(r *http.Request) (*http.Response, error) {
 		var req streamingChatCompletionRequest
-		if err := json.Unmarshal(body, &req); err != nil {
-			t.Errorf("failed to parse request: %v", err)
-		}
+		decodeJSONBody(t, r, &req)
 		if !req.Stream {
 			t.Error("expected stream=true in request")
 		}
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(sseBody))
-	}))
-	defer server.Close()
-
-	client := NewProviderClient(Provider{
-		Endpoint: server.URL,
-		Model:    "test-model",
+		return textResponse(http.StatusOK, sseBody, "text/event-stream"), nil
 	})
 
 	ch, err := client.CompleteStream(context.Background(), "sys", "user")
@@ -370,13 +390,10 @@ func TestCompleteStream_HappyPath(t *testing.T) {
 }
 
 func TestCompleteStream_ServerError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Internal Error"))
-	}))
-	defer server.Close()
+	client := newProviderClientForTest(Provider{}, func(r *http.Request) (*http.Response, error) {
+		return textResponse(http.StatusInternalServerError, "Internal Error", "text/plain"), nil
+	})
 
-	client := NewProviderClient(Provider{Endpoint: server.URL, Model: "m"})
 	_, err := client.CompleteStream(context.Background(), "sys", "user")
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -387,15 +404,10 @@ func TestCompleteStream_ServerError(t *testing.T) {
 }
 
 func TestCompleteStream_MalformedChunk(t *testing.T) {
-	sseBody := "data: {invalid json}\n\n"
+	client := newProviderClientForTest(Provider{}, func(r *http.Request) (*http.Response, error) {
+		return textResponse(http.StatusOK, "data: {invalid json}\n\n", "text/event-stream"), nil
+	})
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte(sseBody))
-	}))
-	defer server.Close()
-
-	client := NewProviderClient(Provider{Endpoint: server.URL, Model: "m"})
 	ch, err := client.CompleteStream(context.Background(), "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -413,41 +425,35 @@ func TestCompleteStream_MalformedChunk(t *testing.T) {
 }
 
 func TestCompleteStream_ContextCancel(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			t.Fatal("expected ResponseWriter to be a Flusher")
-		}
-		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n"))
-		flusher.Flush()
-		// Block until client disconnects
-		<-r.Context().Done()
-	}))
-	defer server.Close()
-
 	ctx, cancel := context.WithCancel(context.Background())
-	client := NewProviderClient(Provider{Endpoint: server.URL, Model: "m"})
+	client := newProviderClientForTest(Provider{}, func(r *http.Request) (*http.Response, error) {
+		if r.Context() == nil {
+			t.Fatal("expected request context")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: &blockingStreamBody{
+				ctx:  r.Context(),
+				data: "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n",
+			},
+		}, nil
+	})
 
 	ch, err := client.CompleteStream(ctx, "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Read the first chunk
 	chunk := <-ch
 	if chunk.Content != "Hi" {
 		t.Errorf("expected 'Hi', got %q", chunk.Content)
 	}
 
-	// Cancel context
 	cancel()
 
-	// Channel should close (drain remaining)
 	for range ch {
 	}
-	// If we get here without hanging, context cancellation works
 }
 
 func TestCompleteStream_NoUsageInFinalChunk(t *testing.T) {
@@ -458,13 +464,10 @@ func TestCompleteStream_NoUsageInFinalChunk(t *testing.T) {
 		"",
 	}, "\n")
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte(sseBody))
-	}))
-	defer server.Close()
+	client := newProviderClientForTest(Provider{}, func(r *http.Request) (*http.Response, error) {
+		return textResponse(http.StatusOK, sseBody, "text/event-stream"), nil
+	})
 
-	client := NewProviderClient(Provider{Endpoint: server.URL, Model: "m"})
 	ch, err := client.CompleteStream(context.Background(), "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -487,16 +490,10 @@ func TestCompleteStream_NoUsageInFinalChunk(t *testing.T) {
 }
 
 func TestCompleteStream_EmptyLines(t *testing.T) {
-	// SSE spec allows empty lines between events
-	sseBody := "\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"
+	client := newProviderClientForTest(Provider{}, func(r *http.Request) (*http.Response, error) {
+		return textResponse(http.StatusOK, "\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n", "text/event-stream"), nil
+	})
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte(sseBody))
-	}))
-	defer server.Close()
-
-	client := NewProviderClient(Provider{Endpoint: server.URL, Model: "m"})
 	ch, err := client.CompleteStream(context.Background(), "sys", "user")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -512,5 +509,20 @@ func TestCompleteStream_EmptyLines(t *testing.T) {
 	}
 	if chunks[0].Content != "ok" {
 		t.Errorf("Content = %q, want %q", chunks[0].Content, "ok")
+	}
+}
+
+func TestComplete_TransportError(t *testing.T) {
+	expected := errors.New("transport failed")
+	client := newProviderClientForTest(Provider{}, func(r *http.Request) (*http.Response, error) {
+		return nil, expected
+	})
+
+	_, err := client.Complete(context.Background(), "sys", "user")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), expected.Error()) {
+		t.Fatalf("expected error to contain %q, got %v", expected.Error(), err)
 	}
 }

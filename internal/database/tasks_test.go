@@ -4,10 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestListTasksByWorkflow(t *testing.T) {
@@ -158,20 +156,12 @@ func TestAtomicClaimTask_ConcurrentClaimSingleWinner(t *testing.T) {
 
 	claim := func(workerID string) {
 		defer wg.Done()
-		for range 5 {
-			task, claimErr := db.AtomicClaimTask(ctx, workerID)
-			if claimErr != nil {
-				if strings.Contains(claimErr.Error(), "SQLITE_BUSY") || strings.Contains(claimErr.Error(), "database is locked") {
-					time.Sleep(10 * time.Millisecond)
-					continue
-				}
-				errs <- claimErr
-				return
-			}
-			results <- task
+		task, claimErr := db.AtomicClaimTask(ctx, workerID)
+		if claimErr != nil {
+			errs <- claimErr
 			return
 		}
-		errs <- context.DeadlineExceeded
+		results <- task
 	}
 
 	wg.Add(2)

@@ -50,15 +50,22 @@ type ProviderClient struct {
 
 // NewProviderClient creates a new ProviderClient from the given Provider config.
 func NewProviderClient(p Provider) *ProviderClient {
+	return newProviderClientWithHTTPClient(p, nil)
+}
+
+func newProviderClientWithHTTPClient(p Provider, httpClient *http.Client) *ProviderClient {
 	timeout := p.TimeoutSeconds
 	if timeout == 0 {
 		timeout = 60
 	}
-	return &ProviderClient{
-		provider: p,
-		httpClient: &http.Client{
+	if httpClient == nil {
+		httpClient = &http.Client{
 			Timeout: time.Duration(timeout) * time.Second,
-		},
+		}
+	}
+	return &ProviderClient{
+		provider:   p,
+		httpClient: httpClient,
 	}
 }
 

@@ -20,6 +20,11 @@ func NewDB(dsn string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Keep SQLite on a single pooled connection. This avoids self-inflicted
+	// lock contention inside one process while remaining compatible with
+	// future multi-process access to the same DB file.
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
 
 	if err := conn.Ping(); err != nil {
 		conn.Close()
@@ -34,6 +39,12 @@ func NewDB(dsn string) (*DB, error) {
 	}()
 
 	if _, err := conn.Exec("PRAGMA foreign_keys = ON;"); err != nil {
+		return nil, err
+	}
+	if _, err := conn.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
+		return nil, err
+	}
+	if _, err := conn.Exec("PRAGMA journal_mode = WAL;"); err != nil {
 		return nil, err
 	}
 
