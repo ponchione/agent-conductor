@@ -33,8 +33,17 @@ func TestWriteInitProjectYAMLUsesCanonicalProjectShape(t *testing.T) {
 	}
 	content := string(data)
 
-	if strings.Contains(content, "\nprompts:\n") {
-		t.Fatalf("project.yaml unexpectedly includes prompts section:\n%s", content)
+	if !strings.Contains(content, "\nprompts:\n") {
+		t.Fatalf("project.yaml missing prompts section:\n%s", content)
+	}
+	if !strings.Contains(content, "# Optional planner prompt overrides. Leave commented to use embedded defaults.") {
+		t.Fatalf("project.yaml missing prompts guidance comment:\n%s", content)
+	}
+	if !strings.Contains(content, "# plan: \".prompts/plan-prompt.md\"") {
+		t.Fatalf("project.yaml missing plan prompt example:\n%s", content)
+	}
+	if !strings.Contains(content, "# plan_audit: \".prompts/plan_audit-prompt.md\"") {
+		t.Fatalf("project.yaml missing plan_audit prompt example:\n%s", content)
 	}
 	if strings.Contains(content, "\nexecutor:\n") {
 		t.Fatalf("project.yaml unexpectedly includes executor section:\n%s", content)

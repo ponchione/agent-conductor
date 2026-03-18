@@ -14,8 +14,10 @@ import (
 	"github.com/ponchione/agent-conductor/internal/database"
 	pipelineerrors "github.com/ponchione/agent-conductor/internal/errors"
 	"github.com/ponchione/agent-conductor/internal/executor"
+	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
 	"github.com/ponchione/agent-conductor/internal/verify"
+	"gopkg.in/yaml.v3"
 )
 
 func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
@@ -97,14 +99,6 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	w.registerWorkflowArtifact(ctx, task.WorkflowID, task.ID, database.ArtifactTypeBuildStderr, result.StderrPath, map[string]any{
 		"phase": "build",
 	})
-	buildEvidencePath, evidenceErr := w.writeBuildValidationEvidence(task.WorkflowID)
-	if evidenceErr != nil {
-		slog.Warn("Failed to write build validation evidence", "error", evidenceErr)
-	} else {
-		w.registerWorkflowArtifact(ctx, task.WorkflowID, task.ID, database.ArtifactTypeBuildValidationEvidence, buildEvidencePath, map[string]any{
-			"phase": "build",
-		})
-	}
 
 	if !result.Success {
 		return pipelineerrors.NeedsHumanf("build", task.WorkflowID, task.ID,
@@ -114,6 +108,27 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	if err := w.git.CheckoutBranch(w.cfg.Project.Path, wf.GitBranch); err != nil {
 		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID,
 			"failed to ensure branch %s after build: %w", wf.GitBranch, err)
+	}
+
+	woContent, err := os.ReadFile(workOrderPath)
+	if err != nil {
+		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "failed to read work order: %w", err)
+	}
+	var wo models.WorkOrder
+	if err := yaml.Unmarshal(woContent, &wo); err != nil {
+		return pipelineerrors.Fatalf("build", task.WorkflowID, task.ID, "failed to parse work order: %w", err)
+	}
+
+	buildEvidence := w.collectBuildValidationEvidence(ctx, &wo)
+	buildEvidencePath, evidenceErr := w.writeBuildValidationEvidence(task.WorkflowID, buildEvidence)
+	if evidenceErr != nil {
+		slog.Warn("Failed to write build validation evidence", "error", evidenceErr)
+	} else {
+		w.registerWorkflowArtifact(ctx, task.WorkflowID, task.ID, database.ArtifactTypeBuildValidationEvidence, buildEvidencePath, map[string]any{
+			"phase":        "build",
+			"command_runs": len(buildEvidence.Commands),
+			"smoke_runs":   len(buildEvidence.SmokeChecks),
+		})
 	}
 
 	baseBranch := w.cfg.Git.BaseBranch
@@ -224,12 +239,93 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	return nil
 }
 
-func (w *Worker) writeBuildValidationEvidence(workflowID string) (string, error) {
-	evidencePath := filepath.Join(w.cfg.Project.DataDir, "artifacts", "build-evidence", workflowID+"-build-evidence.json")
+func (w *Worker) collectBuildValidationEvidence(ctx context.Context, wo *models.WorkOrder) *verify.ValidationEvidence {
 	evidence := &verify.ValidationEvidence{
 		Phase:       "build",
 		Commands:    []verify.ValidationEvidenceEntry{},
 		SmokeChecks: []verify.ValidationEvidenceEntry{},
+	}
+	if wo == nil {
+		return evidence
+	}
+
+	seenCommands := make(map[string]bool)
+	seenSmokeChecks := make(map[string]bool)
+
+	for _, criterion := range wo.TypedAcceptanceCriteria {
+		switch strings.TrimSpace(criterion.Verification.Kind) {
+		case "precheck":
+			checkName := strings.TrimSpace(criterion.Verification.Check)
+			if checkName == "" || seenCommands[checkName] {
+				continue
+			}
+			entry, ok := w.runBuildValidationCommand(ctx, checkName)
+			if ok {
+				evidence.Commands = append(evidence.Commands, entry)
+				seenCommands[checkName] = true
+			}
+		case "http_smoke":
+			routeName := strings.TrimSpace(criterion.Verification.Route)
+			if routeName == "" || seenSmokeChecks[routeName] {
+				continue
+			}
+			entry, ok := w.runBuildValidationSmokeCheck(ctx, routeName)
+			if ok {
+				evidence.SmokeChecks = append(evidence.SmokeChecks, entry)
+				seenSmokeChecks[routeName] = true
+			}
+		}
+	}
+
+	return evidence
+}
+
+func (w *Worker) runBuildValidationCommand(ctx context.Context, checkName string) (verify.ValidationEvidenceEntry, bool) {
+	if w.cfg == nil {
+		return verify.ValidationEvidenceEntry{}, false
+	}
+	command, ok := w.cfg.Verify.Commands[checkName]
+	if !ok || len(command.Argv) == 0 {
+		return verify.ValidationEvidenceEntry{}, false
+	}
+
+	result := w.executePreCheckCommand(ctx, verify.PreCheckResult{VerificationKind: "precheck"}, checkName, command)
+	return verify.ValidationEvidenceEntry{
+		Name:    checkName,
+		Argv:    append([]string(nil), command.Argv...),
+		Workdir: w.precheckWorkdir(command.Workdir),
+		Result:  result.NormalizedResult(),
+		Notes:   result.Notes,
+	}, true
+}
+
+func (w *Worker) runBuildValidationSmokeCheck(ctx context.Context, routeName string) (verify.ValidationEvidenceEntry, bool) {
+	if w.cfg == nil {
+		return verify.ValidationEvidenceEntry{}, false
+	}
+	smoke, ok := w.cfg.Verify.Smoke[routeName]
+	if !ok || len(smoke.Command.Argv) == 0 {
+		return verify.ValidationEvidenceEntry{}, false
+	}
+
+	result := w.executeSmokeCommand(ctx, verify.PreCheckResult{VerificationKind: "http_smoke"}, routeName, smoke.Command)
+	return verify.ValidationEvidenceEntry{
+		Name:    routeName,
+		Argv:    append([]string(nil), smoke.Command.Argv...),
+		Workdir: w.precheckWorkdir(smoke.Command.Workdir),
+		Result:  result.NormalizedResult(),
+		Notes:   result.Notes,
+	}, true
+}
+
+func (w *Worker) writeBuildValidationEvidence(workflowID string, evidence *verify.ValidationEvidence) (string, error) {
+	evidencePath := filepath.Join(w.cfg.Project.DataDir, "artifacts", "build-evidence", workflowID+"-build-evidence.json")
+	if evidence == nil {
+		evidence = &verify.ValidationEvidence{
+			Phase:       "build",
+			Commands:    []verify.ValidationEvidenceEntry{},
+			SmokeChecks: []verify.ValidationEvidenceEntry{},
+		}
 	}
 	if err := verify.WriteValidationEvidence(evidencePath, evidence); err != nil {
 		return "", err

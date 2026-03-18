@@ -200,7 +200,7 @@ func (a *Assembler) Assemble(ctx context.Context, wo *models.WorkOrder, scopePkg
 
 	full := &models.FullContextPackage{
 		WorkOrder: models.WorkOrderContext{
-			SchemaVersion:           wo.EffectiveSchemaVersion(),
+			SchemaVersion:           models.WorkOrderSchemaVersion,
 			Title:                   wo.Title,
 			Type:                    wo.Type,
 			TargetModule:            wo.TargetModule,
@@ -251,7 +251,7 @@ func (a *Assembler) AssembleBootstrap(wo *models.WorkOrder, branchName string) *
 
 	return &models.FullContextPackage{
 		WorkOrder: models.WorkOrderContext{
-			SchemaVersion:           wo.EffectiveSchemaVersion(),
+			SchemaVersion:           models.WorkOrderSchemaVersion,
 			Title:                   wo.Title,
 			Type:                    wo.Type,
 			TargetModule:            wo.TargetModule,

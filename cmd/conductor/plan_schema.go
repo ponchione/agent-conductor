@@ -31,8 +31,8 @@ type planWorkOrder struct {
 }
 
 func (pw planWorkOrder) toWorkOrder() (models.WorkOrder, error) {
-	if pw.SchemaVersion != 2 {
-		return models.WorkOrder{}, fmt.Errorf("schema_version must be 2")
+	if pw.SchemaVersion != models.WorkOrderSchemaVersion {
+		return models.WorkOrder{}, fmt.Errorf("schema_version must be %d", models.WorkOrderSchemaVersion)
 	}
 	wo := models.WorkOrder{
 		SchemaVersion:           pw.SchemaVersion,

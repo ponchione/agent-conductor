@@ -603,14 +603,14 @@ func TestBuildSynthesizeUserMessageIncludesBuildValidationEvidence(t *testing.T)
 	msg := buildSynthesizeUserMessage(testWorkOrder(), nil, &ValidationEvidence{
 		Phase: "build",
 		Commands: []ValidationEvidenceEntry{
-			{Name: "make test", Result: "met", Notes: "recorded during build"},
+			{Name: "test", Argv: []string{"make", "test"}, Workdir: "/tmp/repo", Result: "met", Notes: "recorded during build"},
 		},
 	}, []string{validAnalyzeResponse})
 
 	if !strings.Contains(msg, "=== BUILD VALIDATION EVIDENCE ===") {
 		t.Fatal("synthesize message missing build evidence section")
 	}
-	if !strings.Contains(msg, "[COMMAND] make test => met") {
+	if !strings.Contains(msg, "[COMMAND] test => met | argv=make test | workdir=/tmp/repo | notes=recorded during build") {
 		t.Fatal("synthesize message missing build evidence entry")
 	}
 }

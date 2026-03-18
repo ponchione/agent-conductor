@@ -13,7 +13,7 @@ func TestWorkOrderValidateRequiresVersionTwoFields(t *testing.T) {
 		Title:         "Test",
 		Type:          "bug_fix",
 		TargetModule:  "cmd/conductor",
-		SchemaVersion: 2,
+		SchemaVersion: WorkOrderSchemaVersion,
 	}
 
 	if err := wo.Validate(); err == nil {
@@ -24,7 +24,7 @@ func TestWorkOrderValidateRequiresVersionTwoFields(t *testing.T) {
 func TestWorkOrderValidateRejectsBlankKnownFiles(t *testing.T) {
 	required := true
 	wo := &WorkOrder{
-		SchemaVersion: 2,
+		SchemaVersion: WorkOrderSchemaVersion,
 		Title:         "Test",
 		Type:          "bug_fix",
 		TargetModule:  "cmd/conductor",
@@ -133,7 +133,7 @@ func TestWorkOrderJSONUnmarshalRejectsScalarAcceptanceCriteria(t *testing.T) {
 
 func TestWorkOrderValidateVersion2RejectsMissingRequiredFlag(t *testing.T) {
 	wo := &WorkOrder{
-		SchemaVersion: 2,
+		SchemaVersion: WorkOrderSchemaVersion,
 		Title:         "Preserve observability routes",
 		Type:          "refactor",
 		TargetModule:  "internal/api",
@@ -159,7 +159,7 @@ func TestWorkOrderValidateVersion2RejectsMissingRequiredFlag(t *testing.T) {
 func TestWorkOrderValidateVersion2RejectsMissingRequirementCoverage(t *testing.T) {
 	required := true
 	wo := &WorkOrder{
-		SchemaVersion: 2,
+		SchemaVersion: WorkOrderSchemaVersion,
 		Title:         "Preserve observability routes",
 		Type:          "refactor",
 		TargetModule:  "internal/api",
@@ -187,7 +187,7 @@ func TestWorkOrderValidateVersion2RejectsMissingRequirementCoverage(t *testing.T
 func TestWorkOrderValidateVersion2RejectsPrecheckWithoutCheck(t *testing.T) {
 	required := true
 	wo := &WorkOrder{
-		SchemaVersion: 2,
+		SchemaVersion: WorkOrderSchemaVersion,
 		Title:         "Run typed prechecks",
 		Type:          "refactor",
 		TargetModule:  "internal/worker",
@@ -214,7 +214,7 @@ func TestWorkOrderValidateVersion2RejectsPrecheckWithoutCheck(t *testing.T) {
 func TestWorkOrderJSONMarshalVersion2UsesCanonicalAcceptanceCriteriaShape(t *testing.T) {
 	required := true
 	wo := WorkOrder{
-		SchemaVersion: 2,
+		SchemaVersion: WorkOrderSchemaVersion,
 		Title:         "Preserve observability routes",
 		Type:          "refactor",
 		TargetModule:  "internal/api",
@@ -242,5 +242,31 @@ func TestWorkOrderJSONMarshalVersion2UsesCanonicalAcceptanceCriteriaShape(t *tes
 	}
 	if !strings.Contains(content, `"acceptance_criteria":[{"id":"AC-1"`) {
 		t.Fatalf("marshaled JSON missing typed acceptance criteria payload: %s", content)
+	}
+}
+
+func TestWorkOrderValidateRejectsMissingSchemaVersion(t *testing.T) {
+	required := true
+	wo := &WorkOrder{
+		Title:        "Test",
+		Type:         "bug_fix",
+		TargetModule: "cmd/conductor",
+		Requirements: []WorkOrderRequirement{
+			{ID: "REQ-1", Text: "Criterion stays valid"},
+		},
+		TypedAcceptanceCriteria: []TypedAcceptanceCriterion{
+			{
+				ID:             "AC-1",
+				Description:    "Criterion stays valid",
+				RequirementIDs: []string{"REQ-1"},
+				Required:       &required,
+				Verification:   AcceptanceVerification{Kind: "diff_review"},
+			},
+		},
+	}
+
+	err := wo.Validate()
+	if err == nil || !strings.Contains(err.Error(), "schema_version must be 2") {
+		t.Fatalf("Validate() error = %v, want missing schema_version rejection", err)
 	}
 }

@@ -170,7 +170,7 @@ func parseInitResponse(raw string) (*initResponse, error) {
 
 	// Validate the bootstrap WO
 	wo := models.WorkOrder{
-		SchemaVersion:           2,
+		SchemaVersion:           models.WorkOrderSchemaVersion,
 		Title:                   resp.Bootstrap.Title,
 		Type:                    resp.Bootstrap.Type,
 		TargetModule:            resp.Bootstrap.TargetModule,
@@ -230,6 +230,7 @@ func writeInitProjectYAML(pc *initProjectConfig, outputDir string) error {
 		fmt.Fprintf(&sb, "  sql_path: %q\n", pc.SQLPath)
 	}
 
+	writeInitPromptYAML(&sb)
 	writeInitVerifyYAML(&sb, pc.ProjectLanguage)
 
 	sb.WriteString("\nsafety:\n")
@@ -249,6 +250,13 @@ func writeInitProjectYAML(pc *initProjectConfig, outputDir string) error {
 	}
 	slog.Debug("wrote project.yaml", "path", path)
 	return nil
+}
+
+func writeInitPromptYAML(sb *strings.Builder) {
+	sb.WriteString("\nprompts:\n")
+	sb.WriteString("  # Optional planner prompt overrides. Leave commented to use embedded defaults.\n")
+	sb.WriteString("  # plan: \".prompts/plan-prompt.md\"\n")
+	sb.WriteString("  # plan_audit: \".prompts/plan_audit-prompt.md\"\n")
 }
 
 func writeInitVerifyYAML(sb *strings.Builder, language string) {
@@ -311,7 +319,7 @@ func writeBootstrapYAML(bwo *initBootstrapWO, outputDir string) error {
 		AcceptanceCriteria []models.TypedAcceptanceCriterion `yaml:"acceptance_criteria,omitempty"`
 		Constraints        []string                          `yaml:"constraints,omitempty"`
 	}{
-		SchemaVersion:      2,
+		SchemaVersion:      models.WorkOrderSchemaVersion,
 		Title:              bwo.Title,
 		Type:               "bootstrap",
 		TargetModule:       bwo.TargetModule,

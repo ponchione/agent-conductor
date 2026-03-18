@@ -584,7 +584,7 @@ func writeWorkOrderFiles(workOrders []models.WorkOrder, outputDir string) ([]str
 	paths := make([]string, 0, len(workOrders))
 	for i, wo := range workOrders {
 		ordered := orderedWorkOrder{
-			SchemaVersion:      wo.SchemaVersion,
+			SchemaVersion:      models.WorkOrderSchemaVersion,
 			Title:              wo.Title,
 			Type:               wo.Type,
 			TargetModule:       wo.TargetModule,

@@ -52,6 +52,8 @@ type WorkOrder struct {
 	AuditSource             string                     `yaml:"audit_source,omitempty" json:"audit_source,omitempty"`
 }
 
+const WorkOrderSchemaVersion = 2
+
 var validWorkOrderTypes = map[string]bool{
 	"new_feature":   true,
 	"bug_fix":       true,
@@ -59,13 +61,6 @@ var validWorkOrderTypes = map[string]bool{
 	"schema_change": true,
 	"docs":          true,
 	"bootstrap":     true,
-}
-
-func (wo *WorkOrder) EffectiveSchemaVersion() int {
-	if wo.SchemaVersion <= 0 {
-		return 2
-	}
-	return wo.SchemaVersion
 }
 
 func (wo *WorkOrder) Validate() error {
@@ -84,8 +79,8 @@ func (wo *WorkOrder) Validate() error {
 		}
 	}
 
-	if wo.EffectiveSchemaVersion() != 2 {
-		return fmt.Errorf("schema_version must be 2")
+	if wo.SchemaVersion != WorkOrderSchemaVersion {
+		return fmt.Errorf("schema_version must be %d", WorkOrderSchemaVersion)
 	}
 	if len(wo.Requirements) == 0 {
 		return fmt.Errorf("work order requirements must not be empty")
@@ -175,8 +170,8 @@ func (wo *WorkOrder) UnmarshalYAML(node *yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	if common.SchemaVersion != 2 {
-		return fmt.Errorf("schema_version must be 2")
+	if common.SchemaVersion != WorkOrderSchemaVersion {
+		return fmt.Errorf("schema_version must be %d", WorkOrderSchemaVersion)
 	}
 
 	wo.SchemaVersion = common.SchemaVersion
@@ -207,7 +202,7 @@ func (wo WorkOrder) MarshalYAML() (any, error) {
 		AuditSource        string                     `yaml:"audit_source,omitempty"`
 	}
 	return versionTwo{
-		SchemaVersion:      2,
+		SchemaVersion:      WorkOrderSchemaVersion,
 		Title:              wo.Title,
 		TargetModule:       wo.TargetModule,
 		ReferenceModule:    wo.ReferenceModule,
@@ -244,8 +239,8 @@ func (wo *WorkOrder) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if raw.SchemaVersion != 2 {
-		return fmt.Errorf("schema_version must be 2")
+	if raw.SchemaVersion != WorkOrderSchemaVersion {
+		return fmt.Errorf("schema_version must be %d", WorkOrderSchemaVersion)
 	}
 
 	wo.SchemaVersion = raw.SchemaVersion
@@ -276,7 +271,7 @@ func (wo WorkOrder) MarshalJSON() ([]byte, error) {
 		AuditSource        string                     `json:"audit_source,omitempty"`
 	}
 	return json.Marshal(versionTwo{
-		SchemaVersion:      2,
+		SchemaVersion:      WorkOrderSchemaVersion,
 		Title:              wo.Title,
 		TargetModule:       wo.TargetModule,
 		ReferenceModule:    wo.ReferenceModule,

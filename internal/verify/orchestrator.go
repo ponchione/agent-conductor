@@ -595,10 +595,22 @@ func buildSynthesizeUserMessage(wo *models.WorkOrder, preChecks []PreCheckResult
 	if buildEvidence != nil && (len(buildEvidence.Commands) > 0 || len(buildEvidence.SmokeChecks) > 0) {
 		sb.WriteString("=== BUILD VALIDATION EVIDENCE ===\n")
 		for _, entry := range buildEvidence.Commands {
-			fmt.Fprintf(&sb, "[COMMAND] %s => %s (%s)\n", entry.Name, entry.Result, entry.Notes)
+			fmt.Fprintf(&sb, "[COMMAND] %s => %s | argv=%s | workdir=%s | notes=%s\n",
+				entry.Name,
+				entry.Result,
+				strings.Join(entry.Argv, " "),
+				entry.Workdir,
+				entry.Notes,
+			)
 		}
 		for _, entry := range buildEvidence.SmokeChecks {
-			fmt.Fprintf(&sb, "[SMOKE] %s => %s (%s)\n", entry.Name, entry.Result, entry.Notes)
+			fmt.Fprintf(&sb, "[SMOKE] %s => %s | argv=%s | workdir=%s | notes=%s\n",
+				entry.Name,
+				entry.Result,
+				strings.Join(entry.Argv, " "),
+				entry.Workdir,
+				entry.Notes,
+			)
 		}
 		sb.WriteString("\n")
 	}

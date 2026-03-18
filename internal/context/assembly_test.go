@@ -67,6 +67,9 @@ func TestAssemble_FullContextPackage(t *testing.T) {
 	}
 
 	// Work order fields
+	if full.WorkOrder.SchemaVersion != models.WorkOrderSchemaVersion {
+		t.Errorf("expected schema version %d, got %d", models.WorkOrderSchemaVersion, full.WorkOrder.SchemaVersion)
+	}
 	if full.WorkOrder.Title != "Add logout endpoint" {
 		t.Errorf("expected title 'Add logout endpoint', got %q", full.WorkOrder.Title)
 	}
