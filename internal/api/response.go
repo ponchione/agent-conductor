@@ -65,6 +65,8 @@ type sessionPipelineRunDTO struct {
 	WorkflowID    string  `json:"workflow_id"`
 	Project       string  `json:"project"`
 	WorkOrderType *string `json:"work_order_type,omitempty"`
+	VerifyResult  *string `json:"verify_result,omitempty"`
+	HumanResult   *string `json:"human_result,omitempty"`
 	CreatedAt     string  `json:"created_at"`
 }
 
@@ -173,6 +175,8 @@ func mapSessionPipelineRuns(rows []database.SessionPipelineRun) []sessionPipelin
 			WorkflowID:    row.WorkflowID,
 			Project:       row.Project,
 			WorkOrderType: stringPtr(row.WorkOrderType),
+			VerifyResult:  stringPtr(row.VerifyResult),
+			HumanResult:   stringPtr(row.HumanResult),
 			CreatedAt:     row.CreatedAt,
 		})
 	}

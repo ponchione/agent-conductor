@@ -113,17 +113,17 @@ var runCmd = &cobra.Command{
 
 		w := worker.New("worker-1", q, db, cfg, assembler, resolver, &cfg.Guardrails, runner, gitMgr, prompts)
 
-		return runSync(absPath, wo, w, db, cfg)
+		return runSync(absPath, data, wo, w, db, cfg)
 	},
 }
 
 // runSync executes a work order synchronously.
-func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database.DB, cfg *config.ProjectConfig) (err error) {
+func runSync(absPath string, sourceContent []byte, wo models.WorkOrder, w *worker.Worker, db *database.DB, cfg *config.ProjectConfig) (err error) {
 	fmt.Printf("Starting synchronous execution for: %s\n\n", absPath)
 
 	ctx := context.Background()
 
-	sessionID, wfID, err := initializeRunSession(ctx, db, cfg, absPath, wo)
+	sessionID, wfID, err := initializeRunSession(ctx, db, cfg, absPath, sourceContent, wo)
 	defer func() {
 		if err == nil || sessionID == "" {
 			return
@@ -158,7 +158,7 @@ func runSync(absPath string, wo models.WorkOrder, w *worker.Worker, db *database
 	return nil
 }
 
-func initializeRunSession(ctx context.Context, db *database.DB, cfg *config.ProjectConfig, absPath string, wo models.WorkOrder) (string, string, error) {
+func initializeRunSession(ctx context.Context, db *database.DB, cfg *config.ProjectConfig, absPath string, sourceContent []byte, wo models.WorkOrder) (string, string, error) {
 	sessionID, err := db.StartSession(ctx, database.SessionKindRunOnly, cfg.Project.Name, absPath)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create session: %w", err)
@@ -166,11 +166,12 @@ func initializeRunSession(ctx context.Context, db *database.DB, cfg *config.Proj
 
 	wfID := uuid.New().String()
 	branchName := fmt.Sprintf("%s-%s", cfg.Git.BranchPrefix, wfID[:8])
+	managedWorkOrderPath := runInputWorkOrderPath(cfg.Project.DataDir, wfID)
 
 	if err := db.CreateWorkflow(ctx, database.CreateWorkflowParams{
 		ID:                     wfID,
 		OriginalIntent:         "Work Order: " + filepath.Base(absPath),
-		OriginalFile:           absPath,
+		OriginalFile:           managedWorkOrderPath,
 		CurrentState:           "pending",
 		TargetRepo:             cfg.Project.Name,
 		GitBranch:              branchName,
@@ -195,6 +196,9 @@ func initializeRunSession(ctx context.Context, db *database.DB, cfg *config.Proj
 	if err := db.LinkPipelineRunToSession(ctx, pipelineRunID, sessionID); err != nil {
 		return sessionID, "", fmt.Errorf("failed to link pipeline_run to session: %w", err)
 	}
+	if err := persistRunInputWorkOrder(ctx, db, sessionID, wfID, managedWorkOrderPath, absPath, sourceContent, wo); err != nil {
+		return sessionID, "", fmt.Errorf("failed to persist input work order: %w", err)
+	}
 
 	taskID := uuid.New().String()
 	if err := db.CreateTask(ctx, database.CreateTaskParams{
@@ -205,7 +209,7 @@ func initializeRunSession(ctx context.Context, db *database.DB, cfg *config.Proj
 		AgentType:     "claude-code",
 		TargetRepo:    cfg.Project.Name,
 		Phase:         "scope",
-		InputArtifact: absPath,
+		InputArtifact: managedWorkOrderPath,
 		State:         "pending",
 		MaxAttempts:   2,
 	}); err != nil {

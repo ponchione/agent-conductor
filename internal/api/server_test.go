@@ -140,6 +140,19 @@ func TestGetSessionDetailEndpoint(t *testing.T) {
 	if err := db.LinkPipelineRunToSession(ctx, "pr-api-detail", sessionID); err != nil {
 		t.Fatalf("LinkPipelineRunToSession() error: %v", err)
 	}
+	if err := db.UpdatePipelineRunVerify(ctx, database.UpdatePipelineRunVerifyParams{
+		VerifyResult:    sql.NullString{String: "PASS", Valid: true},
+		BuildScopeDrift: 0,
+		WorkflowID:      "wf-api-detail",
+	}); err != nil {
+		t.Fatalf("UpdatePipelineRunVerify() error: %v", err)
+	}
+	if err := db.UpdatePipelineRunHumanResult(ctx, database.UpdatePipelineRunHumanResultParams{
+		HumanResult: sql.NullString{String: "approved", Valid: true},
+		WorkflowID:  "wf-api-detail",
+	}); err != nil {
+		t.Fatalf("UpdatePipelineRunHumanResult() error: %v", err)
+	}
 
 	artifactPath := filepath.Join(t.TempDir(), "verify.txt")
 	if err := os.WriteFile(artifactPath, []byte("report"), 0644); err != nil {
@@ -186,6 +199,12 @@ func TestGetSessionDetailEndpoint(t *testing.T) {
 	}
 	if len(payload.PipelineRuns) != 1 || payload.PipelineRuns[0].WorkflowID != "wf-api-detail" {
 		t.Fatalf("PipelineRuns = %#v, want wf-api-detail", payload.PipelineRuns)
+	}
+	if payload.PipelineRuns[0].VerifyResult == nil || *payload.PipelineRuns[0].VerifyResult != "PASS" {
+		t.Fatalf("VerifyResult = %#v, want PASS", payload.PipelineRuns[0].VerifyResult)
+	}
+	if payload.PipelineRuns[0].HumanResult == nil || *payload.PipelineRuns[0].HumanResult != "approved" {
+		t.Fatalf("HumanResult = %#v, want approved", payload.PipelineRuns[0].HumanResult)
 	}
 	if len(payload.Artifacts) != 1 {
 		t.Fatalf("len(payload.Artifacts) = %d, want 1", len(payload.Artifacts))

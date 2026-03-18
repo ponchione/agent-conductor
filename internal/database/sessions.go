@@ -60,6 +60,8 @@ type SessionPipelineRun struct {
 	WorkflowID    string
 	Project       string
 	WorkOrderType sql.NullString
+	VerifyResult  sql.NullString
+	HumanResult   sql.NullString
 	CreatedAt     string
 }
 
@@ -252,7 +254,7 @@ func (db *DB) ListPlanRunsBySession(ctx context.Context, sessionID string) ([]Se
 // ListPipelineRunsBySession returns pipeline runs linked to a session, newest first.
 func (db *DB) ListPipelineRunsBySession(ctx context.Context, sessionID string) ([]SessionPipelineRun, error) {
 	rows, err := db.conn.QueryContext(ctx, `
-		SELECT id, workflow_id, project, work_order_type, created_at
+		SELECT id, workflow_id, project, work_order_type, verify_result, human_result, created_at
 		FROM pipeline_runs
 		WHERE session_id = ?
 		ORDER BY created_at DESC
@@ -265,7 +267,7 @@ func (db *DB) ListPipelineRunsBySession(ctx context.Context, sessionID string) (
 	var out []SessionPipelineRun
 	for rows.Next() {
 		var run SessionPipelineRun
-		if err := rows.Scan(&run.ID, &run.WorkflowID, &run.Project, &run.WorkOrderType, &run.CreatedAt); err != nil {
+		if err := rows.Scan(&run.ID, &run.WorkflowID, &run.Project, &run.WorkOrderType, &run.VerifyResult, &run.HumanResult, &run.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, run)

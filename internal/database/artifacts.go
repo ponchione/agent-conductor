@@ -17,6 +17,7 @@ const (
 	ArtifactTypePlanStructuredGeneration = "plan_structured_generation"
 	ArtifactTypePlanStructuredAudit      = "plan_structured_audit"
 	ArtifactTypeGeneratedWorkOrder       = "generated_work_order"
+	ArtifactTypeInputWorkOrder           = "input_work_order"
 	ArtifactTypeContextPackage           = "context_package"
 	ArtifactTypeVerifyReport             = "verify_report"
 	ArtifactTypeBuildStdout              = "build_stdout"
