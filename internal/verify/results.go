@@ -92,30 +92,17 @@ func DeriveWorkflowStatus(report *models.VerificationReport) string {
 }
 
 func buildCriterionCatalog(wo *models.WorkOrder) []models.CriterionResult {
-	if wo == nil {
+	if wo == nil || len(wo.TypedAcceptanceCriteria) == 0 {
 		return nil
 	}
 
-	if wo.EffectiveSchemaVersion() >= 2 && len(wo.TypedAcceptanceCriteria) > 0 {
-		results := make([]models.CriterionResult, 0, len(wo.TypedAcceptanceCriteria))
-		for _, criterion := range wo.TypedAcceptanceCriteria {
-			results = append(results, models.CriterionResult{
-				CriterionID:      criterion.ID,
-				Criterion:        criterion.Description,
-				Required:         criterion.Required,
-				VerificationKind: criterion.Verification.Kind,
-			})
-		}
-		return results
-	}
-
-	required := true
-	results := make([]models.CriterionResult, 0, len(wo.AcceptanceCriteria))
-	for _, criterion := range wo.AcceptanceCriteria {
+	results := make([]models.CriterionResult, 0, len(wo.TypedAcceptanceCriteria))
+	for _, criterion := range wo.TypedAcceptanceCriteria {
 		results = append(results, models.CriterionResult{
-			Criterion:        criterion,
-			Required:         &required,
-			VerificationKind: "legacy",
+			CriterionID:      criterion.ID,
+			Criterion:        criterion.Description,
+			Required:         criterion.Required,
+			VerificationKind: criterion.Verification.Kind,
 		})
 	}
 	return results

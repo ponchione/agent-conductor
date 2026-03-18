@@ -16,7 +16,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	chunks, err := rag.ParseFile("internal/llm/client.go", "go", content)
+	parser := rag.NewTreeSitterParser()
+	chunks, err := parser.ParseFile("internal/llm/client.go", "go", content)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ParseFile error: %v\n", err)
 		os.Exit(1)

@@ -62,10 +62,6 @@ The generated project_config will be used to produce this exact YAML structure:
     module_structure: {module_structure}
     shared_path: "{shared_path}"
     sql_path: "{sql_path}"
-  prompts:
-    scope: templates/scope-prompt.md
-    verify: templates/verify-prompt.md
-    build: templates/build-prompt.md
   executor:
     tool: claude-code
     timeout_minutes: 30
@@ -82,10 +78,7 @@ The generated project_config will be used to produce this exact YAML structure:
 GREENFIELD BOOTSTRAP RULES:
 - The FIRST work order in a greenfield plan MUST have type "bootstrap".
 - The bootstrap WO creates the project skeleton from scratch. known_files MUST be empty for bootstrap — the acceptance criteria define what to create. Do not list files in known_files that do not yet exist.
-- The bootstrap WO acceptance_criteria MUST include creation of:
-  templates/scope-prompt.md, templates/verify-prompt.md, templates/build-prompt.md
-  These are pipeline prompt templates that future work orders depend on.
-- The bootstrap WO creates project scaffolding: dependency manifest, entry point, config, Dockerfile if applicable, .gitignore, and the templates above.
+- The bootstrap WO creates project scaffolding: dependency manifest, entry point, config, Dockerfile if applicable, and .gitignore.
 - All subsequent work orders have type "new_feature" (or other non-bootstrap types) and build on the foundation the bootstrap creates.
 
 SIZING RULES:

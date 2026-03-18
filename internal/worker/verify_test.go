@@ -125,45 +125,6 @@ func TestRunPreChecksReportsMissingConfiguredCommand(t *testing.T) {
 	}
 }
 
-func TestRunPreChecksKeepsLegacyStringMatchingCompatibility(t *testing.T) {
-	w := &Worker{
-		cfg: &config.ProjectConfig{
-			Project: config.Project{Path: t.TempDir()},
-			Guardrails: config.Guardrails{
-				PhaseTimeoutSeconds: 300,
-			},
-		},
-	}
-
-	wo := &models.WorkOrder{
-		AcceptanceCriteria: []string{"go test ./... passes"},
-	}
-
-	original := runVerifyCommand
-	t.Cleanup(func() { runVerifyCommand = original })
-
-	runVerifyCommand = func(ctx context.Context, dir string, env []string, argv []string) ([]byte, error) {
-		if dir != w.cfg.Project.Path {
-			return nil, fmt.Errorf("unexpected dir %q", dir)
-		}
-		if strings.Join(argv, " ") != "go test ./..." {
-			return nil, fmt.Errorf("unexpected argv %q", strings.Join(argv, " "))
-		}
-		return []byte("ok"), nil
-	}
-
-	results := w.runPreChecks(context.Background(), wo)
-	if len(results) != 1 {
-		t.Fatalf("len(results) = %d, want 1", len(results))
-	}
-	if results[0].NormalizedResult() != models.CriterionResultMet {
-		t.Fatalf("result = %q, want met (%s)", results[0].NormalizedResult(), results[0].Notes)
-	}
-	if !strings.Contains(results[0].Notes, "legacy precheck passed: go test ./...") {
-		t.Fatalf("notes = %q, want legacy precheck note", results[0].Notes)
-	}
-}
-
 func TestRunPreChecksExecutesConfiguredSmokeRoutine(t *testing.T) {
 	w := &Worker{
 		cfg: &config.ProjectConfig{

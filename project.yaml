@@ -36,8 +36,6 @@ git:
   commit_author_email: "conductor@local"
 
 prompts:
-  scope: templates/scope-prompt.md
-  verify: templates/verify-prompt.md
   build: templates/build-prompt.md
 
 safety:

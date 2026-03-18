@@ -8,7 +8,27 @@ import (
 	"testing"
 
 	"github.com/ponchione/agent-conductor/internal/config"
+	"github.com/ponchione/agent-conductor/internal/models"
 )
+
+func validationBool(v bool) *bool {
+	return &v
+}
+
+func validationCriterion(reqID string) []models.TypedAcceptanceCriterion {
+	return []models.TypedAcceptanceCriterion{
+		{
+			ID:             "AC-1",
+			Description:    "make test passes",
+			RequirementIDs: []string{reqID},
+			Required:       validationBool(true),
+			Verification: models.AcceptanceVerification{
+				Kind:  "diff_review",
+				Focus: []string{"cmd/conductor/plan.go"},
+			},
+		},
+	}
+}
 
 func TestValidatePlanDocumentRejectsMissingRequirementCoverage(t *testing.T) {
 	projectDir := t.TempDir()
@@ -21,12 +41,15 @@ func TestValidatePlanDocumentRejectsMissingRequirementCoverage(t *testing.T) {
 		},
 		WorkOrders: []planWorkOrder{
 			{
-				Title:              "Wire planner prompts",
-				Type:               "refactor",
-				TargetModule:       "cmd/conductor",
-				KnownFiles:         []string{"cmd/conductor/plan.go"},
-				AcceptanceCriteria: []string{"make test passes"},
-				Covers:             []string{"REQ-1"},
+				SchemaVersion: 2,
+				Title:         "Wire planner prompts",
+				Type:          "refactor",
+				TargetModule:  "cmd/conductor",
+				KnownFiles:    []string{"cmd/conductor/plan.go"},
+				Requirements: []models.WorkOrderRequirement{
+					{ID: "REQ-1", Text: "Covered"},
+				},
+				AcceptanceCriteria: validationCriterion("REQ-1"),
 			},
 		},
 	}
@@ -45,19 +68,27 @@ func TestValidatePlanDocumentRejectsInvalidDependencyOrdering(t *testing.T) {
 	doc := &planDocument{
 		WorkOrders: []planWorkOrder{
 			{
-				Title:              "Second step",
-				Type:               "refactor",
-				TargetModule:       "cmd/conductor",
-				KnownFiles:         []string{"cmd/conductor/plan.go"},
-				AcceptanceCriteria: []string{"make test passes"},
+				SchemaVersion: 2,
+				Title:         "Second step",
+				Type:          "refactor",
+				TargetModule:  "cmd/conductor",
+				KnownFiles:    []string{"cmd/conductor/plan.go"},
+				Requirements: []models.WorkOrderRequirement{
+					{ID: "REQ-1", Text: "Run second"},
+				},
+				AcceptanceCriteria: validationCriterion("REQ-1"),
 				DependsOn:          []string{"Third step"},
 			},
 			{
-				Title:              "Third step",
-				Type:               "refactor",
-				TargetModule:       "internal/config",
-				KnownFiles:         []string{"internal/config/config.go"},
-				AcceptanceCriteria: []string{"make test passes"},
+				SchemaVersion: 2,
+				Title:         "Third step",
+				Type:          "refactor",
+				TargetModule:  "internal/config",
+				KnownFiles:    []string{"internal/config/config.go"},
+				Requirements: []models.WorkOrderRequirement{
+					{ID: "REQ-2", Text: "Run third"},
+				},
+				AcceptanceCriteria: validationCriterion("REQ-2"),
 			},
 		},
 	}
@@ -73,11 +104,15 @@ func TestValidatePlanDocumentRejectsImpossibleKnownFiles(t *testing.T) {
 	doc := &planDocument{
 		WorkOrders: []planWorkOrder{
 			{
-				Title:              "Broken known files",
-				Type:               "bug_fix",
-				TargetModule:       "cmd/conductor",
-				KnownFiles:         []string{"does/not/exist.go"},
-				AcceptanceCriteria: []string{"make test passes"},
+				SchemaVersion: 2,
+				Title:         "Broken known files",
+				Type:          "bug_fix",
+				TargetModule:  "cmd/conductor",
+				KnownFiles:    []string{"does/not/exist.go"},
+				Requirements: []models.WorkOrderRequirement{
+					{ID: "REQ-1", Text: "Fix path handling"},
+				},
+				AcceptanceCriteria: validationCriterion("REQ-1"),
 			},
 		},
 	}
@@ -100,11 +135,15 @@ func TestValidatePlanDocumentRejectsOversizedAndObviousOverlap(t *testing.T) {
 	doc := &planDocument{
 		WorkOrders: []planWorkOrder{
 			{
-				Title:              "Oversized work order",
-				Type:               "refactor",
-				TargetModule:       "internal",
-				KnownFiles:         paths,
-				AcceptanceCriteria: []string{"make test passes"},
+				SchemaVersion: 2,
+				Title:         "Oversized work order",
+				Type:          "refactor",
+				TargetModule:  "internal",
+				KnownFiles:    paths,
+				Requirements: []models.WorkOrderRequirement{
+					{ID: "REQ-1", Text: "Refactor internal package"},
+				},
+				AcceptanceCriteria: validationCriterion("REQ-1"),
 			},
 		},
 	}
@@ -117,18 +156,26 @@ func TestValidatePlanDocumentRejectsOversizedAndObviousOverlap(t *testing.T) {
 	doc = &planDocument{
 		WorkOrders: []planWorkOrder{
 			{
-				Title:              "First",
-				Type:               "refactor",
-				TargetModule:       "internal",
-				KnownFiles:         []string{"internal/file0.go", "internal/file1.go"},
-				AcceptanceCriteria: []string{"make test passes"},
+				SchemaVersion: 2,
+				Title:         "First",
+				Type:          "refactor",
+				TargetModule:  "internal",
+				KnownFiles:    []string{"internal/file0.go", "internal/file1.go"},
+				Requirements: []models.WorkOrderRequirement{
+					{ID: "REQ-1", Text: "Refactor file one"},
+				},
+				AcceptanceCriteria: validationCriterion("REQ-1"),
 			},
 			{
-				Title:              "Second",
-				Type:               "refactor",
-				TargetModule:       "internal",
-				KnownFiles:         []string{"internal/file1.go", "internal/file0.go"},
-				AcceptanceCriteria: []string{"make test passes"},
+				SchemaVersion: 2,
+				Title:         "Second",
+				Type:          "refactor",
+				TargetModule:  "internal",
+				KnownFiles:    []string{"internal/file1.go", "internal/file0.go"},
+				Requirements: []models.WorkOrderRequirement{
+					{ID: "REQ-2", Text: "Refactor file two"},
+				},
+				AcceptanceCriteria: validationCriterion("REQ-2"),
 			},
 		},
 	}
@@ -148,7 +195,16 @@ func TestResolveAuditOutcomeFailsClosedByDefault(t *testing.T) {
 }
 
 func TestResolveAuditOutcomeAllowsExplicitFallback(t *testing.T) {
-	base := &planDocument{WorkOrders: []planWorkOrder{{Title: "Base", Type: "refactor", TargetModule: "cmd", AcceptanceCriteria: []string{"make test passes"}}}}
+	base := &planDocument{WorkOrders: []planWorkOrder{{
+		SchemaVersion: 2,
+		Title:         "Base",
+		Type:          "refactor",
+		TargetModule:  "cmd",
+		Requirements: []models.WorkOrderRequirement{
+			{ID: "REQ-1", Text: "Base requirement"},
+		},
+		AcceptanceCriteria: validationCriterion("REQ-1"),
+	}}}
 	resolved, summary, result, err := resolveAuditOutcome(base, nil, nil, nil, fmt.Errorf("bad audit"), true)
 	if err != nil {
 		t.Fatalf("resolveAuditOutcome() error = %v", err)

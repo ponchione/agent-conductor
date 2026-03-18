@@ -51,34 +51,6 @@ type ScopeDrift struct {
 	UnscopedFiles []UnscopedFile `json:"unscoped_files"`
 }
 
-func (s *ScopeDrift) UnmarshalJSON(data []byte) error {
-	var raw struct {
-		Detected      bool            `json:"detected"`
-		UnscopedFiles json.RawMessage `json:"unscoped_files"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	s.Detected = raw.Detected
-	if len(raw.UnscopedFiles) == 0 || string(raw.UnscopedFiles) == "null" {
-		return nil
-	}
-	// First attempt: array of objects.
-	if err := json.Unmarshal(raw.UnscopedFiles, &s.UnscopedFiles); err == nil {
-		return nil
-	}
-	// Fallback: array of plain strings.
-	var paths []string
-	if err := json.Unmarshal(raw.UnscopedFiles, &paths); err != nil {
-		return err
-	}
-	s.UnscopedFiles = make([]UnscopedFile, len(paths))
-	for i, p := range paths {
-		s.UnscopedFiles[i] = UnscopedFile{Path: p, ReasonConcerning: "unclassified (string fallback)"}
-	}
-	return nil
-}
-
 type UnscopedFile struct {
 	Path             string `json:"path"`
 	ReasonConcerning string `json:"reason_concerning"`
@@ -127,24 +99,19 @@ func (c *CriterionResult) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		CriterionID      string `json:"criterion_id"`
 		Description      string `json:"description"`
-		Criterion        string `json:"criterion"`
 		Required         *bool  `json:"required"`
 		Result           string `json:"result"`
 		VerificationKind string `json:"verification_kind"`
 		Notes            string `json:"notes"`
-		Met              *bool  `json:"met"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 
 	c.CriterionID = raw.CriterionID
-	c.Criterion = firstNonEmpty(raw.Description, raw.Criterion)
+	c.Criterion = strings.TrimSpace(raw.Description)
 	c.Required = raw.Required
 	c.Result = normalizeCriterionResult(raw.Result)
-	if c.Result == "" && raw.Met != nil {
-		c.Result = resultFromBool(*raw.Met)
-	}
 	c.VerificationKind = raw.VerificationKind
 	c.Notes = raw.Notes
 	return nil
@@ -155,13 +122,6 @@ func (c CriterionResult) NormalizedResult() string {
 		return normalized
 	}
 	return CriterionResultUnassessable
-}
-
-func resultFromBool(met bool) string {
-	if met {
-		return CriterionResultMet
-	}
-	return CriterionResultUnmet
 }
 
 func normalizeCriterionResult(result string) string {
@@ -175,15 +135,6 @@ func normalizeCriterionResult(result string) string {
 	default:
 		return ""
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 type PatternConsistency struct {

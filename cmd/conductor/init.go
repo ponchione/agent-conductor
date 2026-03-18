@@ -63,13 +63,14 @@ type initProjectConfig struct {
 
 // initBootstrapWO mirrors the bootstrap work order JSON from Claude's init response.
 type initBootstrapWO struct {
-	Title              string   `json:"title"`
-	Type               string   `json:"type"`
-	TargetModule       string   `json:"target_module"`
-	ReferenceModule    string   `json:"reference_module"`
-	KnownFiles         []string `json:"known_files"`
-	AcceptanceCriteria []string `json:"acceptance_criteria"`
-	Constraints        []string `json:"constraints"`
+	Title              string                            `json:"title"`
+	Type               string                            `json:"type"`
+	TargetModule       string                            `json:"target_module"`
+	ReferenceModule    string                            `json:"reference_module"`
+	KnownFiles         []string                          `json:"known_files"`
+	Requirements       []models.WorkOrderRequirement     `json:"requirements"`
+	AcceptanceCriteria []models.TypedAcceptanceCriterion `json:"acceptance_criteria"`
+	Constraints        []string                          `json:"constraints"`
 }
 
 // initResponse is the top-level JSON envelope from Claude's init response.
@@ -169,13 +170,15 @@ func parseInitResponse(raw string) (*initResponse, error) {
 
 	// Validate the bootstrap WO
 	wo := models.WorkOrder{
-		Title:              resp.Bootstrap.Title,
-		Type:               resp.Bootstrap.Type,
-		TargetModule:       resp.Bootstrap.TargetModule,
-		ReferenceModule:    resp.Bootstrap.ReferenceModule,
-		KnownFiles:         resp.Bootstrap.KnownFiles,
-		AcceptanceCriteria: resp.Bootstrap.AcceptanceCriteria,
-		Constraints:        resp.Bootstrap.Constraints,
+		SchemaVersion:           2,
+		Title:                   resp.Bootstrap.Title,
+		Type:                    resp.Bootstrap.Type,
+		TargetModule:            resp.Bootstrap.TargetModule,
+		ReferenceModule:         resp.Bootstrap.ReferenceModule,
+		KnownFiles:              resp.Bootstrap.KnownFiles,
+		Requirements:            resp.Bootstrap.Requirements,
+		TypedAcceptanceCriteria: resp.Bootstrap.AcceptanceCriteria,
+		Constraints:             resp.Bootstrap.Constraints,
 	}
 	if err := wo.Validate(); err != nil {
 		return nil, fmt.Errorf("bootstrap work order: %w", err)
@@ -227,16 +230,7 @@ func writeInitProjectYAML(pc *initProjectConfig, outputDir string) error {
 		fmt.Fprintf(&sb, "  sql_path: %q\n", pc.SQLPath)
 	}
 
-	sb.WriteString("\nprompts:\n")
-	sb.WriteString("  scope: templates/scope-prompt.md\n")
-	sb.WriteString("  verify: templates/verify-prompt.md\n")
-	sb.WriteString("  build: templates/build-prompt.md\n")
-	sb.WriteString("  plan: templates/plan-prompt.md\n")
-	sb.WriteString("  plan_audit: templates/plan-audit.md\n")
-
-	sb.WriteString("\nexecutor:\n")
-	sb.WriteString("  tool: claude-code\n")
-	sb.WriteString("  timeout_minutes: 30\n")
+	writeInitVerifyYAML(&sb, pc.ProjectLanguage)
 
 	sb.WriteString("\nsafety:\n")
 	sb.WriteString("  max_files_changed: 50\n")
@@ -257,14 +251,73 @@ func writeInitProjectYAML(pc *initProjectConfig, outputDir string) error {
 	return nil
 }
 
+func writeInitVerifyYAML(sb *strings.Builder, language string) {
+	type verifyCommand struct {
+		name string
+		argv []string
+		secs int
+	}
+
+	var commands []verifyCommand
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "go":
+		commands = []verifyCommand{
+			{name: "build", argv: []string{"go", "build", "./..."}, secs: 120},
+			{name: "test", argv: []string{"go", "test", "./..."}, secs: 300},
+		}
+	case "python":
+		commands = []verifyCommand{
+			{name: "build", argv: []string{"python3", "-m", "compileall", "."}, secs: 120},
+			{name: "test", argv: []string{"python3", "-m", "pytest"}, secs: 300},
+		}
+	case "typescript", "javascript":
+		commands = []verifyCommand{
+			{name: "build", argv: []string{"npm", "run", "build"}, secs: 180},
+			{name: "test", argv: []string{"npm", "test"}, secs: 300},
+		}
+	case "rust":
+		commands = []verifyCommand{
+			{name: "build", argv: []string{"cargo", "build"}, secs: 180},
+			{name: "test", argv: []string{"cargo", "test"}, secs: 300},
+		}
+	}
+	if len(commands) == 0 {
+		return
+	}
+
+	sb.WriteString("\nverify:\n")
+	sb.WriteString("  commands:\n")
+	for _, command := range commands {
+		fmt.Fprintf(sb, "    %s:\n", command.name)
+		sb.WriteString("      argv:\n")
+		for _, arg := range command.argv {
+			fmt.Fprintf(sb, "        - %q\n", arg)
+		}
+		sb.WriteString("      workdir: \".\"\n")
+		fmt.Fprintf(sb, "      timeout_seconds: %d\n", command.secs)
+	}
+}
+
 // writeBootstrapYAML writes the bootstrap work order as bootstrap.yaml.
 func writeBootstrapYAML(bwo *initBootstrapWO, outputDir string) error {
-	ordered := orderedWorkOrder{
+	ordered := struct {
+		SchemaVersion      int                               `yaml:"schema_version"`
+		Title              string                            `yaml:"title"`
+		Type               string                            `yaml:"type"`
+		TargetModule       string                            `yaml:"target_module"`
+		ReferenceModule    string                            `yaml:"reference_module,omitempty"`
+		KnownFiles         []string                          `yaml:"known_files,omitempty"`
+		Requirements       []models.WorkOrderRequirement     `yaml:"requirements,omitempty"`
+		AcceptanceCriteria []models.TypedAcceptanceCriterion `yaml:"acceptance_criteria,omitempty"`
+		Constraints        []string                          `yaml:"constraints,omitempty"`
+	}{
+		SchemaVersion:      2,
 		Title:              bwo.Title,
 		Type:               "bootstrap",
 		TargetModule:       bwo.TargetModule,
 		ReferenceModule:    bwo.ReferenceModule,
 		KnownFiles:         bwo.KnownFiles,
+		Requirements:       bwo.Requirements,
 		AcceptanceCriteria: bwo.AcceptanceCriteria,
 		Constraints:        bwo.Constraints,
 	}

@@ -52,7 +52,7 @@ Segment (Go)  →  Analyze (N LLM calls)  →  Synthesize (1 LLM call)
 
 **Segment** splits the unified diff into logical groups, pairing source files with their test files (e.g., `foo.go` and `foo_test.go` land in the same segment).
 
-**Pre-Checks** run deterministically before the LLM. Version-2 work orders can name exact configured commands under `verify.commands` and smoke routines under `verify.smoke`; version-1 work orders still keep the legacy `go test` / `go build` / `go vet` compatibility shim. If all deterministic checks fail, the LLM evaluation is skipped entirely and the report is set to FAIL.
+**Pre-Checks** run deterministically before the LLM. Work orders name exact configured commands under `verify.commands` and smoke routines under `verify.smoke`. If all deterministic checks fail, the LLM evaluation is skipped entirely and the report is set to FAIL.
 
 **Analyze** runs one LLM call per diff segment, assessing alignment with the work order, checking acceptance criteria relevant to that segment, and flagging bugs, style issues, and concerns.
 
@@ -199,6 +199,7 @@ The conductor supports multiple LLM providers with role-based routing. Each pipe
 models:
   providers:
     local-reasoning:
+      type: openai
       endpoint: "http://localhost:8080/v1"
       model: "deepseek-r1"
       timeout_seconds: 120
@@ -207,6 +208,7 @@ models:
         input_per_million: 0.0
         output_per_million: 0.0
     cloud-reasoning:
+      type: openai
       endpoint: "https://api.example.com/v1"
       model: "some-model"
       api_key: "${REASONING_API_KEY}"
@@ -229,7 +231,7 @@ models:
 
 This lets you mix providers — run cheap analysis steps locally while routing synthesis to a more capable cloud model, or vice versa. Environment variables in `api_key` fields are expanded at load time.
 
-When no `models` section is configured, all roles fall back to the `local_model` endpoint.
+Every provider entry must set an explicit `type`, and every runtime role must map to a configured provider.
 
 ### Guardrails
 
@@ -340,8 +342,6 @@ The pipeline steps with independent prompts are:
 | `plan_audit` | `defaults/plan_audit.md` | Planner audit pass |
 | `describe` | `defaults/describe.md` | RAG chunk description generation |
 
-Legacy `scope` and `verify` prompts are still loaded for backward compatibility but are not used by the pipeline orchestrators.
-
 ### Index the Repository
 
 ```bash
@@ -377,30 +377,11 @@ When `index.auto_reindex` is `true`, the index is updated after each `conductor 
 
 ## Work Orders
 
-A work order is a YAML file describing what you want built. Version 1 uses string
-acceptance criteria; version 2 adds typed criteria and requirement mapping.
+A work order is a YAML file describing what you want built. The canonical shape
+uses `schema_version: 2`, explicit requirement mapping, and typed verification
+metadata.
 
-Version 1 example:
-
-```yaml
-title: "Add health check endpoint"
-type: new_feature
-target_module: internal/health
-reference_module: internal/status
-known_files:
-  - cmd/server/main.go
-  - internal/routes/router.go
-acceptance_criteria:
-  - "GET /health returns 200 with JSON body"
-  - "Response includes service version from build info"
-  - "go build ./... passes with no errors"
-  - "go test ./internal/health/... passes"
-constraints:
-  - "Do NOT modify internal/routes/router.go beyond adding the route"
-  - "No new external dependencies"
-```
-
-Version 2 example:
+Canonical example:
 
 ```yaml
 schema_version: 2
@@ -426,6 +407,8 @@ constraints:
   - "Do not change unrelated routes"
 ```
 
+Work orders must use the version-2 shape above.
+
 Fields:
 
 - **title:** Short imperative description. Also used as a RAG search query.
@@ -433,8 +416,8 @@ Fields:
 - **target_module:** Primary directory the changes will land in.
 - **reference_module:** Existing module to use as an architectural reference (optional).
 - **known_files:** Files the agent should definitely read or modify.
-- **acceptance_criteria:** In version 1, verifiable string assertions. In version 2, typed criteria with `id`, `description`, `requirement_ids`, `required`, and `verification`.
-- **requirements:** Version-2 requirement IDs that acceptance criteria must map back to.
+- **acceptance_criteria:** Typed criteria with `id`, `description`, `requirement_ids`, `required`, and `verification`.
+- **requirements:** Requirement IDs that acceptance criteria must map back to.
 - **constraints:** Things the agent must not do.
 
 Version-2 verification kinds currently supported:
@@ -574,6 +557,10 @@ artifacts/work-orders/<wf-id>.yaml           # Archived work orders (on approve)
 logs/<task-id>/stdout.log                    # Build agent output
 logs/<task-id>/stderr.log
 ```
+
+The database is clean-slate only. If conductor encounters an older or
+incompatible `db/conductor.db`, it deletes that DB file and recreates it from
+the current canonical schema.
 
 ## Architecture
 

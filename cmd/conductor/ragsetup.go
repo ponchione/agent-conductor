@@ -39,18 +39,9 @@ func buildRAGStack(ctx context.Context, cfg *config.ProjectConfig) (*rag.Store, 
 		return nil, nil, nil, fmt.Errorf("load prompts: %w", err)
 	}
 
-	var describeClient llm.Client
-	if provName, ok := cfg.Models.Roles["describe"]; ok {
-		if pc, ok := cfg.Models.Providers[provName]; ok {
-			c, err := llm.NewClientFromProvider(pc, cfg.Project.Path)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("describe provider %q: %w", provName, err)
-			}
-			describeClient = c
-		}
-	}
-	if describeClient == nil {
-		describeClient = llm.New(cfg.LocalModel)
+	describeClient, err := buildClientForRole(cfg, "describe")
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("invalid model config: %w\n  Hint: run \"conductor init-global\" or define models.providers and models.roles.describe explicitly", err)
 	}
 	describer := rag.NewDescriber(&llm.RAGCompleterAdapter{Client: describeClient}, prompts.Describe)
 

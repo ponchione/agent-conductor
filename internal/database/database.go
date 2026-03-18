@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
+	"os"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -16,6 +17,31 @@ type DB struct {
 }
 
 func NewDB(dsn string) (*DB, error) {
+	conn, err := openSQLiteConnection(dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			conn.Close()
+		}
+	}()
+
+	conn, err = ensureCanonicalDatabase(conn, dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	success = true
+	return &DB{
+		Queries: New(conn),
+		conn:    conn,
+	}, nil
+}
+
+func openSQLiteConnection(dsn string) (*sql.DB, error) {
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -30,71 +56,81 @@ func NewDB(dsn string) (*DB, error) {
 		conn.Close()
 		return nil, err
 	}
-
-	success := false
-	defer func() {
-		if !success {
-			conn.Close()
-		}
-	}()
-
 	if _, err := conn.Exec("PRAGMA foreign_keys = ON;"); err != nil {
+		conn.Close()
 		return nil, err
 	}
 	if _, err := conn.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
+		conn.Close()
 		return nil, err
 	}
 	if _, err := conn.Exec("PRAGMA journal_mode = WAL;"); err != nil {
+		conn.Close()
 		return nil, err
 	}
 
+	return conn, nil
+}
+
+func ensureCanonicalDatabase(conn *sql.DB, dsn string) (*sql.DB, error) {
 	if err := applyDDL(conn); err != nil {
-		return nil, fmt.Errorf("migration failed: %w", err)
+		return nil, fmt.Errorf("schema bootstrap failed: %w", err)
+	}
+	if err := validateCanonicalSchema(conn); err == nil {
+		return conn, nil
 	}
 
-	// Migrations: add columns for existing databases.
-	migrations := []string{
-		"ALTER TABLE pipeline_runs ADD COLUMN work_order_content TEXT",
-		"ALTER TABLE pipeline_runs ADD COLUMN build_cost_usd REAL",
-		"ALTER TABLE pipeline_runs ADD COLUMN build_session_id TEXT",
-		"ALTER TABLE pipeline_runs ADD COLUMN build_tool_calls TEXT",
-		"CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, kind TEXT NOT NULL, project TEXT NOT NULL, source_spec_path TEXT, state TEXT NOT NULL, error_message TEXT, started_at TEXT, completed_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))",
-		"CREATE INDEX IF NOT EXISTS idx_sessions_state_created_at ON sessions(state, created_at)",
-		"CREATE INDEX IF NOT EXISTS idx_sessions_project_created_at ON sessions(project, created_at)",
-		"ALTER TABLE pipeline_runs ADD COLUMN session_id TEXT REFERENCES sessions(id)",
-		"ALTER TABLE plan_runs ADD COLUMN session_id TEXT REFERENCES sessions(id)",
-		"CREATE INDEX IF NOT EXISTS idx_pipeline_runs_session_id ON pipeline_runs(session_id)",
-		"CREATE INDEX IF NOT EXISTS idx_plan_runs_session_id ON plan_runs(session_id)",
-		"ALTER TABLE plan_runs ADD COLUMN generation_session_id TEXT",
-		"ALTER TABLE plan_runs ADD COLUMN audit_session_id TEXT",
-		"ALTER TABLE plan_runs ADD COLUMN generation_cost_usd REAL",
-		"ALTER TABLE plan_runs ADD COLUMN audit_cost_usd REAL",
-		"ALTER TABLE plan_runs ADD COLUMN generation_duration_ms INTEGER",
-		"ALTER TABLE plan_runs ADD COLUMN audit_duration_ms INTEGER",
-		"ALTER TABLE plan_runs ADD COLUMN generation_retry_count INTEGER NOT NULL DEFAULT 0",
-		"CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, session_id TEXT REFERENCES sessions(id), workflow_id TEXT REFERENCES workflows(id), task_id TEXT REFERENCES tasks(id), artifact_type TEXT NOT NULL, path TEXT NOT NULL, size_bytes INTEGER, metadata_json TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))",
-		"CREATE INDEX IF NOT EXISTS idx_artifacts_session_id ON artifacts(session_id)",
-		"CREATE INDEX IF NOT EXISTS idx_artifacts_workflow_id ON artifacts(workflow_id)",
-		"CREATE INDEX IF NOT EXISTS idx_artifacts_type_created ON artifacts(artifact_type, created_at)",
-		"ALTER TABLE plan_runs ADD COLUMN project TEXT",
-		"ALTER TABLE plan_runs ADD COLUMN spec_fingerprint TEXT",
-		"ALTER TABLE plan_runs ADD COLUMN pre_audit_work_order_count INTEGER",
-		"ALTER TABLE plan_runs ADD COLUMN post_audit_work_order_count INTEGER",
-		"ALTER TABLE plan_runs ADD COLUMN audit_change_text TEXT",
-		"ALTER TABLE pipeline_runs ADD COLUMN build_claude_md_content TEXT",
+	if err := conn.Close(); err != nil {
+		return nil, fmt.Errorf("close incompatible database: %w", err)
 	}
-	for _, m := range migrations {
-		_, migErr := conn.Exec(m)
-		if migErr != nil && !strings.Contains(migErr.Error(), "duplicate column") {
-			return nil, fmt.Errorf("migration failed: %w", migErr)
+	if err := resetDatabaseFiles(dsn); err != nil {
+		return nil, fmt.Errorf("reset incompatible database %q: %w", dsn, err)
+	}
+
+	conn, err := openSQLiteConnection(dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := applyDDL(conn); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("schema bootstrap failed after reset: %w", err)
+	}
+	if err := validateCanonicalSchema(conn); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("database schema validation failed after reset: %w", err)
+	}
+	return conn, nil
+}
+
+func resetDatabaseFiles(dsn string) error {
+	for _, path := range []string{dsn, dsn + "-wal", dsn + "-shm"} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
 		}
 	}
+	return nil
+}
 
-	success = true
-	return &DB{
-		Queries: New(conn),
-		conn:    conn,
-	}, nil
+func validateCanonicalSchema(conn *sql.DB) error {
+	checks := []string{
+		"SELECT id, context_package_path, verification_report_path, max_depth, max_files_changed, max_duration_mins, current_depth, files_changed, error_message FROM workflows LIMIT 0",
+		"SELECT id, phase, input_artifact, output_artifact, files_changed, error_message FROM tasks LIMIT 0",
+		"SELECT id, workflow_id, task_id, event_type, event_data FROM events LIMIT 0",
+		"SELECT id, kind, project, source_spec_path, state, error_message, started_at, completed_at FROM sessions LIMIT 0",
+		"SELECT id, session_id, workflow_id, task_id, artifact_type, path, size_bytes, metadata_json FROM artifacts LIMIT 0",
+		"SELECT id, session_id, workflow_id, project, work_order_type, scope_started_at, build_started_at, verify_started_at, scope_model, build_model, verify_model, scope_files_suggested, build_files_changed, build_scope_drift, scope_estimated_complexity, scope_rag_direct, scope_rag_hops, scope_paths_stripped, scope_paths_reclassified, verify_result, human_result, work_order_content, scope_tokens_in, build_tokens_in, verify_tokens_in, build_cost_usd, build_session_id, build_tool_calls, build_claude_md_content FROM pipeline_runs LIMIT 0",
+		"SELECT id, pipeline_run_id, phase, step, target_path, provider, model, tokens_in, tokens_out, latency_ms, estimated_cost_usd, success, error_message FROM sub_calls LIMIT 0",
+		"SELECT id, session_id, spec_file, project, spec_fingerprint, generation_model, audit_model, generation_session_id, audit_session_id, work_orders_generated, pre_audit_work_order_count, post_audit_work_order_count, audit_change_text, audit_work_orders_added, audit_work_orders_modified, audit_work_orders_unchanged, generation_cost_usd, audit_cost_usd, generation_duration_ms, audit_duration_ms, generation_retry_count, audit_tokens_in, audit_tokens_out, generation_tokens_in, generation_tokens_out FROM plan_runs LIMIT 0",
+	}
+
+	for _, query := range checks {
+		rows, err := conn.Query(query)
+		if err != nil {
+			return fmt.Errorf("canonical schema check failed for query %q: %w", query, err)
+		}
+		rows.Close()
+	}
+	return nil
 }
 
 func (db *DB) Close() error {

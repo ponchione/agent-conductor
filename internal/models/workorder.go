@@ -63,7 +63,7 @@ var validWorkOrderTypes = map[string]bool{
 
 func (wo *WorkOrder) EffectiveSchemaVersion() int {
 	if wo.SchemaVersion <= 0 {
-		return 1
+		return 2
 	}
 	return wo.SchemaVersion
 }
@@ -84,30 +84,14 @@ func (wo *WorkOrder) Validate() error {
 		}
 	}
 
-	if wo.EffectiveSchemaVersion() >= 2 {
-		return wo.validateV2()
+	if wo.EffectiveSchemaVersion() != 2 {
+		return fmt.Errorf("schema_version must be 2")
 	}
-	return wo.validateV1()
-}
-
-func (wo *WorkOrder) validateV1() error {
-	if len(wo.AcceptanceCriteria) == 0 {
-		return fmt.Errorf("work order acceptance_criteria must not be empty")
-	}
-	for i, criterion := range wo.AcceptanceCriteria {
-		if strings.TrimSpace(criterion) == "" {
-			return fmt.Errorf("work order acceptance_criteria[%d] must not be empty", i)
-		}
-	}
-	return nil
-}
-
-func (wo *WorkOrder) validateV2() error {
 	if len(wo.Requirements) == 0 {
-		return fmt.Errorf("version 2 work order requirements must not be empty")
+		return fmt.Errorf("work order requirements must not be empty")
 	}
 	if len(wo.TypedAcceptanceCriteria) == 0 {
-		return fmt.Errorf("version 2 work order typed acceptance criteria must not be empty")
+		return fmt.Errorf("work order typed acceptance criteria must not be empty")
 	}
 
 	requirements := make(map[string]bool, len(wo.Requirements))
@@ -187,9 +171,12 @@ func (wo *WorkOrder) UnmarshalYAML(node *yaml.Node) error {
 	}
 
 	criteriaNode := findYAMLField(node, "acceptance_criteria")
-	legacyCriteria, typedCriteria, err := decodeAcceptanceCriteriaYAML(criteriaNode)
+	typedCriteria, err := decodeAcceptanceCriteriaYAML(criteriaNode)
 	if err != nil {
 		return err
+	}
+	if common.SchemaVersion != 2 {
+		return fmt.Errorf("schema_version must be 2")
 	}
 
 	wo.SchemaVersion = common.SchemaVersion
@@ -201,67 +188,33 @@ func (wo *WorkOrder) UnmarshalYAML(node *yaml.Node) error {
 	wo.Requirements = common.Requirements
 	wo.Constraints = common.Constraints
 	wo.AuditSource = common.AuditSource
-	wo.AcceptanceCriteria = legacyCriteria
 	wo.TypedAcceptanceCriteria = typedCriteria
-
-	if wo.SchemaVersion <= 0 && len(typedCriteria) > 0 {
-		wo.SchemaVersion = 2
-	}
-	if wo.EffectiveSchemaVersion() >= 2 && len(wo.AcceptanceCriteria) == 0 {
-		for _, criterion := range typedCriteria {
-			wo.AcceptanceCriteria = append(wo.AcceptanceCriteria, criterion.Description)
-		}
-	}
+	wo.AcceptanceCriteria = deriveAcceptanceCriteria(typedCriteria)
 	return nil
 }
 
 func (wo WorkOrder) MarshalYAML() (any, error) {
-	if wo.EffectiveSchemaVersion() >= 2 && len(wo.TypedAcceptanceCriteria) > 0 {
-		type versionTwo struct {
-			SchemaVersion      int                        `yaml:"schema_version,omitempty"`
-			Title              string                     `yaml:"title"`
-			TargetModule       string                     `yaml:"target_module"`
-			ReferenceModule    string                     `yaml:"reference_module,omitempty"`
-			Type               string                     `yaml:"type"`
-			KnownFiles         []string                   `yaml:"known_files,omitempty"`
-			Requirements       []WorkOrderRequirement     `yaml:"requirements,omitempty"`
-			AcceptanceCriteria []TypedAcceptanceCriterion `yaml:"acceptance_criteria,omitempty"`
-			Constraints        []string                   `yaml:"constraints,omitempty"`
-			AuditSource        string                     `yaml:"audit_source,omitempty"`
-		}
-		return versionTwo{
-			SchemaVersion:      wo.EffectiveSchemaVersion(),
-			Title:              wo.Title,
-			TargetModule:       wo.TargetModule,
-			ReferenceModule:    wo.ReferenceModule,
-			Type:               wo.Type,
-			KnownFiles:         wo.KnownFiles,
-			Requirements:       wo.Requirements,
-			AcceptanceCriteria: wo.TypedAcceptanceCriteria,
-			Constraints:        wo.Constraints,
-			AuditSource:        wo.AuditSource,
-		}, nil
+	type versionTwo struct {
+		SchemaVersion      int                        `yaml:"schema_version"`
+		Title              string                     `yaml:"title"`
+		TargetModule       string                     `yaml:"target_module"`
+		ReferenceModule    string                     `yaml:"reference_module,omitempty"`
+		Type               string                     `yaml:"type"`
+		KnownFiles         []string                   `yaml:"known_files,omitempty"`
+		Requirements       []WorkOrderRequirement     `yaml:"requirements,omitempty"`
+		AcceptanceCriteria []TypedAcceptanceCriterion `yaml:"acceptance_criteria,omitempty"`
+		Constraints        []string                   `yaml:"constraints,omitempty"`
+		AuditSource        string                     `yaml:"audit_source,omitempty"`
 	}
-
-	type legacy struct {
-		SchemaVersion      int      `yaml:"schema_version,omitempty"`
-		Title              string   `yaml:"title"`
-		TargetModule       string   `yaml:"target_module"`
-		ReferenceModule    string   `yaml:"reference_module,omitempty"`
-		Type               string   `yaml:"type"`
-		KnownFiles         []string `yaml:"known_files,omitempty"`
-		AcceptanceCriteria []string `yaml:"acceptance_criteria,omitempty"`
-		Constraints        []string `yaml:"constraints,omitempty"`
-		AuditSource        string   `yaml:"audit_source,omitempty"`
-	}
-	return legacy{
-		SchemaVersion:      schemaVersionForMarshal(wo.SchemaVersion),
+	return versionTwo{
+		SchemaVersion:      2,
 		Title:              wo.Title,
 		TargetModule:       wo.TargetModule,
 		ReferenceModule:    wo.ReferenceModule,
 		Type:               wo.Type,
 		KnownFiles:         wo.KnownFiles,
-		AcceptanceCriteria: wo.AcceptanceCriteria,
+		Requirements:       wo.Requirements,
+		AcceptanceCriteria: wo.TypedAcceptanceCriteria,
 		Constraints:        wo.Constraints,
 		AuditSource:        wo.AuditSource,
 	}, nil
@@ -287,9 +240,12 @@ func (wo *WorkOrder) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	legacyCriteria, typedCriteria, err := decodeAcceptanceCriteriaJSON(raw.AcceptanceCriteria)
+	typedCriteria, err := decodeAcceptanceCriteriaJSON(raw.AcceptanceCriteria)
 	if err != nil {
 		return err
+	}
+	if raw.SchemaVersion != 2 {
+		return fmt.Errorf("schema_version must be 2")
 	}
 
 	wo.SchemaVersion = raw.SchemaVersion
@@ -301,77 +257,36 @@ func (wo *WorkOrder) UnmarshalJSON(data []byte) error {
 	wo.Requirements = raw.Requirements
 	wo.Constraints = raw.Constraints
 	wo.AuditSource = raw.AuditSource
-	wo.AcceptanceCriteria = legacyCriteria
 	wo.TypedAcceptanceCriteria = typedCriteria
-
-	if wo.SchemaVersion <= 0 && len(typedCriteria) > 0 {
-		wo.SchemaVersion = 2
-	}
-	if wo.EffectiveSchemaVersion() >= 2 && len(wo.AcceptanceCriteria) == 0 {
-		for _, criterion := range typedCriteria {
-			wo.AcceptanceCriteria = append(wo.AcceptanceCriteria, criterion.Description)
-		}
-	}
+	wo.AcceptanceCriteria = deriveAcceptanceCriteria(typedCriteria)
 	return nil
 }
 
 func (wo WorkOrder) MarshalJSON() ([]byte, error) {
-	if wo.EffectiveSchemaVersion() >= 2 && len(wo.TypedAcceptanceCriteria) > 0 {
-		type versionTwo struct {
-			SchemaVersion      int                        `json:"schema_version,omitempty"`
-			Title              string                     `json:"title"`
-			TargetModule       string                     `json:"target_module"`
-			ReferenceModule    string                     `json:"reference_module,omitempty"`
-			Type               string                     `json:"type"`
-			KnownFiles         []string                   `json:"known_files,omitempty"`
-			Requirements       []WorkOrderRequirement     `json:"requirements,omitempty"`
-			AcceptanceCriteria []TypedAcceptanceCriterion `json:"acceptance_criteria,omitempty"`
-			Constraints        []string                   `json:"constraints,omitempty"`
-			AuditSource        string                     `json:"audit_source,omitempty"`
-		}
-		return json.Marshal(versionTwo{
-			SchemaVersion:      wo.EffectiveSchemaVersion(),
-			Title:              wo.Title,
-			TargetModule:       wo.TargetModule,
-			ReferenceModule:    wo.ReferenceModule,
-			Type:               wo.Type,
-			KnownFiles:         wo.KnownFiles,
-			Requirements:       wo.Requirements,
-			AcceptanceCriteria: wo.TypedAcceptanceCriteria,
-			Constraints:        wo.Constraints,
-			AuditSource:        wo.AuditSource,
-		})
+	type versionTwo struct {
+		SchemaVersion      int                        `json:"schema_version"`
+		Title              string                     `json:"title"`
+		TargetModule       string                     `json:"target_module"`
+		ReferenceModule    string                     `json:"reference_module,omitempty"`
+		Type               string                     `json:"type"`
+		KnownFiles         []string                   `json:"known_files,omitempty"`
+		Requirements       []WorkOrderRequirement     `json:"requirements,omitempty"`
+		AcceptanceCriteria []TypedAcceptanceCriterion `json:"acceptance_criteria,omitempty"`
+		Constraints        []string                   `json:"constraints,omitempty"`
+		AuditSource        string                     `json:"audit_source,omitempty"`
 	}
-
-	type legacy struct {
-		SchemaVersion      int      `json:"schema_version,omitempty"`
-		Title              string   `json:"title"`
-		TargetModule       string   `json:"target_module"`
-		ReferenceModule    string   `json:"reference_module,omitempty"`
-		Type               string   `json:"type"`
-		KnownFiles         []string `json:"known_files,omitempty"`
-		AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
-		Constraints        []string `json:"constraints,omitempty"`
-		AuditSource        string   `json:"audit_source,omitempty"`
-	}
-	return json.Marshal(legacy{
-		SchemaVersion:      schemaVersionForMarshal(wo.SchemaVersion),
+	return json.Marshal(versionTwo{
+		SchemaVersion:      2,
 		Title:              wo.Title,
 		TargetModule:       wo.TargetModule,
 		ReferenceModule:    wo.ReferenceModule,
 		Type:               wo.Type,
 		KnownFiles:         wo.KnownFiles,
-		AcceptanceCriteria: wo.AcceptanceCriteria,
+		Requirements:       wo.Requirements,
+		AcceptanceCriteria: wo.TypedAcceptanceCriteria,
 		Constraints:        wo.Constraints,
 		AuditSource:        wo.AuditSource,
 	})
-}
-
-func schemaVersionForMarshal(schemaVersion int) int {
-	if schemaVersion <= 1 {
-		return 0
-	}
-	return schemaVersion
 }
 
 func findYAMLField(node *yaml.Node, key string) *yaml.Node {
@@ -386,55 +301,42 @@ func findYAMLField(node *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-func decodeAcceptanceCriteriaYAML(node *yaml.Node) ([]string, []TypedAcceptanceCriterion, error) {
+func decodeAcceptanceCriteriaYAML(node *yaml.Node) ([]TypedAcceptanceCriterion, error) {
 	if node == nil || node.Kind == 0 || node.Kind == yaml.ScalarNode && node.Tag == "!!null" {
-		return nil, nil, nil
+		return nil, nil
 	}
 	if node.Kind != yaml.SequenceNode {
-		return nil, nil, fmt.Errorf("acceptance_criteria must be a sequence")
+		return nil, fmt.Errorf("acceptance_criteria must be a sequence")
 	}
 	if len(node.Content) == 0 {
-		return []string{}, nil, nil
+		return []TypedAcceptanceCriterion{}, nil
 	}
-	switch node.Content[0].Kind {
-	case yaml.ScalarNode:
-		var criteria []string
-		if err := node.Decode(&criteria); err != nil {
-			return nil, nil, err
-		}
-		return criteria, nil, nil
-	case yaml.MappingNode:
-		var criteria []TypedAcceptanceCriterion
-		if err := node.Decode(&criteria); err != nil {
-			return nil, nil, err
-		}
-		descriptions := make([]string, 0, len(criteria))
-		for _, criterion := range criteria {
-			descriptions = append(descriptions, criterion.Description)
-		}
-		return descriptions, criteria, nil
-	default:
-		return nil, nil, fmt.Errorf("acceptance_criteria entries must be scalars or mappings")
+	if node.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("acceptance_criteria entries must be mappings")
 	}
+	var criteria []TypedAcceptanceCriterion
+	if err := node.Decode(&criteria); err != nil {
+		return nil, err
+	}
+	return criteria, nil
 }
 
-func decodeAcceptanceCriteriaJSON(data json.RawMessage) ([]string, []TypedAcceptanceCriterion, error) {
+func decodeAcceptanceCriteriaJSON(data json.RawMessage) ([]TypedAcceptanceCriterion, error) {
 	if len(bytes.TrimSpace(data)) == 0 || string(bytes.TrimSpace(data)) == "null" {
-		return nil, nil, nil
-	}
-
-	var legacy []string
-	if err := json.Unmarshal(data, &legacy); err == nil {
-		return legacy, nil, nil
+		return nil, nil
 	}
 
 	var typed []TypedAcceptanceCriterion
 	if err := json.Unmarshal(data, &typed); err != nil {
-		return nil, nil, fmt.Errorf("invalid acceptance_criteria payload: %w", err)
+		return nil, fmt.Errorf("invalid acceptance_criteria payload: %w", err)
 	}
-	descriptions := make([]string, 0, len(typed))
-	for _, criterion := range typed {
+	return typed, nil
+}
+
+func deriveAcceptanceCriteria(criteria []TypedAcceptanceCriterion) []string {
+	descriptions := make([]string, 0, len(criteria))
+	for _, criterion := range criteria {
 		descriptions = append(descriptions, criterion.Description)
 	}
-	return descriptions, typed, nil
+	return descriptions
 }

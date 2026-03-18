@@ -14,7 +14,7 @@ var initGlobalCmd = &cobra.Command{
 	Use:   "init-global",
 	Short: "Create ~/source/.conductor/config.yaml with default machine-level settings",
 	Long: `init-global creates ~/source/.conductor/config.yaml populated with default
-machine-level settings (local_model, embed_model, git). These settings apply
+machine-level settings (models, embed_model, git). These settings apply
 to all projects on this machine and can be overridden by individual project.yaml files.
 
 If the file already exists, the command prints its path and exits without modifying it.`,
@@ -53,12 +53,6 @@ If the file already exists, the command prints its path and exits without modify
 
 const globalConfigTemplate = `# Global conductor configuration — applies to all projects on this machine.
 # Values here are overridden by matching fields in project.yaml.
-
-local_model:
-  endpoint: "http://localhost:8080/v1"
-  model_name: "deepseek-r1"
-  temperature: 0.0
-  timeout_seconds: 120
 
 embed_model:
   endpoint: "http://localhost:8081/v1"

@@ -13,8 +13,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/ponchione/agent-conductor/internal/config"
 )
 
 // Client is the interface for all LLM completion providers.
@@ -67,17 +65,6 @@ func newProviderClientWithHTTPClient(p Provider, httpClient *http.Client) *Provi
 		provider:   p,
 		httpClient: httpClient,
 	}
-}
-
-// New creates a new ProviderClient using the provided configuration.
-// This is a backward-compatible shim that delegates to NewProviderClient.
-func New(cfg config.LocalModel) *ProviderClient {
-	return NewProviderClient(Provider{
-		Endpoint:       cfg.Endpoint,
-		Model:          cfg.ModelName,
-		Temperature:    cfg.Temperature,
-		TimeoutSeconds: cfg.TimeoutSeconds,
-	})
 }
 
 // Usage holds token counts returned by the LLM API.

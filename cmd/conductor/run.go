@@ -15,7 +15,6 @@ import (
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/executor"
 	"github.com/ponchione/agent-conductor/internal/git"
-	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/queue"
 	"github.com/ponchione/agent-conductor/internal/rag"
@@ -91,28 +90,10 @@ var runCmd = &cobra.Command{
 		q := queue.New(cfg, db)
 		runner := executor.NewExecutor(cfg)
 
-		providers := make(map[string]llm.Client)
-		if len(cfg.Models.Providers) == 0 {
-			providers["default"] = llm.New(cfg.LocalModel)
-			cfg.Models.Roles = map[string]string{
-				"decompose":         "default",
-				"analyze":           "default",
-				"crosscut":          "default",
-				"synthesize":        "default",
-				"describe":          "default",
-				"verify_analyze":    "default",
-				"verify_synthesize": "default",
-			}
-		} else {
-			for name, pc := range cfg.Models.Providers {
-				client, err := llm.NewClientFromProvider(pc, cfg.Project.Path)
-				if err != nil {
-					return fmt.Errorf("provider %q: %w", name, err)
-				}
-				providers[name] = client
-			}
+		resolver, err := buildRoleResolver(cfg, pipelineModelRoles)
+		if err != nil {
+			return fmt.Errorf("invalid model config: %w\n  Hint: run \"conductor init-global\" or define models.providers and models.roles explicitly", err)
 		}
-		resolver := llm.NewRoleResolver(providers, cfg.Models.Roles)
 
 		var ragSearcher condctx.RAGSearcher
 		if cfg.EmbedModel.Endpoint != "" {

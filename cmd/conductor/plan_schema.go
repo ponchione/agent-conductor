@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
-	"strings"
 
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/models"
@@ -17,30 +15,36 @@ type planRequirement struct {
 }
 
 type planWorkOrder struct {
-	Title              string   `json:"title"`
-	Type               string   `json:"type"`
-	TargetModule       string   `json:"target_module"`
-	ReferenceModule    string   `json:"reference_module"`
-	KnownFiles         []string `json:"known_files"`
-	AcceptanceCriteria []string `json:"acceptance_criteria"`
-	Constraints        []string `json:"constraints"`
-	Covers             []string `json:"covers,omitempty"`
-	DependsOn          []string `json:"depends_on,omitempty"`
-	WhyNow             string   `json:"why_now,omitempty"`
-	Size               string   `json:"size,omitempty"`
-	AuditSource        string   `json:"-"`
+	SchemaVersion      int                               `json:"schema_version"`
+	Title              string                            `json:"title"`
+	Type               string                            `json:"type"`
+	TargetModule       string                            `json:"target_module"`
+	ReferenceModule    string                            `json:"reference_module"`
+	KnownFiles         []string                          `json:"known_files"`
+	Requirements       []models.WorkOrderRequirement     `json:"requirements"`
+	AcceptanceCriteria []models.TypedAcceptanceCriterion `json:"acceptance_criteria"`
+	Constraints        []string                          `json:"constraints"`
+	DependsOn          []string                          `json:"depends_on,omitempty"`
+	WhyNow             string                            `json:"why_now,omitempty"`
+	Size               string                            `json:"size,omitempty"`
+	AuditSource        string                            `json:"-"`
 }
 
 func (pw planWorkOrder) toWorkOrder() (models.WorkOrder, error) {
+	if pw.SchemaVersion != 2 {
+		return models.WorkOrder{}, fmt.Errorf("schema_version must be 2")
+	}
 	wo := models.WorkOrder{
-		Title:              pw.Title,
-		Type:               pw.Type,
-		TargetModule:       pw.TargetModule,
-		ReferenceModule:    pw.ReferenceModule,
-		KnownFiles:         pw.KnownFiles,
-		AcceptanceCriteria: pw.AcceptanceCriteria,
-		Constraints:        pw.Constraints,
-		AuditSource:        pw.AuditSource,
+		SchemaVersion:           pw.SchemaVersion,
+		Title:                   pw.Title,
+		Type:                    pw.Type,
+		TargetModule:            pw.TargetModule,
+		ReferenceModule:         pw.ReferenceModule,
+		KnownFiles:              pw.KnownFiles,
+		Requirements:            pw.Requirements,
+		TypedAcceptanceCriteria: pw.AcceptanceCriteria,
+		Constraints:             pw.Constraints,
+		AuditSource:             pw.AuditSource,
 	}
 	if err := wo.Validate(); err != nil {
 		return models.WorkOrder{}, err
@@ -78,6 +82,7 @@ func (pd *planDocument) Validate() error {
 	}
 
 	requirementIDs := make(map[string]bool, len(pd.Requirements))
+	requirementsByID := make(map[string]planRequirement, len(pd.Requirements))
 	for _, req := range pd.Requirements {
 		if req.ID == "" {
 			return fmt.Errorf("requirement missing id")
@@ -86,6 +91,7 @@ func (pd *planDocument) Validate() error {
 			return fmt.Errorf("duplicate requirement id %q", req.ID)
 		}
 		requirementIDs[req.ID] = true
+		requirementsByID[req.ID] = req
 	}
 
 	for i, pw := range pd.WorkOrders {
@@ -93,14 +99,16 @@ func (pd *planDocument) Validate() error {
 		if err != nil {
 			return fmt.Errorf("work order %d (%q): %w", i+1, pw.Title, err)
 		}
-		_ = wo
-
-		for _, reqID := range pw.Covers {
-			if len(requirementIDs) == 0 {
-				break
+		if len(requirementIDs) == 0 {
+			continue
+		}
+		for _, req := range wo.Requirements {
+			planReq, ok := requirementsByID[req.ID]
+			if !ok {
+				return fmt.Errorf("work order %d (%q) references unknown requirement %q", i+1, pw.Title, req.ID)
 			}
-			if !requirementIDs[reqID] {
-				return fmt.Errorf("work order %d (%q) covers unknown requirement %q", i+1, pw.Title, reqID)
+			if planReq.Text != "" && req.Text != "" && planReq.Text != req.Text {
+				return fmt.Errorf("work order %d (%q) requirement %q text does not match top-level requirement", i+1, pw.Title, req.ID)
 			}
 		}
 	}
@@ -122,52 +130,6 @@ func (pd *planDocument) ToWorkOrders() ([]models.WorkOrder, error) {
 
 func (pd *planDocument) MarshalIndented() ([]byte, error) {
 	return json.MarshalIndent(pd, "", "  ")
-}
-
-func (pd *planDocument) InheritMissingMetadata(from *planDocument) {
-	if from == nil {
-		return
-	}
-	if len(pd.Requirements) == 0 {
-		pd.Requirements = slices.Clone(from.Requirements)
-	}
-	if len(pd.NonGoals) == 0 {
-		pd.NonGoals = slices.Clone(from.NonGoals)
-	}
-	if len(pd.ExistingSystem) == 0 {
-		pd.ExistingSystem = slices.Clone(from.ExistingSystem)
-	}
-	if len(pd.PlanningWarnings) == 0 {
-		pd.PlanningWarnings = slices.Clone(from.PlanningWarnings)
-	}
-
-	byKey := make(map[string]planWorkOrder, len(from.WorkOrders))
-	for _, wo := range from.WorkOrders {
-		byKey[planWorkOrderKey(wo)] = wo
-	}
-
-	for i := range pd.WorkOrders {
-		match, ok := byKey[planWorkOrderKey(pd.WorkOrders[i])]
-		if !ok {
-			continue
-		}
-		if len(pd.WorkOrders[i].Covers) == 0 {
-			pd.WorkOrders[i].Covers = slices.Clone(match.Covers)
-		}
-		if len(pd.WorkOrders[i].DependsOn) == 0 {
-			pd.WorkOrders[i].DependsOn = slices.Clone(match.DependsOn)
-		}
-		if pd.WorkOrders[i].WhyNow == "" {
-			pd.WorkOrders[i].WhyNow = match.WhyNow
-		}
-		if pd.WorkOrders[i].Size == "" {
-			pd.WorkOrders[i].Size = match.Size
-		}
-	}
-}
-
-func planWorkOrderKey(wo planWorkOrder) string {
-	return strings.ToLower(strings.Join([]string{wo.Title, wo.Type, wo.TargetModule}, "::"))
 }
 
 type auditPlanWorkOrder struct {

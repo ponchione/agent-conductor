@@ -122,7 +122,7 @@ func TestLoadPromptsForPlanIgnoresUnrelatedPromptConfig(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Project: config.Project{Path: projectDir},
 		Prompts: config.Prompts{
-			Scope: "templates/missing-scope.md",
+			Build: "templates/missing-build.md",
 		},
 	}
 
@@ -138,16 +138,16 @@ func TestLoadPromptsForPlanIgnoresUnrelatedPromptConfig(t *testing.T) {
 	}
 }
 
-func TestDefaultPlanPromptMatchesPhaseOnePlanContract(t *testing.T) {
+func TestDefaultPlanPromptMatchesCanonicalPlanContract(t *testing.T) {
 	requiredSnippets := []string{
+		"\"schema_version\": 2",
 		"\"requirements\": [",
 		"\"non_goals\": [",
 		"\"existing_system\": [",
 		"\"planning_warnings\": [",
-		"\"covers\": [",
 		"\"depends_on\": [",
-		"`acceptance_criteria` MUST be an array of strings in Phase 1",
-		"object-form or typed criteria yet.",
+		"`acceptance_criteria` MUST be typed objects, not legacy string arrays.",
+		"Every work order MUST set `schema_version` to `2`.",
 		"Do not invent speculative work streams",
 		"Do not rewrite or soften settled specification decisions.",
 	}
@@ -159,10 +159,11 @@ func TestDefaultPlanPromptMatchesPhaseOnePlanContract(t *testing.T) {
 	}
 }
 
-func TestDefaultPlanAuditPromptMatchesPhaseOneAuditContract(t *testing.T) {
+func TestDefaultPlanAuditPromptMatchesCanonicalAuditContract(t *testing.T) {
 	requiredSnippets := []string{
 		"Requirement IDs must stay stable.",
-		"`acceptance_criteria` MUST remain an array of strings in Phase 1.",
+		"`acceptance_criteria` MUST remain typed objects. Do not emit legacy string",
+		"Every work order MUST set `schema_version` to `2`.",
 		"You may split, merge, replace, reorder, add, or delete work orders",
 		"\"audit_action\": \"added | modified | unchanged\"",
 		"Do not invent speculative work streams",

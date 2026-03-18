@@ -8,25 +8,39 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestWorkOrderValidateRequiresAcceptanceCriteria(t *testing.T) {
+func TestWorkOrderValidateRequiresVersionTwoFields(t *testing.T) {
 	wo := &WorkOrder{
-		Title:        "Test",
-		Type:         "bug_fix",
-		TargetModule: "cmd/conductor",
+		Title:         "Test",
+		Type:          "bug_fix",
+		TargetModule:  "cmd/conductor",
+		SchemaVersion: 2,
 	}
 
 	if err := wo.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want acceptance criteria error")
+		t.Fatal("Validate() error = nil, want version-two validation error")
 	}
 }
 
-func TestWorkOrderValidateRejectsBlankEntries(t *testing.T) {
+func TestWorkOrderValidateRejectsBlankKnownFiles(t *testing.T) {
+	required := true
 	wo := &WorkOrder{
-		Title:              "Test",
-		Type:               "bug_fix",
-		TargetModule:       "cmd/conductor",
-		AcceptanceCriteria: []string{" "},
-		KnownFiles:         []string{"cmd/conductor/plan.go", "  "},
+		SchemaVersion: 2,
+		Title:         "Test",
+		Type:          "bug_fix",
+		TargetModule:  "cmd/conductor",
+		KnownFiles:    []string{"cmd/conductor/plan.go", "  "},
+		Requirements: []WorkOrderRequirement{
+			{ID: "REQ-1", Text: "Criterion stays valid"},
+		},
+		TypedAcceptanceCriteria: []TypedAcceptanceCriterion{
+			{
+				ID:             "AC-1",
+				Description:    "Criterion stays valid",
+				RequirementIDs: []string{"REQ-1"},
+				Required:       &required,
+				Verification:   AcceptanceVerification{Kind: "diff_review"},
+			},
+		},
 	}
 
 	if err := wo.Validate(); err == nil {
@@ -34,7 +48,7 @@ func TestWorkOrderValidateRejectsBlankEntries(t *testing.T) {
 	}
 }
 
-func TestWorkOrderYAMLUnmarshalVersion1DefaultsSchema(t *testing.T) {
+func TestWorkOrderYAMLUnmarshalRejectsLegacySchema(t *testing.T) {
 	data := []byte(`
 title: Test
 type: bug_fix
@@ -48,18 +62,9 @@ constraints:
 `)
 
 	var wo WorkOrder
-	if err := yaml.Unmarshal(data, &wo); err != nil {
-		t.Fatalf("yaml.Unmarshal() error = %v", err)
-	}
-
-	if wo.EffectiveSchemaVersion() != 1 {
-		t.Fatalf("EffectiveSchemaVersion() = %d, want 1", wo.EffectiveSchemaVersion())
-	}
-	if len(wo.TypedAcceptanceCriteria) != 0 {
-		t.Fatalf("TypedAcceptanceCriteria = %+v, want empty", wo.TypedAcceptanceCriteria)
-	}
-	if len(wo.AcceptanceCriteria) != 1 || wo.AcceptanceCriteria[0] != "make test passes" {
-		t.Fatalf("AcceptanceCriteria = %+v, want legacy scalar criteria", wo.AcceptanceCriteria)
+	err := yaml.Unmarshal(data, &wo)
+	if err == nil || (!strings.Contains(err.Error(), "schema_version must be 2") && !strings.Contains(err.Error(), "acceptance_criteria entries must be mappings")) {
+		t.Fatalf("yaml.Unmarshal() error = %v, want legacy work-order rejection", err)
 	}
 }
 
@@ -92,9 +97,6 @@ constraints:
 		t.Fatalf("yaml.Unmarshal() error = %v", err)
 	}
 
-	if wo.EffectiveSchemaVersion() != 2 {
-		t.Fatalf("EffectiveSchemaVersion() = %d, want 2", wo.EffectiveSchemaVersion())
-	}
 	if len(wo.Requirements) != 1 || wo.Requirements[0].ID != "REQ-1" {
 		t.Fatalf("Requirements = %+v, want REQ-1", wo.Requirements)
 	}
@@ -109,6 +111,23 @@ constraints:
 	}
 	if err := wo.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestWorkOrderJSONUnmarshalRejectsScalarAcceptanceCriteria(t *testing.T) {
+	data := []byte(`{
+		"schema_version": 2,
+		"title": "Test",
+		"type": "bug_fix",
+		"target_module": "cmd/conductor",
+		"requirements": [{"id": "REQ-1", "text": "Use typed criteria"}],
+		"acceptance_criteria": ["make test passes"]
+	}`)
+
+	var wo WorkOrder
+	err := json.Unmarshal(data, &wo)
+	if err == nil || !strings.Contains(err.Error(), "invalid acceptance_criteria payload") {
+		t.Fatalf("json.Unmarshal() error = %v, want typed-only acceptance criteria error", err)
 	}
 }
 

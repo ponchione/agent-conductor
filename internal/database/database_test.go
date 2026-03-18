@@ -8,7 +8,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestNewDB_UpgradesLegacySessionColumns(t *testing.T) {
+func TestNewDB_ResetsLegacyDatabaseToCanonicalSchema(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "conductor.db")
@@ -49,15 +49,28 @@ func TestNewDB_UpgradesLegacySessionColumns(t *testing.T) {
 			t.Fatalf("legacy schema exec error: %v", err)
 		}
 	}
-
-	upgradedDB, err := NewDB(dbPath)
-	if err != nil {
-		t.Fatalf("NewDB() upgrade error: %v", err)
+	if _, err := legacyDB.Exec(`INSERT INTO workflows (id, original_intent, original_file, current_state, target_repo, git_branch) VALUES ('wf-1', 'legacy', 'spec.md', 'pending', 'repo', 'feature/legacy')`); err != nil {
+		t.Fatalf("legacy insert error: %v", err)
 	}
-	t.Cleanup(func() { _ = upgradedDB.Close() })
 
-	assertColumnExists(t, upgradedDB.conn, "pipeline_runs", "session_id")
-	assertColumnExists(t, upgradedDB.conn, "plan_runs", "session_id")
+	resetDB, err := NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB() reset error: %v", err)
+	}
+	t.Cleanup(func() { _ = resetDB.Close() })
+
+	assertColumnExists(t, resetDB.conn, "pipeline_runs", "session_id")
+	assertColumnExists(t, resetDB.conn, "plan_runs", "session_id")
+	assertColumnExists(t, resetDB.conn, "sessions", "state")
+	assertColumnExists(t, resetDB.conn, "artifacts", "metadata_json")
+
+	var workflowCount int
+	if err := resetDB.conn.QueryRow(`SELECT COUNT(*) FROM workflows`).Scan(&workflowCount); err != nil {
+		t.Fatalf("workflow count query error: %v", err)
+	}
+	if workflowCount != 0 {
+		t.Fatalf("workflowCount = %d, want 0 after clean-slate reset", workflowCount)
+	}
 }
 
 func assertColumnExists(t *testing.T, db *sql.DB, tableName, columnName string) {

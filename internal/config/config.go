@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,7 +16,6 @@ type ProjectConfig struct {
 	Conventions Conventions `yaml:"conventions"`
 	Prompts     Prompts     `yaml:"prompts"`
 	Verify      Verify      `yaml:"verify"`
-	LocalModel  LocalModel  `yaml:"local_model"`
 	EmbedModel  EmbedModel  `yaml:"embed_model"`
 	Safety      Safety      `yaml:"safety"`
 	Git         Git         `yaml:"git"`
@@ -52,8 +51,6 @@ type Conventions struct {
 }
 
 type Prompts struct {
-	Scope            string `yaml:"scope"`
-	Verify           string `yaml:"verify"`
 	Build            string `yaml:"build"`
 	Plan             string `yaml:"plan"`
 	PlanAudit        string `yaml:"plan_audit"`
@@ -86,13 +83,6 @@ type EmbedModel struct {
 	Endpoint       string `yaml:"endpoint"`
 	ModelName      string `yaml:"model_name"`
 	TimeoutSeconds int    `yaml:"timeout_seconds"`
-}
-
-type LocalModel struct {
-	Endpoint       string  `yaml:"endpoint"`
-	ModelName      string  `yaml:"model_name"`
-	Temperature    float64 `yaml:"temperature"`
-	TimeoutSeconds int     `yaml:"timeout_seconds"`
 }
 
 type Safety struct {
@@ -160,11 +150,6 @@ func Load(projectPath string) (*ProjectConfig, error) {
 	}
 
 	cfg := &ProjectConfig{
-		LocalModel: LocalModel{
-			Endpoint:       "http://localhost:8080/v1",
-			Temperature:    0.0,
-			TimeoutSeconds: 60,
-		},
 		EmbedModel: EmbedModel{
 			Endpoint:       "http://localhost:8081/v1",
 			ModelName:      "nomic-embed-code",
@@ -236,11 +221,6 @@ func Load(projectPath string) (*ProjectConfig, error) {
 	return cfg, nil
 }
 
-// GetTimeout returns the configured timeout as a duration.
-func (lm LocalModel) GetTimeout() time.Duration {
-	return time.Duration(lm.TimeoutSeconds) * time.Second
-}
-
 // expandProviderEnvVars expands environment variables in provider string fields.
 func expandProviderEnvVars(m *Models) {
 	for name, p := range m.Providers {
@@ -264,6 +244,36 @@ func Validate(cfg *ProjectConfig) error {
 	if cfg.Project.Path == "" {
 		return fmt.Errorf("project.path is required")
 	}
+	return nil
+}
+
+// ValidateModelRouting checks that provider-based model routing is configured
+// for the given roles. Provider types must always be explicit.
+func ValidateModelRouting(cfg *ProjectConfig, requiredRoles []string) error {
+	if cfg == nil {
+		return fmt.Errorf("config is required")
+	}
+
+	if len(cfg.Models.Providers) == 0 {
+		return fmt.Errorf("models.providers is required")
+	}
+
+	for name, provider := range cfg.Models.Providers {
+		if strings.TrimSpace(provider.Type) == "" {
+			return fmt.Errorf("models.providers.%s.type is required", name)
+		}
+	}
+
+	for _, role := range requiredRoles {
+		providerName := strings.TrimSpace(cfg.Models.Roles[role])
+		if providerName == "" {
+			return fmt.Errorf("models.roles.%s is required", role)
+		}
+		if _, ok := cfg.Models.Providers[providerName]; !ok {
+			return fmt.Errorf("models.roles.%s references unknown provider %q", role, providerName)
+		}
+	}
+
 	return nil
 }
 

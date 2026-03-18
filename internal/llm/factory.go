@@ -9,11 +9,10 @@ import (
 )
 
 // NewClientFromProvider creates the appropriate Client implementation based on
-// the provider config's Type field. An empty type defaults to "openai" for
-// backward compatibility.
+// the provider config's explicit Type field.
 func NewClientFromProvider(pc config.ProviderConfig, projectPath string) (Client, error) {
 	switch pc.Type {
-	case "", "openai":
+	case "openai":
 		return NewProviderClient(Provider{
 			Endpoint:         pc.Endpoint,
 			Model:            pc.Model,

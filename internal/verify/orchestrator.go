@@ -323,7 +323,7 @@ func (o *VerifyOrchestrator) prepareSegments(
 	diff string,
 ) ([]DiffSegment, []models.CriterionResult, error) {
 	segments := segmentDiff(diff)
-	if wo == nil || wo.EffectiveSchemaVersion() < 2 || len(wo.TypedAcceptanceCriteria) == 0 {
+	if wo == nil || len(wo.TypedAcceptanceCriteria) == 0 {
 		return segments, nil, nil
 	}
 

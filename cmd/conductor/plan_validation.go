@@ -45,12 +45,9 @@ func validatePlanDocument(doc *planDocument, cfg *config.ProjectConfig) error {
 			return fmt.Errorf("work order %d (%q) is oversized: %d acceptance criteria exceeds limit %d", i+1, wo.Title, len(wo.AcceptanceCriteria), maxPlanAcceptanceCriteria)
 		}
 
-		if len(wo.Covers) == 0 && len(doc.Requirements) > 0 {
-			return fmt.Errorf("work order %d (%q) is missing requirement coverage", i+1, wo.Title)
-		}
-		for _, reqID := range wo.Covers {
-			if _, ok := requirementCoverage[reqID]; ok {
-				requirementCoverage[reqID]++
+		for _, req := range wo.Requirements {
+			if _, ok := requirementCoverage[req.ID]; ok {
+				requirementCoverage[req.ID]++
 			}
 		}
 

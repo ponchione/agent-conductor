@@ -43,13 +43,10 @@ func boolToInt(b bool) int64 {
 }
 
 func (w *Worker) runPreChecks(ctx context.Context, wo *models.WorkOrder) []verify.PreCheckResult {
-	if wo != nil && wo.EffectiveSchemaVersion() >= 2 && len(wo.TypedAcceptanceCriteria) > 0 {
-		return w.runTypedPreChecks(ctx, wo.TypedAcceptanceCriteria)
-	}
 	if wo == nil {
 		return nil
 	}
-	return w.runLegacyPreChecks(ctx, wo.AcceptanceCriteria)
+	return w.runTypedPreChecks(ctx, wo.TypedAcceptanceCriteria)
 }
 
 func (w *Worker) runTypedPreChecks(ctx context.Context, criteria []models.TypedAcceptanceCriterion) []verify.PreCheckResult {
@@ -63,43 +60,6 @@ func (w *Worker) runTypedPreChecks(ctx context.Context, criteria []models.TypedA
 		}
 	}
 	return results
-}
-
-func (w *Worker) runLegacyPreChecks(ctx context.Context, criteria []string) []verify.PreCheckResult {
-	var results []verify.PreCheckResult
-	for _, criterion := range criteria {
-		argv, ok := legacyPrecheckArgv(criterion)
-		if !ok {
-			continue
-		}
-		required := true
-		results = append(results, w.executePreCheckCommand(
-			ctx,
-			verify.PreCheckResult{
-				Criterion:        criterion,
-				Required:         &required,
-				VerificationKind: "legacy",
-			},
-			"",
-			config.VerifyCommand{Argv: argv},
-			false,
-		))
-	}
-	return results
-}
-
-func legacyPrecheckArgv(criterion string) ([]string, bool) {
-	lower := strings.ToLower(criterion)
-	switch {
-	case strings.Contains(lower, "go test"):
-		return []string{"go", "test", "./..."}, true
-	case strings.Contains(lower, "go build"):
-		return []string{"go", "build", "./..."}, true
-	case strings.Contains(lower, "go vet"):
-		return []string{"go", "vet", "./..."}, true
-	default:
-		return nil, false
-	}
 }
 
 func (w *Worker) runConfiguredPreCheck(ctx context.Context, criterion models.TypedAcceptanceCriterion) verify.PreCheckResult {
@@ -145,7 +105,6 @@ func (w *Worker) runConfiguredPreCheck(ctx context.Context, criterion models.Typ
 		},
 		checkName,
 		command,
-		true,
 	)
 }
 
@@ -181,7 +140,6 @@ func (w *Worker) executePreCheckCommand(
 	result verify.PreCheckResult,
 	checkName string,
 	command config.VerifyCommand,
-	configured bool,
 ) verify.PreCheckResult {
 	commandCtx, cancel := context.WithTimeout(ctx, w.precheckTimeout(command.TimeoutSeconds))
 	defer cancel()
@@ -189,11 +147,7 @@ func (w *Worker) executePreCheckCommand(
 	out, err := runVerifyCommand(commandCtx, w.precheckWorkdir(command.Workdir), os.Environ(), command.Argv)
 	if err == nil {
 		result.Result = models.CriterionResultMet
-		if configured {
-			result.Notes = fmt.Sprintf("precheck %q passed: %s", checkName, strings.Join(command.Argv, " "))
-		} else {
-			result.Notes = fmt.Sprintf("legacy precheck passed: %s", strings.Join(command.Argv, " "))
-		}
+		result.Notes = fmt.Sprintf("precheck %q passed: %s", checkName, strings.Join(command.Argv, " "))
 		return result
 	}
 
@@ -206,11 +160,7 @@ func (w *Worker) executePreCheckCommand(
 	}
 
 	result.Result = models.CriterionResultUnmet
-	if configured {
-		result.Notes = fmt.Sprintf("precheck %q failed: %s (%s)", checkName, strings.Join(command.Argv, " "), outStr)
-		return result
-	}
-	result.Notes = fmt.Sprintf("legacy precheck failed: %s (%s)", strings.Join(command.Argv, " "), outStr)
+	result.Notes = fmt.Sprintf("precheck %q failed: %s (%s)", checkName, strings.Join(command.Argv, " "), outStr)
 	return result
 }
 

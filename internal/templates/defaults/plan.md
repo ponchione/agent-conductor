@@ -17,10 +17,10 @@ Work in this order before producing work orders:
 3. Summarize the existing system facts from project context that matter.
 4. Identify delivery gaps between the spec and the existing system.
 5. Sequence the work into independently buildable and verifiable work orders.
-6. Map every work order to the requirement IDs it covers.
+6. Map every work order to explicit requirement objects and typed verification.
 
 Return a single JSON object with no markdown and no extra text.
-The JSON must match this exact Phase 1 shape:
+The JSON must match this exact canonical planning shape:
 
 {
   "requirements": [
@@ -41,17 +41,33 @@ The JSON must match this exact Phase 1 shape:
   ],
   "work_orders": [
     {
+      "schema_version": 2,
       "title": "Short imperative title",
       "type": "new_feature | bug_fix | refactor | schema_change | docs",
       "target_module": "primary directory or package this work order changes",
       "reference_module": "existing module to use as a pattern, or empty string",
-      "known_files": ["existing files to read, or files created by earlier work orders"],
+      "known_files": ["existing repository files the agent should inspect"],
+      "requirements": [
+        {
+          "id": "REQ-001",
+          "text": "Exact requirement text copied from the top-level requirements list",
+          "source": "Optional short citation or section label from the spec"
+        }
+      ],
       "acceptance_criteria": [
-        "Machine-verifiable string criterion",
-        "Another machine-verifiable string criterion"
+        {
+          "id": "AC-001",
+          "description": "Machine-verifiable outcome",
+          "requirement_ids": ["REQ-001"],
+          "required": true,
+          "verification": {
+            "kind": "precheck | diff_review | file_compatibility | http_smoke"
+          },
+          "notes": "Optional reviewer guidance",
+          "criticality": "normal | release_blocking"
+        }
       ],
       "constraints": ["things the agent must not do or must preserve"],
-      "covers": ["REQ-001", "REQ-003"],
       "depends_on": ["Add shared domain types"],
       "why_now": "Why this work order belongs at this point in the sequence",
       "size": "S | M | L"
@@ -60,13 +76,21 @@ The JSON must match this exact Phase 1 shape:
 }
 
 Output contract rules:
-- `acceptance_criteria` MUST be an array of strings in Phase 1. Do not emit
-  object-form or typed criteria yet.
+- Every work order MUST set `schema_version` to `2`.
 - `requirements` must contain stable IDs. Use `REQ-001`, `REQ-002`, and so on.
-- Every work order must have at least one `covers` entry, and every requirement
-  must be covered by one or more work orders.
+- Every top-level requirement must appear in one or more
+  `work_orders[].requirements` entries.
+- Each work-order `requirements` entry must copy the matching top-level
+  requirement ID and text exactly.
+- `acceptance_criteria` MUST be typed objects, not legacy string arrays.
+- Every acceptance criterion must include `id`, `description`,
+  `requirement_ids`, `required`, and `verification`.
+- Every `requirement_ids` entry must reference a requirement present in that
+  same work order's `requirements` array.
+- Every work-order requirement must be covered by one or more acceptance
+  criteria in that work order.
 - `known_files` must only mention files that already exist in the repository
-  context or files created by an earlier work order in your sequence.
+  context.
 - `depends_on` entries must reference earlier work-order titles only.
 - `planning_warnings` is optional. Leave it empty unless there is a real gap,
   ambiguity, or risky assumption that the human reviewer should see.
@@ -86,7 +110,14 @@ Acceptance-criteria rules:
 - Every criterion must be objectively checkable as pass or fail.
 - Describe observable outcomes, commands, artifacts, or invariants instead of
   vague quality claims.
-- Include build or test commands when they are the clearest verification method.
+- Include build or test commands as typed `precheck` criteria when configured
+  project commands are the clearest verification method.
+- Use `diff_review` for code or artifact changes that can be assessed from the
+  diff and focused files.
+- Use `file_compatibility` for compatibility claims that require loading stable
+  reference files outside the diff.
+- Use `http_smoke` only for deterministic route checks that should map to
+  `verify.smoke` configuration.
 - Avoid subjective wording such as "clean", "robust", "user-friendly", or
   "handles edge cases".
 - Do not make criteria depend on future work orders.

@@ -242,8 +242,12 @@ func runPlan(cmd *cobra.Command, args []string) (err error) {
 			"type":  workOrders[i].Type,
 		}
 		if len(planDoc.WorkOrders) > i {
-			if len(planDoc.WorkOrders[i].Covers) > 0 {
-				metadata["covers"] = planDoc.WorkOrders[i].Covers
+			if len(planDoc.WorkOrders[i].Requirements) > 0 {
+				reqIDs := make([]string, 0, len(planDoc.WorkOrders[i].Requirements))
+				for _, req := range planDoc.WorkOrders[i].Requirements {
+					reqIDs = append(reqIDs, req.ID)
+				}
+				metadata["requirement_ids"] = reqIDs
 			}
 			if len(planDoc.WorkOrders[i].DependsOn) > 0 {
 				metadata["depends_on"] = planDoc.WorkOrders[i].DependsOn
@@ -549,7 +553,6 @@ func auditWorkOrders(claudePath string, auditPrompt string, spec string, planDoc
 	}
 
 	auditedPlan := resp.toPlanDocument()
-	auditedPlan.InheritMissingMetadata(planDoc)
 	if err := validatePlanDocument(auditedPlan, cfg); err != nil {
 		return planDoc, nil, result, fmt.Errorf("audited plan failed validation: %w", err)
 	}
@@ -558,17 +561,18 @@ func auditWorkOrders(claudePath string, auditPrompt string, spec string, planDoc
 }
 
 // orderedWorkOrder controls YAML field order for output files.
-// The field order matches the canonical work order format:
-// title, type, target_module, reference_module, known_files, acceptance_criteria, constraints.
+// The field order matches the canonical version-2 work order format.
 type orderedWorkOrder struct {
-	Title              string   `yaml:"title"`
-	Type               string   `yaml:"type"`
-	TargetModule       string   `yaml:"target_module"`
-	ReferenceModule    string   `yaml:"reference_module,omitempty"`
-	KnownFiles         []string `yaml:"known_files,omitempty"`
-	AcceptanceCriteria []string `yaml:"acceptance_criteria,omitempty"`
-	Constraints        []string `yaml:"constraints,omitempty"`
-	AuditSource        string   `yaml:"audit_source,omitempty"`
+	SchemaVersion      int                               `yaml:"schema_version"`
+	Title              string                            `yaml:"title"`
+	Type               string                            `yaml:"type"`
+	TargetModule       string                            `yaml:"target_module"`
+	ReferenceModule    string                            `yaml:"reference_module,omitempty"`
+	KnownFiles         []string                          `yaml:"known_files,omitempty"`
+	Requirements       []models.WorkOrderRequirement     `yaml:"requirements,omitempty"`
+	AcceptanceCriteria []models.TypedAcceptanceCriterion `yaml:"acceptance_criteria,omitempty"`
+	Constraints        []string                          `yaml:"constraints,omitempty"`
+	AuditSource        string                            `yaml:"audit_source,omitempty"`
 }
 
 // writeWorkOrderFiles writes each work order to a numbered YAML file.
@@ -580,12 +584,14 @@ func writeWorkOrderFiles(workOrders []models.WorkOrder, outputDir string) ([]str
 	paths := make([]string, 0, len(workOrders))
 	for i, wo := range workOrders {
 		ordered := orderedWorkOrder{
+			SchemaVersion:      wo.SchemaVersion,
 			Title:              wo.Title,
 			Type:               wo.Type,
 			TargetModule:       wo.TargetModule,
 			ReferenceModule:    wo.ReferenceModule,
 			KnownFiles:         wo.KnownFiles,
-			AcceptanceCriteria: wo.AcceptanceCriteria,
+			Requirements:       wo.Requirements,
+			AcceptanceCriteria: wo.TypedAcceptanceCriteria,
 			Constraints:        wo.Constraints,
 			AuditSource:        wo.AuditSource,
 		}

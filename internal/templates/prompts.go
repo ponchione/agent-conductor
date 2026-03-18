@@ -10,100 +10,6 @@ import (
 	"github.com/ponchione/agent-conductor/internal/config"
 )
 
-const DefaultScopePrompt = `
-You are a strict, deterministic codebase analyzer.
-Your ONLY job is to map the provided Work Order to the existing Repository Context.
-
-DO NOT act as a software architect. DO NOT design APIs, middleware, or databases unless they are explicitly requested in the Work Order. DO NOT invent file paths, patterns, or dependencies.
-
-Respond ONLY in valid JSON matching this schema:
-
-FIELD DEFINITIONS:
-- summary: Precise, objective summary of the required changes based strictly on the Work Order.
-- estimated_complexity: must be exactly one of "low", "medium", or "high".
-- files_to_modify: array of objects. EACH object must have "path" (string) and "reason" (string).
-- files_to_reference: array of objects. EACH object must have "path" (string) and "reason" (string).
-- sql_files: array of objects. EACH object must have "path" (string) and "reason" (string).
-- new_files: array of objects. EACH object must have "path" (string) and "purpose" (string).
-  NEVER return bare strings for file arrays.
-  WRONG: ["internal/scoring/hitfactor.go"]
-  RIGHT: [{"path": "internal/scoring/hitfactor.go", "purpose": "Implement Hit Factor scoring logic"}]
-- dependencies: array of strings. MUST BE EMPTY unless explicitly adding a package.
-
-RESPONSE TEMPLATE (use empty arrays as your default baseline):
-{
-  "summary": "",
-  "estimated_complexity": "low",
-  "files_to_modify": [],
-  "files_to_reference": [],
-  "sql_files": [],
-  "new_files": [],
-  "dependencies": [],
-  "build_instructions": "1. Specific step-by-step instructions derived only from the Work Order constraints."
-}
-
-CRITICAL RULES:
-1. "files_to_modify": MUST BE EMPTY unless the Work Order explicitly requires changing an existing file.
-2. "files_to_reference": You MUST extract exact, existing file paths from the Repository Context.
-3. "new_files": Only list exact files explicitly requested in the Work Order.
-
-Analyze the Work Order and Repository Context carefully. Base your output STRICTLY on the provided text.
-You are to only provide the json output. Nothing else. Strictly no markdown.
-`
-
-const DefaultVerifyPrompt = `
-You are a strict QA integration analyzer.
-
-You are provided with:
-1. The original Work Order
-2. The Context Package (the approved implementation plan)
-3. The Git Diff (the actual implementation)
-
-Verify whether the implementation correctly fulfills the Work Order.
-
-You must output a single valid JSON object with NO additional text, markdown, or explanation.
-
-=== FIELD DEFINITIONS ===
-Arrays that are NOT empty MUST contain objects with these exact keys:
-
-unscoped_files — WRONG: ["internal/foo.go"]
-unscoped_files — RIGHT: [{"path": "internal/foo.go", "reason_concerning": "not in scope"}]
-
-criteria_results: [{"criterion_id": "string", "description": "string", "required": true, "result": "met | unmet | unassessable", "verification_kind": "string", "notes": "string"}]
-issues: ["string"]
-concerns: ["string"]
-
-=== RESPONSE TEMPLATE ===
-{
-  "status": "PASS",
-  "summary": "Brief, objective description of the verification outcome",
-  "scope_drift": {
-    "detected": false,
-    "unscoped_files": []
-  },
-  "completeness": {
-    "all_criteria_met": true,
-    "criteria_results": []
-  },
-  "pattern_consistency": {
-    "follows_conventions": true,
-    "issues": []
-  },
-  "concerns": []
-}
-
-Status definitions:
-- "PASS": all required acceptance criteria met, no scope drift, follows conventions
-- "WARN": one or more criteria are unassessable, or only advisory criteria are unmet
-- "FAIL": one or more required acceptance criteria are unmet, broken code, or significant unscoped changes
-
-Do not collapse "unassessable" into "unmet".
-Set "status" to "FAIL" if a required criterion is unmet or the code appears broken.
-Set "status" to "WARN" if required criteria are unassessable or only advisory criteria are unmet.
-
-You must respond with json only. Absolutely no markdown is allowed
-`
-
 const DefaultBuildPrompt = `
 You are a Build Agent implementing a feature.
 The Context Package is a JSON document with three sections: work_order, scope, and directives.
@@ -150,8 +56,25 @@ Return a single JSON object (no markdown, no extra text) matching this schema:
     "type": "bootstrap",
     "target_module": ".",
     "reference_module": "",
-    "known_files": [],
-    "acceptance_criteria": ["list of verifiable assertions"],
+    "known_files": ["files expected to be created during bootstrap"],
+    "requirements": [
+      {
+        "id": "REQ-1",
+        "text": "Concrete bootstrap requirement"
+      }
+    ],
+    "acceptance_criteria": [
+      {
+        "id": "AC-1",
+        "description": "Concrete verifiable bootstrap outcome",
+        "requirement_ids": ["REQ-1"],
+        "required": true,
+        "verification": {
+          "kind": "diff_review",
+          "focus": ["path/or/module"]
+        }
+      }
+    ],
     "constraints": ["list of things to avoid"]
   }
 }
@@ -187,13 +110,10 @@ The project_config will be used to produce this YAML structure:
     module_structure: {module_structure}
     shared_path: "{shared_path}"
     sql_path: "{sql_path}"
-  prompts:
-    scope: templates/scope-prompt.md
-    verify: templates/verify-prompt.md
-    build: templates/build-prompt.md
-  executor:
-    tool: claude-code
-    timeout_minutes: 30
+  verify:
+    commands:
+      build: ...
+      test: ...
   safety:
     max_files_changed: 50
     max_duration_mins: 60
@@ -204,21 +124,30 @@ The project_config will be used to produce this YAML structure:
     max_cost_per_phase_usd: 0.50
     warn_cost_per_phase_usd: 0.10
 
+Important:
+- The generated project.yaml is project-local only.
+- Do NOT include machine-level model providers, embedding endpoints, git defaults,
+  executor defaults, or prompt defaults in your reasoning.
+- Conductor init will supply standard verify.commands entries for common languages
+  such as Go, Python, TypeScript/JavaScript, and Rust.
+
 BOOTSTRAP WORK ORDER RULES:
 - type MUST be "bootstrap".
-- known_files MUST be empty. Acceptance criteria define what to create, not known_files.
-- acceptance_criteria MUST include creation of:
-  templates/scope-prompt.md, templates/verify-prompt.md, templates/build-prompt.md
-  These are conductor pipeline prompt templates that future work orders depend on.
-- acceptance_criteria should also include project scaffolding: dependency manifest,
-  entry point, config, Dockerfile if applicable, and .gitignore.
-- Derive language-appropriate build/test commands for acceptance criteria:
-  Python: "poetry install succeeds", "poetry run pytest passes"
-  Go: "go build ./... passes", "go vet ./... passes"
-  TypeScript: "npm install succeeds", "npm run build passes"
-  Rust: "cargo build passes", "cargo test passes"
-- Each criterion must be objectively verifiable (not subjective like "clean code").
-- constraints should list things to avoid (e.g. "No new external dependencies beyond X").
+- Use schema-version-2 semantics:
+  - include explicit "requirements"
+  - emit typed "acceptance_criteria" objects, not legacy string arrays
+  - every acceptance criterion must include "id", "description",
+    "requirement_ids", "required", and "verification"
+- known_files SHOULD list the concrete files bootstrap is expected to create or
+  touch first (for example dependency manifest, entry point, config, .gitignore,
+  Dockerfile, or key source files).
+- acceptance_criteria should cover project scaffolding such as dependency
+  manifest, entry point, config, Dockerfile if applicable, and .gitignore.
+- Prefer "diff_review" for bootstrap structure and file-creation assertions.
+- You MAY use "precheck" only with "check: build" or "check: test" when
+  the language naturally supports those validations.
+- Each criterion must be objectively verifiable; avoid vague claims.
+- constraints should list concrete things to avoid or preserve.
 
 Respond ONLY with the JSON object. No markdown fences, no commentary.
 `
@@ -258,9 +187,6 @@ var DefaultPlanAuditPrompt string
 
 // LoadedPrompts holds the resolved prompt strings for all pipeline phases.
 type LoadedPrompts struct {
-	// Existing (backward-compatible)
-	Scope     string
-	Verify    string
 	Build     string
 	Plan      string
 	PlanAudit string
@@ -278,14 +204,6 @@ type LoadedPrompts struct {
 
 // LoadPrompts resolves each prompt from disk (if configured) or falls back to the compiled defaults.
 func LoadPrompts(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
-	scope, err := loadPrompt(cfg.Project.Path, "scope", cfg.Prompts.Scope, DefaultScopePrompt)
-	if err != nil {
-		return nil, fmt.Errorf("scope prompt: %w", err)
-	}
-	verify, err := loadPrompt(cfg.Project.Path, "verify", cfg.Prompts.Verify, DefaultVerifyPrompt)
-	if err != nil {
-		return nil, fmt.Errorf("verify prompt: %w", err)
-	}
 	build, err := loadPrompt(cfg.Project.Path, "build", cfg.Prompts.Build, defaultBuild)
 	if err != nil {
 		return nil, fmt.Errorf("build prompt: %w", err)
@@ -329,8 +247,6 @@ func LoadPrompts(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
 	}
 
 	return &LoadedPrompts{
-		Scope:            scope,
-		Verify:           verify,
 		Build:            build,
 		Plan:             plan,
 		PlanAudit:        planAudit,

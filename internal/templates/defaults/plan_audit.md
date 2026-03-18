@@ -29,8 +29,10 @@ Requirement and coverage rules:
 - Every requirement in `requirements` must be concrete, scoped, and useful.
 - Requirement IDs must stay stable. Preserve existing IDs when they still match
   the requirement. Add new IDs only for genuinely missing requirements.
-- Every work order must list the requirement IDs it covers.
-- Every requirement must be covered by one or more work orders.
+- Every top-level requirement must appear in one or more
+  `work_orders[].requirements` entries.
+- Each work-order `requirements` entry must copy the matching top-level
+  requirement ID and text exactly.
 - Delete work orders that only pursue speculative future work, optional polish,
   or architecture that is not required by the spec.
 
@@ -38,20 +40,26 @@ Acceptance-criteria rules:
 - Every criterion must be machine-verifiable or otherwise objectively checkable.
 - Reject vague criteria like "works correctly", "is robust", "handles edge
   cases", or "is production-ready".
-- `acceptance_criteria` MUST remain an array of strings in Phase 1. Do not emit
-  object-form or typed criteria yet.
+- `acceptance_criteria` MUST remain typed objects. Do not emit legacy string
+  arrays.
+- Every acceptance criterion must include `id`, `description`,
+  `requirement_ids`, `required`, and `verification`.
+- Every `requirement_ids` entry must reference a requirement present in that
+  same work order's `requirements` array.
+- Every work-order requirement must be covered by one or more acceptance
+  criteria in that work order.
 - Criteria must not depend on artifacts from later work orders.
 
 Sequencing and scope rules:
 - Work orders must be ordered so each one can be built and verified in sequence.
-- `known_files` may only reference files that already exist in project context
-  or files created by earlier work orders in the corrected sequence.
+- Every work order MUST set `schema_version` to `2`.
+- `known_files` may only reference files that already exist in project context.
 - `depends_on` may only reference earlier work-order titles.
 - You may split, merge, replace, reorder, add, or delete work orders whenever
   that produces a stronger final plan.
 
 Return a single JSON object with no markdown and no extra text.
-The JSON must match this exact Phase 1 audit shape:
+The JSON must match this exact canonical audit shape:
 
 {
   "requirements": [
@@ -72,14 +80,33 @@ The JSON must match this exact Phase 1 audit shape:
   ],
   "work_orders": [
     {
+      "schema_version": 2,
       "title": "Short imperative title",
       "type": "new_feature | bug_fix | refactor | schema_change | docs",
       "target_module": "primary directory or package this work order changes",
       "reference_module": "existing module to use as a pattern, or empty string",
-      "known_files": ["existing files to read, or files created by earlier work orders"],
-      "acceptance_criteria": ["Machine-verifiable string criterion"],
+      "known_files": ["existing repository files the agent should inspect"],
+      "requirements": [
+        {
+          "id": "REQ-001",
+          "text": "Exact requirement text copied from the top-level requirements list",
+          "source": "Optional short citation or section label from the spec"
+        }
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC-001",
+          "description": "Machine-verifiable outcome",
+          "requirement_ids": ["REQ-001"],
+          "required": true,
+          "verification": {
+            "kind": "precheck | diff_review | file_compatibility | http_smoke"
+          },
+          "notes": "Optional reviewer guidance",
+          "criticality": "normal | release_blocking"
+        }
+      ],
       "constraints": ["things the agent must not do or must preserve"],
-      "covers": ["REQ-001"],
       "depends_on": ["Earlier work-order title"],
       "why_now": "Why this work order belongs at this point in the sequence",
       "size": "S | M | L",

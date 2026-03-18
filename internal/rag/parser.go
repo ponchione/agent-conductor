@@ -21,14 +21,13 @@ func NewTreeSitterParser() *TreeSitterParser { return &TreeSitterParser{} }
 
 // ParseFile dispatches to language-specific tree-sitter parsers or the fallback splitter.
 func (p *TreeSitterParser) ParseFile(filePath, language string, content []byte) ([]RawChunk, error) {
-	return ParseFile(filePath, language, content)
+	return parseFile(filePath, language, content)
 }
 
-// ParseFile turns raw file bytes into a slice of RawChunks.
+// parseFile turns raw file bytes into a slice of RawChunks.
 // It dispatches to a language-specific parser or falls back to a sliding-window
 // splitter. It never returns an error for unsupported languages.
-// Kept as a package-level function for backward compatibility (smokeparser).
-func ParseFile(filePath string, language string, content []byte) ([]RawChunk, error) {
+func parseFile(filePath string, language string, content []byte) ([]RawChunk, error) {
 	switch language {
 	case "go":
 		return parseGo(content)

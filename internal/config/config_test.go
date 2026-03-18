@@ -136,3 +136,28 @@ verify:
 		t.Fatalf("smoke.Command.TimeoutSeconds = %d, want 180", smoke.Command.TimeoutSeconds)
 	}
 }
+
+func TestValidateModelRoutingRequiresExplicitProviderTypeAndRoles(t *testing.T) {
+	cfg := &ProjectConfig{
+		Models: Models{
+			Providers: map[string]ProviderConfig{
+				"local": {Model: "deepseek-r1"},
+			},
+			Roles: map[string]string{
+				"describe": "local",
+			},
+		},
+	}
+
+	err := ValidateModelRouting(cfg, []string{"describe"})
+	if err == nil || err.Error() != "models.providers.local.type is required" {
+		t.Fatalf("ValidateModelRouting() error = %v, want explicit provider type error", err)
+	}
+
+	cfg.Models.Providers["local"] = ProviderConfig{Type: "openai", Model: "deepseek-r1"}
+	delete(cfg.Models.Roles, "describe")
+	err = ValidateModelRouting(cfg, []string{"describe"})
+	if err == nil || err.Error() != "models.roles.describe is required" {
+		t.Fatalf("ValidateModelRouting() error = %v, want missing role error", err)
+	}
+}
