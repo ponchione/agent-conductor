@@ -30,37 +30,42 @@ func validatePlanDocument(doc *planDocument, cfg *config.ProjectConfig) error {
 
 	seenTitles := make(map[string]int)
 	seenKnownFileSets := make(map[string]int)
+	tasks := doc.Tasks()
+	taskIndexByID := make(map[string]int, len(tasks))
+	for i, task := range tasks {
+		taskIndexByID[task.ID] = i
+	}
 
-	for i, wo := range doc.WorkOrders {
-		titleKey := strings.ToLower(strings.TrimSpace(wo.Title))
+	for i, task := range tasks {
+		titleKey := strings.ToLower(strings.TrimSpace(task.Title))
 		if prior, ok := seenTitles[titleKey]; ok {
-			return fmt.Errorf("work order %d (%q) overlaps with work order %d via duplicate title", i+1, wo.Title, prior+1)
+			return fmt.Errorf("task %d (%q) overlaps with task %d via duplicate title", i+1, task.Title, prior+1)
 		}
 		seenTitles[titleKey] = i
 
-		if len(wo.KnownFiles) > maxPlanKnownFilesPerWorkOrder {
-			return fmt.Errorf("work order %d (%q) is oversized: %d known_files exceeds limit %d", i+1, wo.Title, len(wo.KnownFiles), maxPlanKnownFilesPerWorkOrder)
+		if len(task.KnownFiles) > maxPlanKnownFilesPerWorkOrder {
+			return fmt.Errorf("task %d (%q) is oversized: %d known_files exceeds limit %d", i+1, task.Title, len(task.KnownFiles), maxPlanKnownFilesPerWorkOrder)
 		}
-		if len(wo.AcceptanceCriteria) > maxPlanAcceptanceCriteria {
-			return fmt.Errorf("work order %d (%q) is oversized: %d acceptance criteria exceeds limit %d", i+1, wo.Title, len(wo.AcceptanceCriteria), maxPlanAcceptanceCriteria)
+		if len(task.AcceptanceCriteria) > maxPlanAcceptanceCriteria {
+			return fmt.Errorf("task %d (%q) is oversized: %d acceptance criteria exceeds limit %d", i+1, task.Title, len(task.AcceptanceCriteria), maxPlanAcceptanceCriteria)
 		}
 
-		for _, req := range wo.Requirements {
+		for _, req := range task.Requirements {
 			if _, ok := requirementCoverage[req.ID]; ok {
 				requirementCoverage[req.ID]++
 			}
 		}
 
-		if err := validateKnownFiles(wo, cfg); err != nil {
-			return fmt.Errorf("work order %d (%q): %w", i+1, wo.Title, err)
+		if err := validateKnownFiles(task, cfg); err != nil {
+			return fmt.Errorf("task %d (%q): %w", i+1, task.Title, err)
 		}
-		if err := validateDependencyOrdering(i, wo, doc.WorkOrders); err != nil {
-			return fmt.Errorf("work order %d (%q): %w", i+1, wo.Title, err)
+		if err := validateDependencyOrdering(i, task, taskIndexByID); err != nil {
+			return fmt.Errorf("task %d (%q): %w", i+1, task.Title, err)
 		}
 
-		if key := normalizedKnownFileSet(wo.KnownFiles); key != "" {
+		if key := normalizedKnownFileSet(task.KnownFiles); key != "" {
 			if prior, ok := seenKnownFileSets[key]; ok {
-				return fmt.Errorf("work order %d (%q) obviously overlaps with work order %d via identical known_files", i+1, wo.Title, prior+1)
+				return fmt.Errorf("task %d (%q) obviously overlaps with task %d via identical known_files", i+1, task.Title, prior+1)
 			}
 			seenKnownFileSets[key] = i
 		}
@@ -75,8 +80,8 @@ func validatePlanDocument(doc *planDocument, cfg *config.ProjectConfig) error {
 	return nil
 }
 
-func validateKnownFiles(wo planWorkOrder, cfg *config.ProjectConfig) error {
-	for _, knownFile := range wo.KnownFiles {
+func validateKnownFiles(task planTask, cfg *config.ProjectConfig) error {
+	for _, knownFile := range task.KnownFiles {
 		cleaned := filepath.Clean(strings.TrimSpace(knownFile))
 		if cleaned == "." || cleaned == "" {
 			return fmt.Errorf("known_files contains an invalid path %q", knownFile)
@@ -103,24 +108,18 @@ func validateKnownFiles(wo planWorkOrder, cfg *config.ProjectConfig) error {
 	return nil
 }
 
-func validateDependencyOrdering(index int, wo planWorkOrder, workOrders []planWorkOrder) error {
-	if len(wo.DependsOn) == 0 {
+func validateDependencyOrdering(index int, task planTask, taskIndexByID map[string]int) error {
+	if len(task.DependsOn) == 0 {
 		return nil
 	}
 
-	byTitle := make(map[string]int, len(workOrders))
-	for i, candidate := range workOrders {
-		byTitle[strings.ToLower(strings.TrimSpace(candidate.Title))] = i
-	}
-
-	for _, dep := range wo.DependsOn {
-		depKey := strings.ToLower(strings.TrimSpace(dep))
-		depIndex, ok := byTitle[depKey]
+	for _, dep := range task.DependsOn {
+		depIndex, ok := taskIndexByID[dep]
 		if !ok {
-			return fmt.Errorf("depends_on references unknown work order %q", dep)
+			return fmt.Errorf("depends_on references unknown task id %q", dep)
 		}
 		if depIndex >= index {
-			return fmt.Errorf("depends_on references work order %q at position %d, which is not earlier in the sequence", dep, depIndex+1)
+			return fmt.Errorf("depends_on references task %q at position %d, which is not earlier in the sequence", dep, depIndex+1)
 		}
 	}
 

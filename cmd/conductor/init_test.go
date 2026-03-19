@@ -39,8 +39,11 @@ func TestWriteInitProjectYAMLUsesCanonicalProjectShape(t *testing.T) {
 	if !strings.Contains(content, "# Optional planner prompt overrides. Leave commented to use embedded defaults.") {
 		t.Fatalf("project.yaml missing prompts guidance comment:\n%s", content)
 	}
-	if !strings.Contains(content, "# plan: \".prompts/plan-prompt.md\"") {
-		t.Fatalf("project.yaml missing plan prompt example:\n%s", content)
+	if !strings.Contains(content, "# plan_epic: \".prompts/plan_epic-prompt.md\"") {
+		t.Fatalf("project.yaml missing plan_epic prompt example:\n%s", content)
+	}
+	if !strings.Contains(content, "# plan_task: \".prompts/plan_task-prompt.md\"") {
+		t.Fatalf("project.yaml missing plan_task prompt example:\n%s", content)
 	}
 	if !strings.Contains(content, "# plan_audit: \".prompts/plan_audit-prompt.md\"") {
 		t.Fatalf("project.yaml missing plan_audit prompt example:\n%s", content)

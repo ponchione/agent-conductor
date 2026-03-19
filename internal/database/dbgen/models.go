@@ -35,6 +35,9 @@ type PipelineRun struct {
 	WorkflowID               string          `json:"workflow_id"`
 	Project                  string          `json:"project"`
 	WorkOrderType            sql.NullString  `json:"work_order_type"`
+	PlanFile                 sql.NullString  `json:"plan_file"`
+	PlanTaskID               sql.NullString  `json:"plan_task_id"`
+	PlanEpicID               sql.NullString  `json:"plan_epic_id"`
 	ScopeStartedAt           sql.NullString  `json:"scope_started_at"`
 	ScopeCompletedAt         sql.NullString  `json:"scope_completed_at"`
 	BuildStartedAt           sql.NullString  `json:"build_started_at"`
@@ -76,10 +79,14 @@ type PlanRun struct {
 	Project                  sql.NullString  `json:"project"`
 	SpecFingerprint          sql.NullString  `json:"spec_fingerprint"`
 	GenerationModel          sql.NullString  `json:"generation_model"`
+	EpicGenerationModel      sql.NullString  `json:"epic_generation_model"`
+	TaskGenerationModel      sql.NullString  `json:"task_generation_model"`
 	AuditModel               sql.NullString  `json:"audit_model"`
 	GenerationSessionID      sql.NullString  `json:"generation_session_id"`
 	AuditSessionID           sql.NullString  `json:"audit_session_id"`
 	WorkOrdersGenerated      sql.NullInt64   `json:"work_orders_generated"`
+	EpicCount                sql.NullInt64   `json:"epic_count"`
+	TaskCount                sql.NullInt64   `json:"task_count"`
 	PreAuditWorkOrderCount   sql.NullInt64   `json:"pre_audit_work_order_count"`
 	PostAuditWorkOrderCount  sql.NullInt64   `json:"post_audit_work_order_count"`
 	AuditChangeText          sql.NullString  `json:"audit_change_text"`
@@ -87,14 +94,23 @@ type PlanRun struct {
 	AuditWorkOrdersModified  sql.NullInt64   `json:"audit_work_orders_modified"`
 	AuditWorkOrdersUnchanged sql.NullInt64   `json:"audit_work_orders_unchanged"`
 	GenerationCostUsd        sql.NullFloat64 `json:"generation_cost_usd"`
+	EpicGenerationCostUsd    sql.NullFloat64 `json:"epic_generation_cost_usd"`
+	TaskGenerationCostUsd    sql.NullFloat64 `json:"task_generation_cost_usd"`
 	AuditCostUsd             sql.NullFloat64 `json:"audit_cost_usd"`
 	GenerationDurationMs     sql.NullInt64   `json:"generation_duration_ms"`
+	EpicGenerationDurationMs sql.NullInt64   `json:"epic_generation_duration_ms"`
+	TaskGenerationDurationMs sql.NullInt64   `json:"task_generation_duration_ms"`
 	AuditDurationMs          sql.NullInt64   `json:"audit_duration_ms"`
 	GenerationRetryCount     int64           `json:"generation_retry_count"`
 	AuditTokensIn            sql.NullInt64   `json:"audit_tokens_in"`
 	AuditTokensOut           sql.NullInt64   `json:"audit_tokens_out"`
 	GenerationTokensIn       sql.NullInt64   `json:"generation_tokens_in"`
 	GenerationTokensOut      sql.NullInt64   `json:"generation_tokens_out"`
+	EpicGenerationTokensIn   sql.NullInt64   `json:"epic_generation_tokens_in"`
+	EpicGenerationTokensOut  sql.NullInt64   `json:"epic_generation_tokens_out"`
+	TaskGenerationCallCount  sql.NullInt64   `json:"task_generation_call_count"`
+	TaskGenerationTokensIn   sql.NullInt64   `json:"task_generation_tokens_in"`
+	TaskGenerationTokensOut  sql.NullInt64   `json:"task_generation_tokens_out"`
 	CreatedAt                string          `json:"created_at"`
 }
 

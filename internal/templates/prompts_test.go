@@ -9,7 +9,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/config"
 )
 
-func TestLoadPromptsFallsBackToEmbeddedPlannerPrompts(t *testing.T) {
+func TestLoadPromptsFallsBackToEmbeddedHierarchicalPlannerPrompts(t *testing.T) {
 	cfg := &config.ProjectConfig{}
 	cfg.Project.Path = t.TempDir()
 
@@ -18,35 +18,44 @@ func TestLoadPromptsFallsBackToEmbeddedPlannerPrompts(t *testing.T) {
 		t.Fatalf("LoadPrompts() error = %v", err)
 	}
 
-	if prompts.Plan != DefaultPlanPrompt {
-		t.Fatalf("Plan prompt did not use embedded default fallback")
+	if prompts.PlanEpic != DefaultPlanEpicPrompt {
+		t.Fatalf("PlanEpic prompt did not use embedded default fallback")
+	}
+	if prompts.PlanTask != DefaultPlanTaskPrompt {
+		t.Fatalf("PlanTask prompt did not use embedded default fallback")
 	}
 	if prompts.PlanAudit != DefaultPlanAuditPrompt {
 		t.Fatalf("PlanAudit prompt did not use embedded default fallback")
 	}
 }
 
-func TestLoadPromptsLoadsConfiguredPlannerPromptPaths(t *testing.T) {
+func TestLoadPromptsLoadsConfiguredHierarchicalPlannerPromptPaths(t *testing.T) {
 	projectDir := t.TempDir()
-	planPath := filepath.Join(projectDir, "templates", "plan-prompt.md")
+	planEpicPath := filepath.Join(projectDir, "templates", "plan-epic.md")
+	planTaskPath := filepath.Join(projectDir, "templates", "plan-task.md")
 	planAuditPath := filepath.Join(projectDir, "templates", "plan-audit.md")
-	if err := os.MkdirAll(filepath.Dir(planPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(planEpicPath), 0755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 
-	wantPlan := "custom plan prompt"
+	wantPlanEpic := "custom plan epic prompt"
+	wantPlanTask := "custom plan task prompt"
 	wantPlanAudit := "custom plan audit prompt"
-	if err := os.WriteFile(planPath, []byte(wantPlan), 0644); err != nil {
-		t.Fatalf("WriteFile(plan) error = %v", err)
+	if err := os.WriteFile(planEpicPath, []byte(wantPlanEpic), 0644); err != nil {
+		t.Fatalf("WriteFile(plan epic) error = %v", err)
+	}
+	if err := os.WriteFile(planTaskPath, []byte(wantPlanTask), 0644); err != nil {
+		t.Fatalf("WriteFile(plan task) error = %v", err)
 	}
 	if err := os.WriteFile(planAuditPath, []byte(wantPlanAudit), 0644); err != nil {
-		t.Fatalf("WriteFile(plan_audit) error = %v", err)
+		t.Fatalf("WriteFile(plan audit) error = %v", err)
 	}
 
 	cfg := &config.ProjectConfig{
 		Project: config.Project{Path: projectDir},
 		Prompts: config.Prompts{
-			Plan:      "templates/plan-prompt.md",
+			PlanEpic:  "templates/plan-epic.md",
+			PlanTask:  "templates/plan-task.md",
 			PlanAudit: "templates/plan-audit.md",
 		},
 	}
@@ -56,24 +65,31 @@ func TestLoadPromptsLoadsConfiguredPlannerPromptPaths(t *testing.T) {
 		t.Fatalf("LoadPrompts() error = %v", err)
 	}
 
-	if prompts.Plan != wantPlan {
-		t.Fatalf("Plan prompt = %q, want %q", prompts.Plan, wantPlan)
+	if prompts.PlanEpic != wantPlanEpic {
+		t.Fatalf("PlanEpic prompt = %q, want %q", prompts.PlanEpic, wantPlanEpic)
+	}
+	if prompts.PlanTask != wantPlanTask {
+		t.Fatalf("PlanTask prompt = %q, want %q", prompts.PlanTask, wantPlanTask)
 	}
 	if prompts.PlanAudit != wantPlanAudit {
 		t.Fatalf("PlanAudit prompt = %q, want %q", prompts.PlanAudit, wantPlanAudit)
 	}
 }
 
-func TestLoadPromptsPrefersDotPromptsPlannerOverrides(t *testing.T) {
+func TestLoadPromptsPrefersDotPromptsHierarchicalPlannerOverrides(t *testing.T) {
 	projectDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(projectDir, ".prompts"), 0755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 
-	wantPlan := "override plan prompt"
+	wantPlanEpic := "override plan epic prompt"
+	wantPlanTask := "override plan task prompt"
 	wantPlanAudit := "override plan audit prompt"
-	if err := os.WriteFile(filepath.Join(projectDir, ".prompts", "plan-prompt.md"), []byte(wantPlan), 0644); err != nil {
-		t.Fatalf("WriteFile(plan override) error = %v", err)
+	if err := os.WriteFile(filepath.Join(projectDir, ".prompts", "plan_epic-prompt.md"), []byte(wantPlanEpic), 0644); err != nil {
+		t.Fatalf("WriteFile(plan_epic override) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".prompts", "plan_task-prompt.md"), []byte(wantPlanTask), 0644); err != nil {
+		t.Fatalf("WriteFile(plan_task override) error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(projectDir, ".prompts", "plan_audit-prompt.md"), []byte(wantPlanAudit), 0644); err != nil {
 		t.Fatalf("WriteFile(plan_audit override) error = %v", err)
@@ -82,7 +98,8 @@ func TestLoadPromptsPrefersDotPromptsPlannerOverrides(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Project: config.Project{Path: projectDir},
 		Prompts: config.Prompts{
-			Plan:      "templates/ignored-plan.md",
+			PlanEpic:  "templates/ignored-plan-epic.md",
+			PlanTask:  "templates/ignored-plan-task.md",
 			PlanAudit: "templates/ignored-plan-audit.md",
 		},
 	}
@@ -92,19 +109,22 @@ func TestLoadPromptsPrefersDotPromptsPlannerOverrides(t *testing.T) {
 		t.Fatalf("LoadPrompts() error = %v", err)
 	}
 
-	if prompts.Plan != wantPlan {
-		t.Fatalf("Plan prompt = %q, want %q", prompts.Plan, wantPlan)
+	if prompts.PlanEpic != wantPlanEpic {
+		t.Fatalf("PlanEpic prompt = %q, want %q", prompts.PlanEpic, wantPlanEpic)
+	}
+	if prompts.PlanTask != wantPlanTask {
+		t.Fatalf("PlanTask prompt = %q, want %q", prompts.PlanTask, wantPlanTask)
 	}
 	if prompts.PlanAudit != wantPlanAudit {
 		t.Fatalf("PlanAudit prompt = %q, want %q", prompts.PlanAudit, wantPlanAudit)
 	}
 }
 
-func TestLoadPromptsReturnsHelpfulErrorForMissingConfiguredPlanPrompt(t *testing.T) {
+func TestLoadPromptsReturnsHelpfulErrorForMissingConfiguredPlanEpicPrompt(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Project: config.Project{Path: t.TempDir()},
 		Prompts: config.Prompts{
-			Plan: "templates/missing-plan.md",
+			PlanEpic: "templates/missing-plan-epic.md",
 		},
 	}
 
@@ -112,8 +132,8 @@ func TestLoadPromptsReturnsHelpfulErrorForMissingConfiguredPlanPrompt(t *testing
 	if err == nil {
 		t.Fatal("LoadPrompts() error = nil, want missing prompt error")
 	}
-	if !strings.Contains(err.Error(), "plan prompt: prompt file not found") {
-		t.Fatalf("LoadPrompts() error = %q, want plan prompt file not found", err)
+	if !strings.Contains(err.Error(), "plan_epic prompt: prompt file not found") {
+		t.Fatalf("LoadPrompts() error = %q, want plan_epic prompt file not found", err)
 	}
 }
 
@@ -130,31 +150,46 @@ func TestLoadPromptsForPlanIgnoresUnrelatedPromptConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadPromptsForPlan() error = %v", err)
 	}
-	if prompts.Plan != DefaultPlanPrompt {
-		t.Fatalf("Plan prompt did not use embedded default fallback")
+	if prompts.PlanEpic != DefaultPlanEpicPrompt {
+		t.Fatalf("PlanEpic prompt did not use embedded default fallback")
+	}
+	if prompts.PlanTask != DefaultPlanTaskPrompt {
+		t.Fatalf("PlanTask prompt did not use embedded default fallback")
 	}
 	if prompts.PlanAudit != DefaultPlanAuditPrompt {
 		t.Fatalf("PlanAudit prompt did not use embedded default fallback")
 	}
 }
 
-func TestDefaultPlanPromptMatchesCanonicalPlanContract(t *testing.T) {
+func TestDefaultPlanEpicPromptMatchesCanonicalPlanContract(t *testing.T) {
 	requiredSnippets := []string{
-		"\"schema_version\": 2",
-		"\"requirements\": [",
-		"\"non_goals\": [",
-		"\"existing_system\": [",
-		"\"planning_warnings\": [",
-		"\"depends_on\": [",
-		"`acceptance_criteria` MUST be typed objects, not legacy string arrays.",
-		"Every work order MUST set `schema_version` to `2`.",
+		"\"epics\": [",
+		"\"epic_ref\": \"server-foundation-api\"",
+		"\"depends_on_epics\": [\"another-epic-ref\"]",
 		"Do not invent speculative work streams",
 		"Do not rewrite or soften settled specification decisions.",
 	}
 
 	for _, snippet := range requiredSnippets {
-		if !strings.Contains(DefaultPlanPrompt, snippet) {
-			t.Fatalf("DefaultPlanPrompt missing required snippet %q", snippet)
+		if !strings.Contains(DefaultPlanEpicPrompt, snippet) {
+			t.Fatalf("DefaultPlanEpicPrompt missing required snippet %q", snippet)
+		}
+	}
+}
+
+func TestDefaultPlanTaskPromptMatchesCanonicalTaskContract(t *testing.T) {
+	requiredSnippets := []string{
+		"\"tasks\": [",
+		"\"task_ref\": \"http-server-scaffold\"",
+		"\"schema_version\": 2",
+		"\"acceptance_criteria\": [",
+		"`acceptance_criteria` MUST be typed objects, not legacy string arrays.",
+		"`depends_on` entries must reference prior `task_ref` values only.",
+	}
+
+	for _, snippet := range requiredSnippets {
+		if !strings.Contains(DefaultPlanTaskPrompt, snippet) {
+			t.Fatalf("DefaultPlanTaskPrompt missing required snippet %q", snippet)
 		}
 	}
 }
@@ -163,8 +198,8 @@ func TestDefaultPlanAuditPromptMatchesCanonicalAuditContract(t *testing.T) {
 	requiredSnippets := []string{
 		"Requirement IDs must stay stable.",
 		"`acceptance_criteria` MUST remain typed objects. Do not emit legacy string",
-		"Every work order MUST set `schema_version` to `2`.",
-		"You may split, merge, replace, reorder, add, or delete work orders",
+		"You may add tasks or modify task fields",
+		"You may not add, delete, rename, reorder, merge, or split epics.",
 		"\"audit_action\": \"added | modified | unchanged\"",
 		"Do not invent speculative work streams",
 		"Do not rewrite or soften settled specification decisions.",
@@ -173,6 +208,29 @@ func TestDefaultPlanAuditPromptMatchesCanonicalAuditContract(t *testing.T) {
 	for _, snippet := range requiredSnippets {
 		if !strings.Contains(DefaultPlanAuditPrompt, snippet) {
 			t.Fatalf("DefaultPlanAuditPrompt missing required snippet %q", snippet)
+		}
+	}
+}
+
+func TestDefaultHierarchicalPlannerPromptsDoNotReferenceFlatPlannerContract(t *testing.T) {
+	disallowedSnippets := []string{
+		`"work_orders": [`,
+		"single-pass flat planner",
+		"numbered task yaml",
+	}
+
+	for _, prompt := range []struct {
+		name string
+		body string
+	}{
+		{name: "PlanEpic", body: DefaultPlanEpicPrompt},
+		{name: "PlanTask", body: DefaultPlanTaskPrompt},
+		{name: "PlanAudit", body: DefaultPlanAuditPrompt},
+	} {
+		for _, snippet := range disallowedSnippets {
+			if strings.Contains(prompt.body, snippet) {
+				t.Fatalf("%s prompt unexpectedly contains stale flat-planning snippet %q", prompt.name, snippet)
+			}
 		}
 	}
 }

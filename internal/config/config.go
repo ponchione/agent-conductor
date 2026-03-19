@@ -52,7 +52,8 @@ type Conventions struct {
 
 type Prompts struct {
 	Build            string `yaml:"build"`
-	Plan             string `yaml:"plan"`
+	PlanEpic         string `yaml:"plan_epic"`
+	PlanTask         string `yaml:"plan_task"`
 	PlanAudit        string `yaml:"plan_audit"`
 	ScopeDecompose   string `yaml:"scope_decompose"`
 	ScopeAnalyze     string `yaml:"scope_analyze"`

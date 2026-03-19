@@ -12,6 +12,7 @@ import (
 type Querier interface {
 	ClaimTask(ctx context.Context, arg ClaimTaskParams) (int64, error)
 	CompleteTask(ctx context.Context, arg CompleteTaskParams) error
+	CountSuccessfulApprovedRunsByPlanTaskID(ctx context.Context, arg CountSuccessfulApprovedRunsByPlanTaskIDParams) (int64, error)
 	CreateEvent(ctx context.Context, arg CreateEventParams) error
 	CreatePipelineRun(ctx context.Context, arg CreatePipelineRunParams) error
 	CreateTask(ctx context.Context, arg CreateTaskParams) error
@@ -34,6 +35,7 @@ type Querier interface {
 	InsertPlanRun(ctx context.Context, arg InsertPlanRunParams) error
 	InsertSubCall(ctx context.Context, arg InsertSubCallParams) error
 	ListEvents(ctx context.Context, workflowID sql.NullString) ([]Event, error)
+	ListLatestPipelineRunsByPlanFile(ctx context.Context, planFile sql.NullString) ([]ListLatestPipelineRunsByPlanFileRow, error)
 	ReleaseTask(ctx context.Context, id string) error
 	RetryTask(ctx context.Context, id string) error
 	UpdatePipelineRunBuild(ctx context.Context, arg UpdatePipelineRunBuildParams) error

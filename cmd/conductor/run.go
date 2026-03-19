@@ -25,8 +25,8 @@ import (
 )
 
 var runCmd = &cobra.Command{
-	Use:   "run <work-order-path>",
-	Short: "Execute a work order synchronously",
+	Use:   "run <work-order-or-plan-path>",
+	Short: "Execute a standalone work order or one canonical task from a plan manifest",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		absPath, err := filepath.Abs(args[0])
@@ -35,14 +35,11 @@ var runCmd = &cobra.Command{
 		}
 		data, err := os.ReadFile(absPath)
 		if err != nil {
-			return fmt.Errorf("work order not found: %w", err)
+			return fmt.Errorf("input file not found: %w", err)
 		}
-		var wo models.WorkOrder
-		if err := yaml.Unmarshal(data, &wo); err != nil {
-			return fmt.Errorf("invalid work order YAML: %w", err)
-		}
-		if err := wo.Validate(); err != nil {
-			return fmt.Errorf("work order validation failed: %w", err)
+		input, err := loadRunInput(absPath, data, runTaskID)
+		if err != nil {
+			return err
 		}
 
 		if err := config.Validate(cfg); err != nil {
@@ -50,7 +47,7 @@ var runCmd = &cobra.Command{
 		}
 
 		var prompts *templates.LoadedPrompts
-		if wo.Type == "bootstrap" {
+		if input.WorkOrder.Type == "bootstrap" {
 			prompts, err = templates.LoadPromptsForBootstrap(cfg)
 		} else {
 			prompts, err = templates.LoadPrompts(cfg)
@@ -76,6 +73,10 @@ var runCmd = &cobra.Command{
 			return err
 		}
 		defer db.Close()
+
+		if err := warnOnUnmetPlanDependencies(context.Background(), db, input.PlanOrigin); err != nil {
+			return err
+		}
 
 		gitMgr := git.New(cfg)
 
@@ -113,17 +114,115 @@ var runCmd = &cobra.Command{
 
 		w := worker.New("worker-1", q, db, cfg, assembler, resolver, &cfg.Guardrails, runner, gitMgr, prompts)
 
-		return runSync(absPath, data, wo, w, db, cfg)
+		return runSync(absPath, input.SourceContent, input.WorkOrder, input.PlanOrigin, w, db, cfg)
 	},
 }
 
+var runTaskID string
+
+type planRunOrigin struct {
+	PlanFile          string
+	PlanTaskID        string
+	PlanEpicID        string
+	DependencyTaskIDs []string
+}
+
+type runInput struct {
+	SourceContent []byte
+	WorkOrder     models.WorkOrder
+	PlanOrigin    *planRunOrigin
+}
+
+func init() {
+	runCmd.Flags().StringVar(&runTaskID, "task", "", "Canonical task ID from a hierarchical plan manifest")
+}
+
+func loadRunInput(absPath string, data []byte, taskID string) (runInput, error) {
+	if taskID == "" {
+		var wo models.WorkOrder
+		if err := yaml.Unmarshal(data, &wo); err != nil {
+			return runInput{}, fmt.Errorf("invalid work order YAML: %w", err)
+		}
+		if err := wo.Validate(); err != nil {
+			return runInput{}, fmt.Errorf("work order validation failed: %w", err)
+		}
+		return runInput{
+			SourceContent: data,
+			WorkOrder:     wo,
+		}, nil
+	}
+
+	planDoc, err := parsePlanManifestYAML(data)
+	if err != nil {
+		return runInput{}, fmt.Errorf("invalid plan manifest YAML: %w", err)
+	}
+
+	selected, err := selectPlanTask(planDoc, taskID)
+	if err != nil {
+		return runInput{}, err
+	}
+
+	wo, err := selected.Task.toWorkOrder()
+	if err != nil {
+		return runInput{}, fmt.Errorf("task %q: %w", selected.Task.ID, err)
+	}
+	workOrderYAML, err := yaml.Marshal(&wo)
+	if err != nil {
+		return runInput{}, fmt.Errorf("marshal selected work order: %w", err)
+	}
+
+	return runInput{
+		SourceContent: workOrderYAML,
+		WorkOrder:     wo,
+		PlanOrigin: &planRunOrigin{
+			PlanFile:          absPath,
+			PlanTaskID:        selected.Task.ID,
+			PlanEpicID:        selected.Epic.ID,
+			DependencyTaskIDs: append([]string(nil), selected.Task.DependsOn...),
+		},
+	}, nil
+}
+
+func warnOnUnmetPlanDependencies(ctx context.Context, db *database.DB, origin *planRunOrigin) error {
+	if origin == nil {
+		return nil
+	}
+
+	for _, dependencyTaskID := range origin.DependencyTaskIDs {
+		successCount, err := db.CountSuccessfulApprovedRunsByPlanTaskID(ctx, database.CountSuccessfulApprovedRunsByPlanTaskIDParams{
+			PlanFile:   database.String(origin.PlanFile),
+			PlanTaskID: database.String(dependencyTaskID),
+		})
+		if err != nil {
+			return fmt.Errorf("check prior pipeline runs for dependency %q in plan %q: %w", dependencyTaskID, origin.PlanFile, err)
+		}
+		if successCount > 0 {
+			continue
+		}
+
+		message := fmt.Sprintf(
+			"Warning: dependency %s for task %s has no prior PASS + approved pipeline run.\n",
+			dependencyTaskID,
+			origin.PlanTaskID,
+		)
+		fmt.Print(message)
+		slog.Warn(
+			"plan task dependency has no prior successful approved run",
+			"plan_task_id", origin.PlanTaskID,
+			"dependency_task_id", dependencyTaskID,
+		)
+	}
+
+	return nil
+}
+
 // runSync executes a work order synchronously.
-func runSync(absPath string, sourceContent []byte, wo models.WorkOrder, w *worker.Worker, db *database.DB, cfg *config.ProjectConfig) (err error) {
+func runSync(absPath string, sourceContent []byte, wo models.WorkOrder, origin *planRunOrigin, w *worker.Worker, db *database.DB, cfg *config.ProjectConfig) (err error) {
 	fmt.Printf("Starting synchronous execution for: %s\n\n", absPath)
 
 	ctx := context.Background()
 
-	sessionID, wfID, err := initializeRunSession(ctx, db, cfg, absPath, sourceContent, wo)
+	sessionID, wfID, err := initializeRunSession(ctx, db, cfg, absPath, sourceContent, wo, origin)
 	defer func() {
 		if err == nil || sessionID == "" {
 			return
@@ -158,7 +257,7 @@ func runSync(absPath string, sourceContent []byte, wo models.WorkOrder, w *worke
 	return nil
 }
 
-func initializeRunSession(ctx context.Context, db *database.DB, cfg *config.ProjectConfig, absPath string, sourceContent []byte, wo models.WorkOrder) (string, string, error) {
+func initializeRunSession(ctx context.Context, db *database.DB, cfg *config.ProjectConfig, absPath string, sourceContent []byte, wo models.WorkOrder, origin *planRunOrigin) (string, string, error) {
 	sessionID, err := db.StartSession(ctx, database.SessionKindRunOnly, cfg.Project.Name, absPath)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create session: %w", err)
@@ -185,11 +284,22 @@ func initializeRunSession(ctx context.Context, db *database.DB, cfg *config.Proj
 	}
 
 	pipelineRunID := uuid.New().String()
+	var planFile sql.NullString
+	var planTaskID sql.NullString
+	var planEpicID sql.NullString
+	if origin != nil {
+		planFile = database.String(origin.PlanFile)
+		planTaskID = database.String(origin.PlanTaskID)
+		planEpicID = database.String(origin.PlanEpicID)
+	}
 	if err := db.CreatePipelineRun(ctx, database.CreatePipelineRunParams{
 		ID:            pipelineRunID,
 		WorkflowID:    wfID,
 		Project:       cfg.Project.Name,
 		WorkOrderType: sql.NullString{String: wo.Type, Valid: wo.Type != ""},
+		PlanFile:      planFile,
+		PlanTaskID:    planTaskID,
+		PlanEpicID:    planEpicID,
 	}); err != nil {
 		return sessionID, "", fmt.Errorf("failed to create pipeline_run: %w", err)
 	}

@@ -179,8 +179,11 @@ var defaultVerifySynthesize string
 //go:embed defaults/bootstrap.md
 var defaultBootstrap string
 
-//go:embed defaults/plan.md
-var DefaultPlanPrompt string
+//go:embed defaults/plan_epic.md
+var DefaultPlanEpicPrompt string
+
+//go:embed defaults/plan_task.md
+var DefaultPlanTaskPrompt string
 
 //go:embed defaults/plan_audit.md
 var DefaultPlanAuditPrompt string
@@ -188,7 +191,8 @@ var DefaultPlanAuditPrompt string
 // LoadedPrompts holds the resolved prompt strings for all pipeline phases.
 type LoadedPrompts struct {
 	Build     string
-	Plan      string
+	PlanEpic  string
+	PlanTask  string
 	PlanAudit string
 
 	// Per-step fields for recursive pipeline
@@ -208,9 +212,13 @@ func LoadPrompts(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build prompt: %w", err)
 	}
-	plan, err := loadPrompt(cfg.Project.Path, "plan", cfg.Prompts.Plan, DefaultPlanPrompt)
+	planEpic, err := loadPrompt(cfg.Project.Path, "plan_epic", cfg.Prompts.PlanEpic, DefaultPlanEpicPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("plan prompt: %w", err)
+		return nil, fmt.Errorf("plan_epic prompt: %w", err)
+	}
+	planTask, err := loadPrompt(cfg.Project.Path, "plan_task", cfg.Prompts.PlanTask, DefaultPlanTaskPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("plan_task prompt: %w", err)
 	}
 	planAudit, err := loadPrompt(cfg.Project.Path, "plan_audit", cfg.Prompts.PlanAudit, DefaultPlanAuditPrompt)
 	if err != nil {
@@ -248,7 +256,8 @@ func LoadPrompts(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
 
 	return &LoadedPrompts{
 		Build:            build,
-		Plan:             plan,
+		PlanEpic:         planEpic,
+		PlanTask:         planTask,
 		PlanAudit:        planAudit,
 		ScopeDecompose:   scopeDecompose,
 		ScopeAnalyze:     scopeAnalyze,
@@ -262,9 +271,13 @@ func LoadPrompts(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
 
 // LoadPromptsForPlan loads only the prompts needed by conductor plan.
 func LoadPromptsForPlan(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
-	plan, err := loadPrompt(cfg.Project.Path, "plan", cfg.Prompts.Plan, DefaultPlanPrompt)
+	planEpic, err := loadPrompt(cfg.Project.Path, "plan_epic", cfg.Prompts.PlanEpic, DefaultPlanEpicPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("plan prompt: %w", err)
+		return nil, fmt.Errorf("plan_epic prompt: %w", err)
+	}
+	planTask, err := loadPrompt(cfg.Project.Path, "plan_task", cfg.Prompts.PlanTask, DefaultPlanTaskPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("plan_task prompt: %w", err)
 	}
 	planAudit, err := loadPrompt(cfg.Project.Path, "plan_audit", cfg.Prompts.PlanAudit, DefaultPlanAuditPrompt)
 	if err != nil {
@@ -272,7 +285,8 @@ func LoadPromptsForPlan(cfg *config.ProjectConfig) (*LoadedPrompts, error) {
 	}
 
 	return &LoadedPrompts{
-		Plan:      plan,
+		PlanEpic:  planEpic,
+		PlanTask:  planTask,
 		PlanAudit: planAudit,
 	}, nil
 }

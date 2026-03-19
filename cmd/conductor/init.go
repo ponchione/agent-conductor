@@ -255,7 +255,8 @@ func writeInitProjectYAML(pc *initProjectConfig, outputDir string) error {
 func writeInitPromptYAML(sb *strings.Builder) {
 	sb.WriteString("\nprompts:\n")
 	sb.WriteString("  # Optional planner prompt overrides. Leave commented to use embedded defaults.\n")
-	sb.WriteString("  # plan: \".prompts/plan-prompt.md\"\n")
+	sb.WriteString("  # plan_epic: \".prompts/plan_epic-prompt.md\"\n")
+	sb.WriteString("  # plan_task: \".prompts/plan_task-prompt.md\"\n")
 	sb.WriteString("  # plan_audit: \".prompts/plan_audit-prompt.md\"\n")
 }
 

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,7 +22,6 @@ import (
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/logging"
-	"github.com/ponchione/agent-conductor/internal/models"
 	"github.com/ponchione/agent-conductor/internal/streaming"
 	"github.com/ponchione/agent-conductor/internal/templates"
 	"github.com/spf13/cobra"
@@ -30,11 +30,11 @@ import (
 
 var planCmd = &cobra.Command{
 	Use:   "plan <spec-file>",
-	Short: "Generate work orders from a spec file via Claude Code",
+	Short: "Generate a hierarchical plan manifest from a spec file via Claude Code",
 	Long: `plan reads a freeform specification file, sends it to Claude Code with a
-planning system prompt, and generates individual work order YAML files in
-the output directory. This enables rapid decomposition of feature specs into
-the work order format the conductor pipeline consumes.`,
+planning system prompt, and generates a single hierarchical plan.yaml
+manifest in the output directory. This enables rapid decomposition of
+feature specs into a dependency-ordered execution plan.`,
 	Args: cobra.ExactArgs(1),
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		level := slog.LevelInfo
@@ -62,10 +62,10 @@ var (
 )
 
 func init() {
-	planCmd.Flags().StringVar(&planOutputDir, "output", "./work-orders/", "Output directory for generated work order files")
+	planCmd.Flags().StringVar(&planOutputDir, "output", "./work-orders/", "Output directory for generated plan manifest")
 	planCmd.Flags().IntVar(&planTimeout, "timeout", 300, "Timeout in seconds for the Claude invocation")
-	planCmd.Flags().BoolVar(&planSkipAudit, "skip-audit", false, "Skip the audit pass that reviews generated work orders for completeness")
-	planCmd.Flags().BoolVar(&planAllowUnauditedFallback, "allow-unaudited-fallback", false, "Allow planning to continue with unaudited work orders if the audit pass fails")
+	planCmd.Flags().BoolVar(&planSkipAudit, "skip-audit", false, "Skip the audit pass that reviews the generated plan manifest for completeness")
+	planCmd.Flags().BoolVar(&planAllowUnauditedFallback, "allow-unaudited-fallback", false, "Allow planning to continue with an unaudited plan manifest if the audit pass fails")
 }
 
 func runPlan(cmd *cobra.Command, args []string) (err error) {
@@ -118,65 +118,48 @@ func runPlan(cmd *cobra.Command, args []string) (err error) {
 		return fmt.Errorf("load prompts: %w", err)
 	}
 
-	userMsg := newPlanContextBuilder(cfg).Build(string(specData))
 	timeout := time.Duration(planTimeout) * time.Second
-
-	slog.Info("invoking Claude", "phase", "planning", "timeout", timeout)
-	genResult, err := invokeClaudeWithStats(claudePath, prompts.Plan, userMsg, timeout, cfg.Project.Path, newPlanStreamObserver("planning"))
-	if err != nil {
-		return fmt.Errorf("claude invocation failed: %w", err)
-	}
-	logPlanInvocationComplete("planning", genResult)
-	raw := genResult.Content
-	genRetryCount := 0
-
-	planDoc, parseErr := parsePlanResponse(raw)
-	if parseErr != nil {
-		slog.Warn("first parse attempt failed, retrying with correction", "error", parseErr)
-
-		correctionMsg := fmt.Sprintf(
-			"%s\n\n=== CORRECTION ===\nYour previous response could not be parsed: %s\n\nPrevious response:\n%s\n\nPlease respond with ONLY a valid JSON object matching the schema. No markdown, no commentary.",
-			userMsg, parseErr.Error(), raw,
-		)
-
-		slog.Info("invoking Claude", "phase", "planning_retry", "timeout", timeout)
-		retryResult, retryErr := invokeClaudeWithStats(claudePath, prompts.Plan, correctionMsg, timeout, cfg.Project.Path, newPlanStreamObserver("planning_retry"))
-		if retryErr != nil {
-			return fmt.Errorf("claude retry invocation failed: %w", retryErr)
+	invoker := func(phase, systemPrompt, userMsg string) (*invokeClaudeResult, error) {
+		slog.Info("invoking Claude", "phase", phase, "timeout", timeout)
+		result, invokeErr := invokeClaudeWithStats(claudePath, systemPrompt, userMsg, timeout, cfg.Project.Path, newPlanStreamObserver(phase))
+		if invokeErr != nil {
+			return nil, invokeErr
 		}
-		logPlanInvocationComplete("planning_retry", retryResult)
-		mergeInvokeClaudeResults(genResult, retryResult)
-		genRetryCount++
-		raw = retryResult.Content
+		logPlanInvocationComplete(phase, result)
+		return result, nil
+	}
 
-		planDoc, parseErr = parsePlanResponse(raw)
-		if parseErr != nil {
+	planDoc, generationTrace, genRetryCount, err := generatePlanDocument(specPath, specData, sessionID, cfg, prompts, invoker)
+	if err != nil {
+		var phaseErr *planGenerationPhaseError
+		if errors.As(err, &phaseErr) && phaseErr.Raw != "" {
 			if mkErr := os.MkdirAll(planOutputDir, 0755); mkErr != nil {
-				return fmt.Errorf("parse failed and could not create output dir: parse=%w, mkdir=%v", parseErr, mkErr)
+				return fmt.Errorf("parse failed and could not create output dir: parse=%w, mkdir=%v", err, mkErr)
 			}
-			rawPath := filepath.Join(planOutputDir, "raw-plan-output.txt")
-			if wErr := os.WriteFile(rawPath, []byte(raw), 0644); wErr != nil {
-				return fmt.Errorf("parse failed and could not write raw output: parse=%w, write=%v", parseErr, wErr)
+			filename := "raw-plan-output.txt"
+			if phaseErr.Phase != "" {
+				filename = fmt.Sprintf("raw-plan-output-%s.txt", slugify(phaseErr.Phase))
+			}
+			rawPath := filepath.Join(planOutputDir, filename)
+			if wErr := os.WriteFile(rawPath, []byte(phaseErr.Raw), 0644); wErr != nil {
+				return fmt.Errorf("parse failed and could not write raw output: parse=%w, write=%v", err, wErr)
 			}
 			registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanParseFailure, rawPath, map[string]any{
-				"phase": "planning_retry",
+				"phase": phaseErr.Phase,
 			})
-			return fmt.Errorf("could not parse plan response after retry: %w\nRaw output saved to: %s", parseErr, rawPath)
+			return fmt.Errorf("%w\nRaw output saved to: %s", err, rawPath)
 		}
-	}
-	if err := validatePlanDocument(planDoc, cfg); err != nil {
-		return fmt.Errorf("planner output validation failed: %w", err)
+		return err
 	}
 
-	generationPlanDoc := planDoc
-	preAuditWorkOrderCount := len(planDoc.WorkOrders)
+	preAuditWorkOrderCount := planDoc.TaskCount()
 
 	var summary *auditSummary
 	var auditResult *invokeClaudeResult
 	if planSkipAudit {
 		slog.Info("skipping audit pass (--skip-audit)")
 	} else {
-		slog.Info("invoking Claude", "phase", "audit", "count", len(planDoc.WorkOrders), "timeout", timeout)
+		slog.Info("invoking Claude", "phase", "audit", "count", planDoc.TaskCount(), "timeout", timeout)
 		auditedPlan, auditSummary, auditRes, auditErr := auditWorkOrders(claudePath, prompts.PlanAudit, string(specData), planDoc, cfg, timeout)
 		resolvedPlan, resolvedSummary, resolvedAuditResult, resolveErr := resolveAuditOutcome(planDoc, auditedPlan, auditSummary, auditRes, auditErr, planAllowUnauditedFallback)
 		if resolveErr != nil {
@@ -190,86 +173,23 @@ func runPlan(cmd *cobra.Command, args []string) (err error) {
 		}
 	}
 
-	workOrders, err := planDoc.ToWorkOrders()
+	taskCount := planDoc.TaskCount()
+	planManifestPath, err := writePlanManifest(planDoc, planOutputDir)
 	if err != nil {
-		return fmt.Errorf("translate plan to work orders: %w", err)
+		return fmt.Errorf("failed to write plan manifest: %w", err)
 	}
 
 	// Persist metrics (best-effort).
-	if recErr := recordPlanRun(db, sessionID, cfg.Project.Name, specPath, specData, genResult, auditResult, preAuditWorkOrderCount, len(workOrders), summary, genRetryCount); recErr != nil {
+	if recErr := recordPlanRun(db, sessionID, cfg.Project.Name, specPath, specData, generationTrace, auditResult, len(planDoc.Epics), preAuditWorkOrderCount, taskCount, summary, genRetryCount); recErr != nil {
 		slog.Warn("failed to record plan run metrics", "error", recErr)
 	}
 
-	generationRawPath, err := writePlanSessionArtifact(cfg.Project.DataDir, sessionID, "generation-raw.txt", []byte(raw))
-	if err != nil {
-		slog.Warn("failed to persist raw generation output", "session_id", sessionID, "error", err)
-	} else {
-		registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanRawGeneration, generationRawPath, map[string]any{
-			"phase": "planning",
-		})
-	}
-	structuredGenerationPath, writeErr := writePlanDocumentArtifact(cfg.Project.DataDir, sessionID, "generation-structured.json", generationPlanDoc)
-	if writeErr != nil {
-		slog.Warn("failed to persist structured generation output", "session_id", sessionID, "error", writeErr)
-	} else {
-		registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanStructuredGeneration, structuredGenerationPath, planArtifactMetadata(generationPlanDoc, "planning"))
-	}
-	if auditResult != nil && auditResult.Content != "" {
-		auditRawPath, writeErr := writePlanSessionArtifact(cfg.Project.DataDir, sessionID, "audit-raw.txt", []byte(auditResult.Content))
-		if writeErr != nil {
-			slog.Warn("failed to persist raw audit output", "session_id", sessionID, "error", writeErr)
-		} else {
-			registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanRawAudit, auditRawPath, map[string]any{
-				"phase": "audit",
-			})
-		}
-		structuredAuditPath, structuredErr := writePlanDocumentArtifact(cfg.Project.DataDir, sessionID, "audit-structured.json", planDoc)
-		if structuredErr != nil {
-			slog.Warn("failed to persist structured audit output", "session_id", sessionID, "error", structuredErr)
-		} else {
-			registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanStructuredAudit, structuredAuditPath, planArtifactMetadata(planDoc, "audit"))
-		}
+	if persistErr := persistPlanningArtifacts(ctx, db, sessionID, cfg.Project.DataDir, generationTrace, auditResult, summary, planDoc, planManifestPath); persistErr != nil {
+		slog.Warn("failed to persist planning artifacts", "session_id", sessionID, "error", persistErr)
 	}
 
-	workOrderPaths, err := writeWorkOrderFiles(workOrders, planOutputDir)
-	if err != nil {
-		return fmt.Errorf("failed to write work order files: %w", err)
-	}
-	for i, path := range workOrderPaths {
-		metadata := map[string]any{
-			"index": i + 1,
-			"title": workOrders[i].Title,
-			"type":  workOrders[i].Type,
-		}
-		if len(planDoc.WorkOrders) > i {
-			if len(planDoc.WorkOrders[i].Requirements) > 0 {
-				reqIDs := make([]string, 0, len(planDoc.WorkOrders[i].Requirements))
-				for _, req := range planDoc.WorkOrders[i].Requirements {
-					reqIDs = append(reqIDs, req.ID)
-				}
-				metadata["requirement_ids"] = reqIDs
-			}
-			if len(planDoc.WorkOrders[i].DependsOn) > 0 {
-				metadata["depends_on"] = planDoc.WorkOrders[i].DependsOn
-			}
-			if planDoc.WorkOrders[i].WhyNow != "" {
-				metadata["why_now"] = planDoc.WorkOrders[i].WhyNow
-			}
-			if planDoc.WorkOrders[i].Size != "" {
-				metadata["size"] = planDoc.WorkOrders[i].Size
-			}
-		}
-		if workOrders[i].AuditSource != "" {
-			metadata["audit_source"] = workOrders[i].AuditSource
-		}
-		registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypeGeneratedWorkOrder, path, metadata)
-	}
-
-	fmt.Printf("\nGenerated %d work order(s) in %s:\n\n", len(workOrders), planOutputDir)
-	for i, wo := range workOrders {
-		fmt.Printf("  %03d  %-50s  [%s]\n", i+1, wo.Title, wo.Type)
-	}
-	fmt.Println()
+	fmt.Printf("\nWrote hierarchical plan manifest to %s\n", planManifestPath)
+	fmt.Printf("Epics: %d  Tasks: %d\n\n", len(planDoc.Epics), taskCount)
 
 	if summary != nil {
 		fmt.Printf("Audit: %d added, %d modified, %d unchanged\n", summary.Added, summary.Modified, summary.Unchanged)
@@ -282,6 +202,238 @@ func runPlan(cmd *cobra.Command, args []string) (err error) {
 	return nil
 }
 
+type planningPhaseInvoker func(phase, systemPrompt, userMsg string) (*invokeClaudeResult, error)
+
+type planTaskGenerationTrace struct {
+	EpicID   string
+	EpicRef  string
+	Raw      string
+	Response *rawTaskPlanResponse
+	Result   *invokeClaudeResult
+}
+
+type planGenerationTrace struct {
+	EpicRaw         string
+	EpicResponse    *rawEpicPlanResponse
+	EpicResult      *invokeClaudeResult
+	TaskTraces      []planTaskGenerationTrace
+	AggregateRaw    string
+	AggregateResult *invokeClaudeResult
+}
+
+type planGenerationPhaseError struct {
+	Phase string
+	Raw   string
+	Err   error
+}
+
+func (e *planGenerationPhaseError) Error() string {
+	if e == nil || e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+
+func (e *planGenerationPhaseError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func generatePlanDocument(specPath string, specData []byte, sessionID string, cfg *config.ProjectConfig, prompts *templates.LoadedPrompts, invoker planningPhaseInvoker) (*planDocument, *planGenerationTrace, int, error) {
+	builder := newPlanContextBuilder(cfg)
+
+	epicUserMsg := builder.BuildEpicDecomposition(string(specData))
+	epicResp, epicResult, epicRaw, retryCount, err := invokeEpicPlanningPhase(invoker, prompts.PlanEpic, epicUserMsg)
+	if err != nil {
+		return nil, &planGenerationTrace{EpicRaw: epicRaw}, retryCount, err
+	}
+
+	aggregatedResult := epicResult
+	var rawGeneration strings.Builder
+	appendGenerationOutput(&rawGeneration, "EPIC GENERATION", epicRaw)
+	trace := &planGenerationTrace{
+		EpicRaw:      epicRaw,
+		EpicResponse: epicResp,
+		EpicResult:   epicResult,
+	}
+
+	priorEpics := make([]planEpic, 0, len(epicResp.Epics))
+	taskResponses := make([]*rawTaskPlanResponse, 0, len(epicResp.Epics))
+	nextTaskID := 1
+	for epicIndex, rawEpic := range epicResp.Epics {
+		targetEpic := planEpic{
+			ID:             canonicalEpicID(epicIndex + 1),
+			EpicRef:        rawEpic.EpicRef,
+			Title:          rawEpic.Title,
+			Description:    rawEpic.Description,
+			Covers:         append([]string(nil), rawEpic.Covers...),
+			DependsOnEpics: append([]string(nil), rawEpic.DependsOnEpics...),
+		}
+
+		taskUserMsg := builder.BuildTaskDecomposition(string(specData), targetEpic, priorEpics)
+		taskResp, taskResult, taskRaw, taskRetries, taskErr := invokeTaskPlanningPhase(invoker, targetEpic.ID, prompts.PlanTask, taskUserMsg)
+		retryCount += taskRetries
+		if taskErr != nil {
+			trace.AggregateRaw = rawGeneration.String()
+			trace.AggregateResult = aggregatedResult
+			return nil, trace, retryCount, taskErr
+		}
+		appendGenerationOutput(&rawGeneration, fmt.Sprintf("TASK GENERATION %s", targetEpic.ID), taskRaw)
+		mergeInvokeClaudeResults(aggregatedResult, taskResult)
+		taskResponses = append(taskResponses, taskResp)
+		trace.TaskTraces = append(trace.TaskTraces, planTaskGenerationTrace{
+			EpicID:   targetEpic.ID,
+			EpicRef:  targetEpic.EpicRef,
+			Raw:      taskRaw,
+			Response: taskResp,
+			Result:   taskResult,
+		})
+
+		priorTasks := make([]planTask, len(taskResp.Tasks))
+		for i, rawTask := range taskResp.Tasks {
+			taskID := canonicalTaskID(nextTaskID)
+			nextTaskID++
+
+			task, convErr := rawTask.toPlanTask(taskID, targetEpic.ID)
+			if convErr != nil {
+				trace.AggregateRaw = rawGeneration.String()
+				trace.AggregateResult = aggregatedResult
+				return nil, trace, retryCount, fmt.Errorf("epic %q task %q: %w", targetEpic.EpicRef, rawTask.TaskRef, convErr)
+			}
+			priorTasks[i] = task
+		}
+		targetEpic.Tasks = priorTasks
+		priorEpics = append(priorEpics, targetEpic)
+	}
+
+	specFingerprint := sha256.Sum256(specData)
+	planDoc, err := assemblePlanDocument(planManifestMetadata{
+		SpecFile:        specPath,
+		SpecFingerprint: hex.EncodeToString(specFingerprint[:]),
+		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+		SessionID:       sessionID,
+		GenerationModel: aggregatedResult.Model,
+	}, epicResp, taskResponses)
+	if err != nil {
+		trace.AggregateRaw = rawGeneration.String()
+		trace.AggregateResult = aggregatedResult
+		return nil, trace, retryCount, fmt.Errorf("assemble plan manifest: %w", err)
+	}
+	if err := validatePlanDocument(planDoc, cfg); err != nil {
+		trace.AggregateRaw = rawGeneration.String()
+		trace.AggregateResult = aggregatedResult
+		return nil, trace, retryCount, fmt.Errorf("planner output validation failed: %w", err)
+	}
+
+	trace.AggregateRaw = rawGeneration.String()
+	trace.AggregateResult = aggregatedResult
+	return planDoc, trace, retryCount, nil
+}
+
+func invokeEpicPlanningPhase(invoker planningPhaseInvoker, prompt, userMsg string) (*rawEpicPlanResponse, *invokeClaudeResult, string, int, error) {
+	return invokePlanningPhaseWithRetry("planning_epic", "planning_epic_retry", prompt, userMsg, invoker, parseEpicPlanResponse)
+}
+
+func invokeTaskPlanningPhase(invoker planningPhaseInvoker, epicID, prompt, userMsg string) (*rawTaskPlanResponse, *invokeClaudeResult, string, int, error) {
+	phase := "planning_task_" + epicID
+	retryPhase := phase + "_retry"
+	return invokePlanningPhaseWithRetry(phase, retryPhase, prompt, userMsg, invoker, parseTaskPlanResponse)
+}
+
+func invokePlanningPhaseWithRetry[T any](phase, retryPhase, prompt, userMsg string, invoker planningPhaseInvoker, parse func(string) (*T, error)) (*T, *invokeClaudeResult, string, int, error) {
+	result, err := invoker(phase, prompt, userMsg)
+	if err != nil {
+		return nil, nil, "", 0, fmt.Errorf("claude invocation failed: %w", err)
+	}
+
+	raw := result.Content
+	parsed, parseErr := parse(raw)
+	if parseErr == nil {
+		return parsed, result, raw, 0, nil
+	}
+
+	slog.Warn("first parse attempt failed, retrying with correction", "phase", phase, "error", parseErr)
+	correctionMsg := fmt.Sprintf(
+		"%s\n\n=== CORRECTION ===\nYour previous response could not be parsed: %s\n\nPrevious response:\n%s\n\nPlease respond with ONLY a valid JSON object matching the schema. No markdown, no commentary.",
+		userMsg, parseErr.Error(), raw,
+	)
+
+	retryResult, retryErr := invoker(retryPhase, prompt, correctionMsg)
+	if retryErr != nil {
+		return nil, nil, raw, 1, fmt.Errorf("claude retry invocation failed: %w", retryErr)
+	}
+	mergeInvokeClaudeResults(result, retryResult)
+	raw = retryResult.Content
+
+	parsed, parseErr = parse(raw)
+	if parseErr != nil {
+		return nil, nil, raw, 1, &planGenerationPhaseError{
+			Phase: retryPhase,
+			Raw:   raw,
+			Err:   fmt.Errorf("could not parse plan response after retry: %w", parseErr),
+		}
+	}
+	return parsed, result, raw, 1, nil
+}
+
+func appendGenerationOutput(sb *strings.Builder, title, content string) {
+	if sb.Len() > 0 {
+		sb.WriteString("\n")
+	}
+	fmt.Fprintf(sb, "=== %s ===\n", title)
+	sb.WriteString(content)
+	if !strings.HasSuffix(content, "\n") {
+		sb.WriteString("\n")
+	}
+}
+
+type aggregatedPlanningMetrics struct {
+	Model     string
+	TokensIn  int
+	TokensOut int
+	CostUSD   float64
+	Duration  time.Duration
+	CallCount int
+}
+
+func aggregatePlanningMetrics(results []*invokeClaudeResult) aggregatedPlanningMetrics {
+	var metrics aggregatedPlanningMetrics
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		metrics.CallCount++
+		metrics.TokensIn += result.TokensIn
+		metrics.TokensOut += result.TokensOut
+		metrics.CostUSD += result.CostUSD
+		metrics.Duration += result.Duration
+
+		model := strings.TrimSpace(result.Model)
+		switch {
+		case model == "":
+		case metrics.Model == "":
+			metrics.Model = model
+		case metrics.Model != model:
+			metrics.Model = "multiple"
+		}
+	}
+	return metrics
+}
+
+func taskGenerationMetrics(trace *planGenerationTrace) aggregatedPlanningMetrics {
+	if trace == nil || len(trace.TaskTraces) == 0 {
+		return aggregatedPlanningMetrics{}
+	}
+
+	results := make([]*invokeClaudeResult, 0, len(trace.TaskTraces))
+	for _, taskTrace := range trace.TaskTraces {
+		results = append(results, taskTrace.Result)
+	}
+	return aggregatePlanningMetrics(results)
+}
+
 func resolveAuditOutcome(basePlan, auditedPlan *planDocument, summary *auditSummary, auditResult *invokeClaudeResult, auditErr error, allowFallback bool) (*planDocument, *auditSummary, *invokeClaudeResult, error) {
 	if auditErr == nil {
 		return auditedPlan, summary, auditResult, nil
@@ -289,12 +441,12 @@ func resolveAuditOutcome(basePlan, auditedPlan *planDocument, summary *auditSumm
 	if !allowFallback {
 		return nil, nil, nil, fmt.Errorf("audit pass failed and unaudited fallback is disabled: %w", auditErr)
 	}
-	slog.Warn("audit pass failed, using unaudited work orders due to override", "error", auditErr)
+	slog.Warn("audit pass failed, using unaudited plan manifest due to override", "error", auditErr)
 	return basePlan, nil, auditResult, nil
 }
 
 // recordPlanRun persists plan metrics to the plan_runs table (best-effort).
-func recordPlanRun(db *database.DB, sessionID, project, specFile string, specData []byte, genResult *invokeClaudeResult, auditResult *invokeClaudeResult, preAuditWorkOrderCount, workOrdersGenerated int, summary *auditSummary, generationRetryCount int) error {
+func recordPlanRun(db *database.DB, sessionID, project, specFile string, specData []byte, generationTrace *planGenerationTrace, auditResult *invokeClaudeResult, epicCount, preAuditWorkOrderCount, workOrdersGenerated int, summary *auditSummary, generationRetryCount int) error {
 	id := uuid.New().String()
 	specFingerprint := sha256.Sum256(specData)
 
@@ -304,17 +456,37 @@ func recordPlanRun(db *database.DB, sessionID, project, specFile string, specDat
 		Project:                 database.String(project),
 		SpecFingerprint:         database.String(hex.EncodeToString(specFingerprint[:])),
 		WorkOrdersGenerated:     database.Int64(workOrdersGenerated),
+		EpicCount:               database.Int64(epicCount),
+		TaskCount:               database.Int64(workOrdersGenerated),
 		PreAuditWorkOrderCount:  database.Int64(preAuditWorkOrderCount),
 		PostAuditWorkOrderCount: database.Int64(workOrdersGenerated),
 		GenerationRetryCount:    int64(generationRetryCount),
 	}
-	if genResult != nil {
-		params.GenerationModel = database.String(genResult.Model)
-		params.GenerationTokensIn = database.Int64(genResult.TokensIn)
-		params.GenerationTokensOut = database.Int64(genResult.TokensOut)
-		params.GenerationSessionID = database.String(genResult.SessionID)
-		params.GenerationCostUsd = database.Float64(genResult.CostUSD)
-		params.GenerationDurationMs = database.Int64Value(genResult.Duration.Milliseconds())
+	if generationTrace != nil {
+		if genResult := generationTrace.AggregateResult; genResult != nil {
+			params.GenerationModel = database.String(genResult.Model)
+			params.GenerationTokensIn = database.Int64(genResult.TokensIn)
+			params.GenerationTokensOut = database.Int64(genResult.TokensOut)
+			params.GenerationSessionID = database.String(genResult.SessionID)
+			params.GenerationCostUsd = database.Float64(genResult.CostUSD)
+			params.GenerationDurationMs = database.Int64Value(genResult.Duration.Milliseconds())
+		}
+		if epicResult := generationTrace.EpicResult; epicResult != nil {
+			params.EpicGenerationModel = database.String(epicResult.Model)
+			params.EpicGenerationTokensIn = database.Int64(epicResult.TokensIn)
+			params.EpicGenerationTokensOut = database.Int64(epicResult.TokensOut)
+			params.EpicGenerationCostUsd = database.Float64(epicResult.CostUSD)
+			params.EpicGenerationDurationMs = database.Int64Value(epicResult.Duration.Milliseconds())
+		}
+		taskMetrics := taskGenerationMetrics(generationTrace)
+		if taskMetrics.CallCount > 0 {
+			params.TaskGenerationModel = database.String(taskMetrics.Model)
+			params.TaskGenerationCallCount = database.Int64(taskMetrics.CallCount)
+			params.TaskGenerationTokensIn = database.Int64(taskMetrics.TokensIn)
+			params.TaskGenerationTokensOut = database.Int64(taskMetrics.TokensOut)
+			params.TaskGenerationCostUsd = database.Float64(taskMetrics.CostUSD)
+			params.TaskGenerationDurationMs = database.Int64Value(taskMetrics.Duration.Milliseconds())
+		}
 	}
 	if auditResult != nil {
 		params.AuditModel = database.String(auditResult.Model)
@@ -493,15 +665,40 @@ func mergeInvokeClaudeResults(dst, src *invokeClaudeResult) {
 	}
 }
 
-// auditWorkOrders runs a second LLM pass to audit generated work orders against the spec.
+// auditWorkOrders runs a second LLM pass to audit the assembled plan manifest against the spec.
 func auditWorkOrders(claudePath string, auditPrompt string, spec string, planDoc *planDocument, cfg *config.ProjectConfig, timeout time.Duration) (*planDocument, *auditSummary, *invokeClaudeResult, error) {
-	workOrders, err := planDoc.ToWorkOrders()
+	userMsg, err := buildAuditUserMessage(spec, planDoc, cfg)
 	if err != nil {
-		return planDoc, nil, nil, fmt.Errorf("translate plan to work orders for audit: %w", err)
+		return planDoc, nil, nil, err
 	}
-	woJSON, err := json.MarshalIndent(workOrders, "", "  ")
+
+	result, err := invokeClaudeWithStats(claudePath, auditPrompt, userMsg, timeout, cfg.Project.Path, newPlanStreamObserver("audit"))
 	if err != nil {
-		return planDoc, nil, nil, fmt.Errorf("failed to marshal work orders: %w", err)
+		return planDoc, nil, nil, fmt.Errorf("audit invocation failed: %w", err)
+	}
+
+	cleaned := llm.CleanLLMResponse(result.Content)
+	var resp auditResponse
+	if err := json.Unmarshal([]byte(cleaned), &resp); err != nil {
+		return planDoc, nil, result, fmt.Errorf("audit response parse failed: %w", err)
+	}
+
+	if len(resp.Epics) == 0 {
+		return planDoc, nil, result, fmt.Errorf("audit response contained no epics")
+	}
+
+	auditedPlan := resp.toPlanDocument()
+	if err := validatePlanDocument(auditedPlan, cfg); err != nil {
+		return planDoc, nil, result, fmt.Errorf("audited plan failed validation: %w", err)
+	}
+
+	return auditedPlan, &resp.AuditSummary, result, nil
+}
+
+func buildAuditUserMessage(spec string, planDoc *planDocument, cfg *config.ProjectConfig) (string, error) {
+	planJSON, err := planDoc.MarshalIndented()
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal plan manifest: %w", err)
 	}
 	builder := newPlanContextBuilder(cfg)
 
@@ -531,88 +728,33 @@ func auditWorkOrders(claudePath string, auditPrompt string, spec string, planDoc
 		sb.WriteString("(no matching files)\n")
 	}
 
-	sb.WriteString("\n=== GENERATED WORK ORDERS ===\n")
-	sb.Write(woJSON)
+	sb.WriteString("\n=== GENERATED PLAN ===\n")
+	sb.Write(planJSON)
 	sb.WriteString("\n")
 
-	userMsg := sb.String()
-
-	result, err := invokeClaudeWithStats(claudePath, auditPrompt, userMsg, timeout, cfg.Project.Path, newPlanStreamObserver("audit"))
-	if err != nil {
-		return planDoc, nil, nil, fmt.Errorf("audit invocation failed: %w", err)
-	}
-
-	cleaned := llm.CleanLLMResponse(result.Content)
-	var resp auditResponse
-	if err := json.Unmarshal([]byte(cleaned), &resp); err != nil {
-		return planDoc, nil, result, fmt.Errorf("audit response parse failed: %w", err)
-	}
-
-	if len(resp.WorkOrders) == 0 {
-		return planDoc, nil, result, fmt.Errorf("audit response contained no work orders")
-	}
-
-	auditedPlan := resp.toPlanDocument()
-	if err := validatePlanDocument(auditedPlan, cfg); err != nil {
-		return planDoc, nil, result, fmt.Errorf("audited plan failed validation: %w", err)
-	}
-
-	return auditedPlan, &resp.AuditSummary, result, nil
+	return sb.String(), nil
 }
 
-// orderedWorkOrder controls YAML field order for output files.
-// The field order matches the canonical version-2 work order format.
-type orderedWorkOrder struct {
-	SchemaVersion      int                               `yaml:"schema_version"`
-	Title              string                            `yaml:"title"`
-	Type               string                            `yaml:"type"`
-	TargetModule       string                            `yaml:"target_module"`
-	ReferenceModule    string                            `yaml:"reference_module,omitempty"`
-	KnownFiles         []string                          `yaml:"known_files,omitempty"`
-	Requirements       []models.WorkOrderRequirement     `yaml:"requirements,omitempty"`
-	AcceptanceCriteria []models.TypedAcceptanceCriterion `yaml:"acceptance_criteria,omitempty"`
-	Constraints        []string                          `yaml:"constraints,omitempty"`
-	AuditSource        string                            `yaml:"audit_source,omitempty"`
-}
-
-// writeWorkOrderFiles writes each work order to a numbered YAML file.
-func writeWorkOrderFiles(workOrders []models.WorkOrder, outputDir string) ([]string, error) {
+// writePlanManifest writes the final plan document as plan.yaml.
+func writePlanManifest(doc *planDocument, outputDir string) (string, error) {
+	if doc == nil {
+		return "", fmt.Errorf("plan document is required")
+	}
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create output directory %q: %w", outputDir, err)
+		return "", fmt.Errorf("failed to create output directory %q: %w", outputDir, err)
 	}
 
-	paths := make([]string, 0, len(workOrders))
-	for i, wo := range workOrders {
-		ordered := orderedWorkOrder{
-			SchemaVersion:      models.WorkOrderSchemaVersion,
-			Title:              wo.Title,
-			Type:               wo.Type,
-			TargetModule:       wo.TargetModule,
-			ReferenceModule:    wo.ReferenceModule,
-			KnownFiles:         wo.KnownFiles,
-			Requirements:       wo.Requirements,
-			AcceptanceCriteria: wo.TypedAcceptanceCriteria,
-			Constraints:        wo.Constraints,
-			AuditSource:        wo.AuditSource,
-		}
-
-		data, err := yaml.Marshal(ordered)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal work order %d: %w", i+1, err)
-		}
-
-		slug := slugify(wo.Title)
-		filename := fmt.Sprintf("%03d-%s.yaml", i+1, slug)
-		path := filepath.Join(outputDir, filename)
-
-		if err := os.WriteFile(path, data, 0644); err != nil {
-			return nil, fmt.Errorf("failed to write %s: %w", path, err)
-		}
-		slog.Debug("wrote work order file", "path", path)
-		paths = append(paths, path)
+	data, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("marshal plan manifest: %w", err)
 	}
 
-	return paths, nil
+	path := filepath.Join(outputDir, "plan.yaml")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return "", fmt.Errorf("failed to write %s: %w", path, err)
+	}
+	slog.Debug("wrote plan manifest", "path", path)
+	return path, nil
 }
 
 func writePlanSessionArtifact(dataDir, sessionID, filename string, content []byte) (string, error) {
@@ -622,6 +764,9 @@ func writePlanSessionArtifact(dataDir, sessionID, filename string, content []byt
 	}
 
 	path := filepath.Join(artifactDir, filename)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return "", fmt.Errorf("create plan artifact parent dir: %w", err)
+	}
 	if err := os.WriteFile(path, content, 0644); err != nil {
 		return "", fmt.Errorf("write plan artifact: %w", err)
 	}
@@ -640,6 +785,87 @@ func writePlanDocumentArtifact(dataDir, sessionID, filename string, doc *planDoc
 	return writePlanSessionArtifact(dataDir, sessionID, filename, payload)
 }
 
+func writePlanJSONArtifact(dataDir, sessionID, filename string, payload any) (string, error) {
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal plan artifact json: %w", err)
+	}
+	return writePlanSessionArtifact(dataDir, sessionID, filename, data)
+}
+
+func persistPlanningArtifacts(ctx context.Context, db *database.DB, sessionID, dataDir string, generationTrace *planGenerationTrace, auditResult *invokeClaudeResult, summary *auditSummary, finalPlan *planDocument, planManifestPath string) error {
+	if sessionID == "" || generationTrace == nil {
+		return nil
+	}
+
+	if generationTrace.EpicRaw != "" {
+		rawPath, err := writePlanSessionArtifact(dataDir, sessionID, "epic-generation/raw.txt", []byte(generationTrace.EpicRaw))
+		if err != nil {
+			return fmt.Errorf("write epic generation raw artifact: %w", err)
+		}
+		registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanRawEpicGeneration, rawPath, map[string]any{"phase": "epic_generation"})
+	}
+	if generationTrace.EpicResponse != nil {
+		structuredPath, err := writePlanJSONArtifact(dataDir, sessionID, "epic-generation/structured.json", generationTrace.EpicResponse)
+		if err != nil {
+			return fmt.Errorf("write epic generation structured artifact: %w", err)
+		}
+		registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanStructuredEpicGeneration, structuredPath, map[string]any{
+			"phase":             "epic_generation",
+			"epic_count":        len(generationTrace.EpicResponse.Epics),
+			"requirement_count": len(generationTrace.EpicResponse.Requirements),
+		})
+	}
+
+	for _, taskTrace := range generationTrace.TaskTraces {
+		slug := taskTrace.EpicID
+		if taskTrace.Raw != "" {
+			rawPath, err := writePlanSessionArtifact(dataDir, sessionID, filepath.Join("task-generation", slug, "raw.txt"), []byte(taskTrace.Raw))
+			if err != nil {
+				return fmt.Errorf("write task generation raw artifact for %s: %w", taskTrace.EpicID, err)
+			}
+			registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanRawTaskGeneration, rawPath, map[string]any{
+				"phase":    "task_generation",
+				"epic_id":  taskTrace.EpicID,
+				"epic_ref": taskTrace.EpicRef,
+			})
+		}
+		if taskTrace.Response != nil {
+			structuredPath, err := writePlanJSONArtifact(dataDir, sessionID, filepath.Join("task-generation", slug, "structured.json"), taskTrace.Response)
+			if err != nil {
+				return fmt.Errorf("write task generation structured artifact for %s: %w", taskTrace.EpicID, err)
+			}
+			registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanStructuredTaskGeneration, structuredPath, map[string]any{
+				"phase":      "task_generation",
+				"epic_id":    taskTrace.EpicID,
+				"epic_ref":   taskTrace.EpicRef,
+				"task_count": len(taskTrace.Response.Tasks),
+			})
+		}
+	}
+
+	if auditResult != nil && auditResult.Content != "" {
+		rawPath, err := writePlanSessionArtifact(dataDir, sessionID, "audit/raw.txt", []byte(auditResult.Content))
+		if err != nil {
+			return fmt.Errorf("write audit raw artifact: %w", err)
+		}
+		registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanRawAudit, rawPath, map[string]any{"phase": "audit"})
+	}
+	if auditResult != nil && summary != nil && finalPlan != nil {
+		structuredPath, err := writePlanDocumentArtifact(dataDir, sessionID, "audit/structured.json", finalPlan)
+		if err != nil {
+			return fmt.Errorf("write audit structured artifact: %w", err)
+		}
+		registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanStructuredAudit, structuredPath, planArtifactMetadata(finalPlan, "audit"))
+	}
+
+	if finalPlan != nil && planManifestPath != "" {
+		registerPlanArtifact(ctx, db, sessionID, database.ArtifactTypePlanManifest, planManifestPath, planArtifactMetadata(finalPlan, "manifest"))
+	}
+
+	return nil
+}
+
 func planArtifactMetadata(doc *planDocument, phase string) map[string]any {
 	if doc == nil {
 		return map[string]any{"phase": phase}
@@ -649,7 +875,8 @@ func planArtifactMetadata(doc *planDocument, phase string) map[string]any {
 		"requirement_count": len(doc.Requirements),
 		"non_goal_count":    len(doc.NonGoals),
 		"warning_count":     len(doc.PlanningWarnings),
-		"work_order_count":  len(doc.WorkOrders),
+		"epic_count":        len(doc.Epics),
+		"task_count":        doc.TaskCount(),
 	}
 }
 

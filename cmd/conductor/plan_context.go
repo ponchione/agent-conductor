@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -27,6 +28,10 @@ func newPlanContextBuilder(cfg *config.ProjectConfig) *planContextBuilder {
 }
 
 func (b *planContextBuilder) Build(spec string) string {
+	return b.BuildEpicDecomposition(spec)
+}
+
+func (b *planContextBuilder) BuildEpicDecomposition(spec string) string {
 	var sb strings.Builder
 
 	sb.WriteString("=== SPECIFICATION ===\n")
@@ -67,6 +72,98 @@ func (b *planContextBuilder) Build(spec string) string {
 	}
 
 	return sb.String()
+}
+
+func (b *planContextBuilder) BuildTaskDecomposition(spec string, epic planEpic, priorEpics []planEpic) string {
+	var sb strings.Builder
+
+	sb.WriteString(b.BuildEpicDecomposition(spec))
+
+	sb.WriteString("\n=== TARGET EPIC ===\n")
+	sb.WriteString(mustMarshalPromptJSON(struct {
+		ID             string   `json:"id"`
+		EpicRef        string   `json:"epic_ref"`
+		Title          string   `json:"title"`
+		Description    string   `json:"description"`
+		Covers         []string `json:"covers,omitempty"`
+		DependsOnEpics []string `json:"depends_on_epics,omitempty"`
+	}{
+		ID:             epic.ID,
+		EpicRef:        epic.EpicRef,
+		Title:          epic.Title,
+		Description:    epic.Description,
+		Covers:         epic.Covers,
+		DependsOnEpics: epic.DependsOnEpics,
+	}))
+	sb.WriteString("\n")
+
+	sb.WriteString("\n=== PRIOR COMPLETED TASKS ===\n")
+	priorTasks := flattenPlanTasks(priorEpics)
+	if len(priorTasks) == 0 {
+		sb.WriteString("(none)\n")
+		return sb.String()
+	}
+
+	type priorTaskContext struct {
+		ID           string `json:"id,omitempty"`
+		TaskRef      string `json:"task_ref"`
+		Title        string `json:"title"`
+		EpicID       string `json:"epic_id,omitempty"`
+		EpicRef      string `json:"epic_ref,omitempty"`
+		EpicTitle    string `json:"epic_title,omitempty"`
+		TargetModule string `json:"target_module"`
+	}
+
+	epicsByID := make(map[string]planEpic, len(priorEpics)+1)
+	epicsByID[epic.ID] = epic
+	for _, priorEpic := range priorEpics {
+		epicsByID[priorEpic.ID] = priorEpic
+	}
+
+	contextTasks := make([]priorTaskContext, 0, len(priorTasks))
+	for _, task := range priorTasks {
+		item := priorTaskContext{
+			ID:           task.ID,
+			TaskRef:      task.TaskRef,
+			Title:        task.Title,
+			EpicID:       task.EpicID,
+			TargetModule: task.TargetModule,
+		}
+		if parent, ok := epicsByID[task.EpicID]; ok {
+			item.EpicRef = parent.EpicRef
+			item.EpicTitle = parent.Title
+		}
+		contextTasks = append(contextTasks, item)
+	}
+
+	sb.WriteString(mustMarshalPromptJSON(contextTasks))
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+func mustMarshalPromptJSON(v any) string {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		panic(fmt.Sprintf("marshal prompt context: %v", err))
+	}
+	return string(data)
+}
+
+func flattenPlanTasks(epics []planEpic) []planTask {
+	if len(epics) == 0 {
+		return nil
+	}
+
+	total := 0
+	for _, epic := range epics {
+		total += len(epic.Tasks)
+	}
+
+	tasks := make([]planTask, 0, total)
+	for _, epic := range epics {
+		tasks = append(tasks, epic.Tasks...)
+	}
+	return tasks
 }
 
 func (b *planContextBuilder) buildProjectFacts() string {

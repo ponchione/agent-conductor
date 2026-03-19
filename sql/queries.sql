@@ -87,8 +87,10 @@ SET verification_report_path = ?, current_state = ?, updated_at = datetime('now'
 WHERE id = ?;
 
 -- name: CreatePipelineRun :exec
-INSERT INTO pipeline_runs (id, workflow_id, project, work_order_type)
-VALUES (?, ?, ?, ?);
+INSERT INTO pipeline_runs (
+    id, workflow_id, project, work_order_type,
+    plan_file, plan_task_id, plan_epic_id
+) VALUES (?, ?, ?, ?, ?, ?, ?);
 
 -- name: UpdatePipelineRunScope :exec
 UPDATE pipeline_runs
@@ -238,10 +240,44 @@ ORDER BY created_at;
 SELECT id FROM pipeline_runs WHERE workflow_id = ? LIMIT 1;
 
 -- name: GetPipelineRunByWorkflowID :one
-SELECT id, build_claude_md_content
+SELECT id, build_claude_md_content, plan_file, plan_task_id, plan_epic_id
 FROM pipeline_runs
 WHERE workflow_id = ?
 LIMIT 1;
+
+-- name: CountSuccessfulApprovedRunsByPlanTaskID :one
+SELECT COUNT(*)
+FROM pipeline_runs
+WHERE plan_file = ?
+  AND plan_task_id = ?
+  AND verify_result = 'PASS'
+  AND human_result = 'approved';
+
+-- name: ListLatestPipelineRunsByPlanFile :many
+SELECT
+    latest.plan_task_id,
+    latest.workflow_id,
+    latest.verify_result,
+    latest.human_result,
+    latest.current_state
+FROM (
+    SELECT
+        pr.plan_task_id,
+        pr.workflow_id,
+        pr.verify_result,
+        pr.human_result,
+        wf.current_state,
+        ROW_NUMBER() OVER (
+            PARTITION BY pr.plan_task_id
+            ORDER BY pr.created_at DESC, pr.id DESC
+        ) AS row_num
+    FROM pipeline_runs pr
+    JOIN workflows wf ON wf.id = pr.workflow_id
+    WHERE pr.plan_file = ?
+      AND pr.plan_task_id IS NOT NULL
+) AS latest
+WHERE latest.row_num = 1
+ORDER BY latest.plan_task_id ASC;
 
 -- name: GetSubCallAggregatesByProvider :many
 SELECT
@@ -275,14 +311,16 @@ GROUP BY phase;
 -- name: InsertPlanRun :exec
 INSERT INTO plan_runs (
     id, spec_file, project, spec_fingerprint,
-    generation_model, audit_model,
+    generation_model, epic_generation_model, task_generation_model, audit_model,
     generation_session_id, audit_session_id,
-    work_orders_generated,
+    work_orders_generated, epic_count, task_count,
     pre_audit_work_order_count, post_audit_work_order_count, audit_change_text,
     audit_work_orders_added, audit_work_orders_modified, audit_work_orders_unchanged,
-    generation_cost_usd, audit_cost_usd,
-    generation_duration_ms, audit_duration_ms,
+    generation_cost_usd, epic_generation_cost_usd, task_generation_cost_usd, audit_cost_usd,
+    generation_duration_ms, epic_generation_duration_ms, task_generation_duration_ms, audit_duration_ms,
     generation_retry_count,
     generation_tokens_in, generation_tokens_out,
+    epic_generation_tokens_in, epic_generation_tokens_out,
+    task_generation_call_count, task_generation_tokens_in, task_generation_tokens_out,
     audit_tokens_in, audit_tokens_out
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);

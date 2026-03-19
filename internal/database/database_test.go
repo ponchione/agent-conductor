@@ -3,12 +3,13 @@ package database
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
 
-func TestNewDB_ResetsLegacyDatabaseToCanonicalSchema(t *testing.T) {
+func TestNewDB_FailsForNonCanonicalLegacySchema(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "conductor.db")
@@ -53,24 +54,36 @@ func TestNewDB_ResetsLegacyDatabaseToCanonicalSchema(t *testing.T) {
 		t.Fatalf("legacy insert error: %v", err)
 	}
 
-	resetDB, err := NewDB(dbPath)
+	_, err = NewDB(dbPath)
+	if err == nil {
+		t.Fatal("NewDB() error = nil, want canonical schema failure")
+	}
+	if !strings.Contains(err.Error(), "database schema validation failed") {
+		t.Fatalf("NewDB() error = %v, want schema validation failure", err)
+	}
+}
+
+func TestNewDB_CreatesCanonicalHierarchicalPlanSchema(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "conductor.db")
+	db, err := NewDB(dbPath)
 	if err != nil {
-		t.Fatalf("NewDB() reset error: %v", err)
+		t.Fatalf("NewDB() error: %v", err)
 	}
-	t.Cleanup(func() { _ = resetDB.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
-	assertColumnExists(t, resetDB.conn, "pipeline_runs", "session_id")
-	assertColumnExists(t, resetDB.conn, "plan_runs", "session_id")
-	assertColumnExists(t, resetDB.conn, "sessions", "state")
-	assertColumnExists(t, resetDB.conn, "artifacts", "metadata_json")
-
-	var workflowCount int
-	if err := resetDB.conn.QueryRow(`SELECT COUNT(*) FROM workflows`).Scan(&workflowCount); err != nil {
-		t.Fatalf("workflow count query error: %v", err)
-	}
-	if workflowCount != 0 {
-		t.Fatalf("workflowCount = %d, want 0 after clean-slate reset", workflowCount)
-	}
+	assertColumnExists(t, db.conn, "pipeline_runs", "plan_file")
+	assertColumnExists(t, db.conn, "pipeline_runs", "plan_task_id")
+	assertColumnExists(t, db.conn, "pipeline_runs", "plan_epic_id")
+	assertColumnExists(t, db.conn, "pipeline_runs", "verify_result")
+	assertColumnExists(t, db.conn, "pipeline_runs", "human_result")
+	assertColumnExists(t, db.conn, "plan_runs", "epic_count")
+	assertColumnExists(t, db.conn, "plan_runs", "task_count")
+	assertColumnExists(t, db.conn, "plan_runs", "epic_generation_model")
+	assertColumnExists(t, db.conn, "plan_runs", "task_generation_model")
+	assertColumnExists(t, db.conn, "plan_runs", "task_generation_call_count")
+	assertIndexExists(t, db.conn, "pipeline_runs", "idx_pipeline_runs_plan_task")
 }
 
 func assertColumnExists(t *testing.T, db *sql.DB, tableName, columnName string) {
@@ -103,4 +116,35 @@ func assertColumnExists(t *testing.T, db *sql.DB, tableName, columnName string) 
 		t.Fatalf("rows.Err() for %s: %v", tableName, err)
 	}
 	t.Fatalf("column %q not found in %s", columnName, tableName)
+}
+
+func assertIndexExists(t *testing.T, db *sql.DB, tableName, indexName string) {
+	t.Helper()
+
+	rows, err := db.Query(`PRAGMA index_list(` + tableName + `)`)
+	if err != nil {
+		t.Fatalf("PRAGMA index_list(%s) error: %v", tableName, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			seq     int
+			name    string
+			unique  int
+			origin  string
+			partial int
+		)
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			t.Fatalf("Scan PRAGMA index_list(%s) error: %v", tableName, err)
+		}
+		if name == indexName {
+			return
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err() for %s: %v", tableName, err)
+	}
+	t.Fatalf("index %q not found on %s", indexName, tableName)
 }

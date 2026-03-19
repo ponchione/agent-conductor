@@ -53,7 +53,7 @@ func loadProjectConfig() error {
 }
 
 func main() {
-	rootCmd.AddCommand(runCmd, approveCmd, rejectCmd, statusCmd, statsCmd, indexCmd, listCmd, sessionsCmd, sessionCmd, serveCmd, initGlobalCmd, initCmd, planCmd, ragDumpCmd)
+	rootCmd.AddCommand(runCmd, approveCmd, rejectCmd, statusCmd, planStatusCmd, statsCmd, indexCmd, listCmd, sessionsCmd, sessionCmd, serveCmd, initGlobalCmd, initCmd, planCmd, ragDumpCmd)
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}

@@ -34,6 +34,9 @@ Thumbs.db
 .worktrees/
 
 CLAUDE.md
+AGENTS.md
 *.claude
 
 docs/plans/**
+structural-intelligence-spec-v1.md
+wo-rename-to-topham.yaml

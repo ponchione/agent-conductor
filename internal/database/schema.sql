@@ -118,6 +118,9 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     workflow_id             TEXT NOT NULL REFERENCES workflows(id),
     project                 TEXT NOT NULL,
     work_order_type         TEXT,
+    plan_file               TEXT,
+    plan_task_id            TEXT,
+    plan_epic_id            TEXT,
 
     -- Phase timing
     scope_started_at        TEXT,
@@ -165,6 +168,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_workflow ON pipeline_runs(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_session_id ON pipeline_runs(session_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_plan_task ON pipeline_runs(plan_task_id);
 
 CREATE TABLE IF NOT EXISTS sub_calls (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -193,10 +197,14 @@ CREATE TABLE IF NOT EXISTS plan_runs (
     project                     TEXT,
     spec_fingerprint            TEXT,
     generation_model            TEXT,
+    epic_generation_model       TEXT,
+    task_generation_model       TEXT,
     audit_model                 TEXT,
     generation_session_id       TEXT,
     audit_session_id            TEXT,
     work_orders_generated       INTEGER,
+    epic_count                  INTEGER,
+    task_count                  INTEGER,
     pre_audit_work_order_count  INTEGER,
     post_audit_work_order_count INTEGER,
     audit_change_text           TEXT,
@@ -204,14 +212,23 @@ CREATE TABLE IF NOT EXISTS plan_runs (
     audit_work_orders_modified  INTEGER,
     audit_work_orders_unchanged INTEGER,
     generation_cost_usd         REAL,
+    epic_generation_cost_usd    REAL,
+    task_generation_cost_usd    REAL,
     audit_cost_usd              REAL,
     generation_duration_ms      INTEGER,
+    epic_generation_duration_ms INTEGER,
+    task_generation_duration_ms INTEGER,
     audit_duration_ms           INTEGER,
     generation_retry_count      INTEGER NOT NULL DEFAULT 0,
     audit_tokens_in             INTEGER,
     audit_tokens_out            INTEGER,
     generation_tokens_in        INTEGER,
     generation_tokens_out       INTEGER,
+    epic_generation_tokens_in   INTEGER,
+    epic_generation_tokens_out  INTEGER,
+    task_generation_call_count  INTEGER,
+    task_generation_tokens_in   INTEGER,
+    task_generation_tokens_out  INTEGER,
     created_at                  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

@@ -110,6 +110,60 @@ func TestPlanContextBuilderBoundsCuratedContext(t *testing.T) {
 	}
 }
 
+func TestPlanContextBuilderBuildTaskDecompositionIncludesTargetEpicAndPriorTasks(t *testing.T) {
+	projectDir := t.TempDir()
+	writePlanContextFile(t, projectDir, "work-order.template.yaml", "title: Example\n")
+	writePlanContextFile(t, projectDir, "README.md", "# Repo\n")
+	writePlanContextFile(t, projectDir, "internal/app/main.go", "package app\n")
+
+	cfg := &config.ProjectConfig{
+		Project: config.Project{
+			Name: "agent-conductor",
+			Path: projectDir,
+		},
+		Index: config.Index{
+			Include: []string{"**/*.go", "**/*.md", "**/*.yaml"},
+		},
+	}
+
+	targetEpic := planEpic{
+		ID:          "epic-002",
+		EpicRef:     "task-decomposition",
+		Title:       "Task decomposition",
+		Description: "Break the epic into executable tasks.",
+		Covers:      []string{"REQ-2"},
+	}
+	priorEpics := []planEpic{
+		{
+			ID:          "epic-001",
+			EpicRef:     "epic-plumbing",
+			Title:       "Epic prompt plumbing",
+			Description: "Load plan prompts and epic context.",
+			Tasks: []planTask{
+				{
+					ID:           "task-001",
+					TaskRef:      "load-plan-epic-prompt",
+					Title:        "Load plan epic prompt",
+					EpicID:       "epic-001",
+					TargetModule: "internal/templates",
+				},
+			},
+		},
+	}
+
+	got := newPlanContextBuilder(cfg).BuildTaskDecomposition("spec", targetEpic, priorEpics)
+
+	assertContains(t, got, "=== TARGET EPIC ===\n")
+	assertContains(t, got, `"epic_ref": "task-decomposition"`)
+	assertContains(t, got, `"title": "Task decomposition"`)
+	assertContains(t, got, "=== PRIOR COMPLETED TASKS ===\n")
+	assertContains(t, got, `"task_ref": "load-plan-epic-prompt"`)
+	assertContains(t, got, `"id": "task-001"`)
+	assertContains(t, got, `"epic_ref": "epic-plumbing"`)
+	assertContains(t, got, `"epic_title": "Epic prompt plumbing"`)
+	assertContains(t, got, `"target_module": "internal/templates"`)
+}
+
 func writePlanContextFile(t *testing.T, root, relPath, content string) {
 	t.Helper()
 	absPath := filepath.Join(root, relPath)

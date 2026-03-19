@@ -47,9 +47,12 @@ conventions:
   docs_path: "docs/"
 
 # Optional prompt overrides. Omit this entire section if the repo uses built-in defaults.
+# Hierarchical planning uses separate prompts for epic decomposition, task decomposition,
+# and the final audit pass.
 # prompts:
 #   build: ""
-#   plan: ""
+#   plan_epic: ""
+#   plan_task: ""
 #   plan_audit: ""
 #   scope_decompose: ""
 #   scope_analyze: ""

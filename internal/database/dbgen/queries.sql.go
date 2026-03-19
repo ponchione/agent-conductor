@@ -59,6 +59,27 @@ func (q *Queries) CompleteTask(ctx context.Context, arg CompleteTaskParams) erro
 	return err
 }
 
+const countSuccessfulApprovedRunsByPlanTaskID = `-- name: CountSuccessfulApprovedRunsByPlanTaskID :one
+SELECT COUNT(*)
+FROM pipeline_runs
+WHERE plan_file = ?
+  AND plan_task_id = ?
+  AND verify_result = 'PASS'
+  AND human_result = 'approved'
+`
+
+type CountSuccessfulApprovedRunsByPlanTaskIDParams struct {
+	PlanFile   sql.NullString `json:"plan_file"`
+	PlanTaskID sql.NullString `json:"plan_task_id"`
+}
+
+func (q *Queries) CountSuccessfulApprovedRunsByPlanTaskID(ctx context.Context, arg CountSuccessfulApprovedRunsByPlanTaskIDParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSuccessfulApprovedRunsByPlanTaskID, arg.PlanFile, arg.PlanTaskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createEvent = `-- name: CreateEvent :exec
 INSERT INTO events (workflow_id, task_id, event_type, event_data)
 VALUES (?, ?, ?, ?)
@@ -82,8 +103,10 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) error 
 }
 
 const createPipelineRun = `-- name: CreatePipelineRun :exec
-INSERT INTO pipeline_runs (id, workflow_id, project, work_order_type)
-VALUES (?, ?, ?, ?)
+INSERT INTO pipeline_runs (
+    id, workflow_id, project, work_order_type,
+    plan_file, plan_task_id, plan_epic_id
+) VALUES (?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreatePipelineRunParams struct {
@@ -91,6 +114,9 @@ type CreatePipelineRunParams struct {
 	WorkflowID    string         `json:"workflow_id"`
 	Project       string         `json:"project"`
 	WorkOrderType sql.NullString `json:"work_order_type"`
+	PlanFile      sql.NullString `json:"plan_file"`
+	PlanTaskID    sql.NullString `json:"plan_task_id"`
+	PlanEpicID    sql.NullString `json:"plan_epic_id"`
 }
 
 func (q *Queries) CreatePipelineRun(ctx context.Context, arg CreatePipelineRunParams) error {
@@ -99,6 +125,9 @@ func (q *Queries) CreatePipelineRun(ctx context.Context, arg CreatePipelineRunPa
 		arg.WorkflowID,
 		arg.Project,
 		arg.WorkOrderType,
+		arg.PlanFile,
+		arg.PlanTaskID,
+		arg.PlanEpicID,
 	)
 	return err
 }
@@ -210,7 +239,7 @@ func (q *Queries) GetPendingTask(ctx context.Context) (string, error) {
 }
 
 const getPipelineRunByWorkflowID = `-- name: GetPipelineRunByWorkflowID :one
-SELECT id, build_claude_md_content
+SELECT id, build_claude_md_content, plan_file, plan_task_id, plan_epic_id
 FROM pipeline_runs
 WHERE workflow_id = ?
 LIMIT 1
@@ -219,12 +248,21 @@ LIMIT 1
 type GetPipelineRunByWorkflowIDRow struct {
 	ID                   string         `json:"id"`
 	BuildClaudeMdContent sql.NullString `json:"build_claude_md_content"`
+	PlanFile             sql.NullString `json:"plan_file"`
+	PlanTaskID           sql.NullString `json:"plan_task_id"`
+	PlanEpicID           sql.NullString `json:"plan_epic_id"`
 }
 
 func (q *Queries) GetPipelineRunByWorkflowID(ctx context.Context, workflowID string) (GetPipelineRunByWorkflowIDRow, error) {
 	row := q.db.QueryRowContext(ctx, getPipelineRunByWorkflowID, workflowID)
 	var i GetPipelineRunByWorkflowIDRow
-	err := row.Scan(&i.ID, &i.BuildClaudeMdContent)
+	err := row.Scan(
+		&i.ID,
+		&i.BuildClaudeMdContent,
+		&i.PlanFile,
+		&i.PlanTaskID,
+		&i.PlanEpicID,
+	)
 	return i, err
 }
 
@@ -758,17 +796,19 @@ func (q *Queries) GetWorkflow(ctx context.Context, id string) (Workflow, error) 
 const insertPlanRun = `-- name: InsertPlanRun :exec
 INSERT INTO plan_runs (
     id, spec_file, project, spec_fingerprint,
-    generation_model, audit_model,
+    generation_model, epic_generation_model, task_generation_model, audit_model,
     generation_session_id, audit_session_id,
-    work_orders_generated,
+    work_orders_generated, epic_count, task_count,
     pre_audit_work_order_count, post_audit_work_order_count, audit_change_text,
     audit_work_orders_added, audit_work_orders_modified, audit_work_orders_unchanged,
-    generation_cost_usd, audit_cost_usd,
-    generation_duration_ms, audit_duration_ms,
+    generation_cost_usd, epic_generation_cost_usd, task_generation_cost_usd, audit_cost_usd,
+    generation_duration_ms, epic_generation_duration_ms, task_generation_duration_ms, audit_duration_ms,
     generation_retry_count,
     generation_tokens_in, generation_tokens_out,
+    epic_generation_tokens_in, epic_generation_tokens_out,
+    task_generation_call_count, task_generation_tokens_in, task_generation_tokens_out,
     audit_tokens_in, audit_tokens_out
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertPlanRunParams struct {
@@ -777,10 +817,14 @@ type InsertPlanRunParams struct {
 	Project                  sql.NullString  `json:"project"`
 	SpecFingerprint          sql.NullString  `json:"spec_fingerprint"`
 	GenerationModel          sql.NullString  `json:"generation_model"`
+	EpicGenerationModel      sql.NullString  `json:"epic_generation_model"`
+	TaskGenerationModel      sql.NullString  `json:"task_generation_model"`
 	AuditModel               sql.NullString  `json:"audit_model"`
 	GenerationSessionID      sql.NullString  `json:"generation_session_id"`
 	AuditSessionID           sql.NullString  `json:"audit_session_id"`
 	WorkOrdersGenerated      sql.NullInt64   `json:"work_orders_generated"`
+	EpicCount                sql.NullInt64   `json:"epic_count"`
+	TaskCount                sql.NullInt64   `json:"task_count"`
 	PreAuditWorkOrderCount   sql.NullInt64   `json:"pre_audit_work_order_count"`
 	PostAuditWorkOrderCount  sql.NullInt64   `json:"post_audit_work_order_count"`
 	AuditChangeText          sql.NullString  `json:"audit_change_text"`
@@ -788,12 +832,21 @@ type InsertPlanRunParams struct {
 	AuditWorkOrdersModified  sql.NullInt64   `json:"audit_work_orders_modified"`
 	AuditWorkOrdersUnchanged sql.NullInt64   `json:"audit_work_orders_unchanged"`
 	GenerationCostUsd        sql.NullFloat64 `json:"generation_cost_usd"`
+	EpicGenerationCostUsd    sql.NullFloat64 `json:"epic_generation_cost_usd"`
+	TaskGenerationCostUsd    sql.NullFloat64 `json:"task_generation_cost_usd"`
 	AuditCostUsd             sql.NullFloat64 `json:"audit_cost_usd"`
 	GenerationDurationMs     sql.NullInt64   `json:"generation_duration_ms"`
+	EpicGenerationDurationMs sql.NullInt64   `json:"epic_generation_duration_ms"`
+	TaskGenerationDurationMs sql.NullInt64   `json:"task_generation_duration_ms"`
 	AuditDurationMs          sql.NullInt64   `json:"audit_duration_ms"`
 	GenerationRetryCount     int64           `json:"generation_retry_count"`
 	GenerationTokensIn       sql.NullInt64   `json:"generation_tokens_in"`
 	GenerationTokensOut      sql.NullInt64   `json:"generation_tokens_out"`
+	EpicGenerationTokensIn   sql.NullInt64   `json:"epic_generation_tokens_in"`
+	EpicGenerationTokensOut  sql.NullInt64   `json:"epic_generation_tokens_out"`
+	TaskGenerationCallCount  sql.NullInt64   `json:"task_generation_call_count"`
+	TaskGenerationTokensIn   sql.NullInt64   `json:"task_generation_tokens_in"`
+	TaskGenerationTokensOut  sql.NullInt64   `json:"task_generation_tokens_out"`
 	AuditTokensIn            sql.NullInt64   `json:"audit_tokens_in"`
 	AuditTokensOut           sql.NullInt64   `json:"audit_tokens_out"`
 }
@@ -805,10 +858,14 @@ func (q *Queries) InsertPlanRun(ctx context.Context, arg InsertPlanRunParams) er
 		arg.Project,
 		arg.SpecFingerprint,
 		arg.GenerationModel,
+		arg.EpicGenerationModel,
+		arg.TaskGenerationModel,
 		arg.AuditModel,
 		arg.GenerationSessionID,
 		arg.AuditSessionID,
 		arg.WorkOrdersGenerated,
+		arg.EpicCount,
+		arg.TaskCount,
 		arg.PreAuditWorkOrderCount,
 		arg.PostAuditWorkOrderCount,
 		arg.AuditChangeText,
@@ -816,12 +873,21 @@ func (q *Queries) InsertPlanRun(ctx context.Context, arg InsertPlanRunParams) er
 		arg.AuditWorkOrdersModified,
 		arg.AuditWorkOrdersUnchanged,
 		arg.GenerationCostUsd,
+		arg.EpicGenerationCostUsd,
+		arg.TaskGenerationCostUsd,
 		arg.AuditCostUsd,
 		arg.GenerationDurationMs,
+		arg.EpicGenerationDurationMs,
+		arg.TaskGenerationDurationMs,
 		arg.AuditDurationMs,
 		arg.GenerationRetryCount,
 		arg.GenerationTokensIn,
 		arg.GenerationTokensOut,
+		arg.EpicGenerationTokensIn,
+		arg.EpicGenerationTokensOut,
+		arg.TaskGenerationCallCount,
+		arg.TaskGenerationTokensIn,
+		arg.TaskGenerationTokensOut,
 		arg.AuditTokensIn,
 		arg.AuditTokensOut,
 	)
@@ -891,6 +957,70 @@ func (q *Queries) ListEvents(ctx context.Context, workflowID sql.NullString) ([]
 			&i.EventType,
 			&i.EventData,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLatestPipelineRunsByPlanFile = `-- name: ListLatestPipelineRunsByPlanFile :many
+SELECT
+    latest.plan_task_id,
+    latest.workflow_id,
+    latest.verify_result,
+    latest.human_result,
+    latest.current_state
+FROM (
+    SELECT
+        pr.plan_task_id,
+        pr.workflow_id,
+        pr.verify_result,
+        pr.human_result,
+        wf.current_state,
+        ROW_NUMBER() OVER (
+            PARTITION BY pr.plan_task_id
+            ORDER BY pr.created_at DESC, pr.id DESC
+        ) AS row_num
+    FROM pipeline_runs pr
+    JOIN workflows wf ON wf.id = pr.workflow_id
+    WHERE pr.plan_file = ?
+      AND pr.plan_task_id IS NOT NULL
+) AS latest
+WHERE latest.row_num = 1
+ORDER BY latest.plan_task_id ASC
+`
+
+type ListLatestPipelineRunsByPlanFileRow struct {
+	PlanTaskID   sql.NullString `json:"plan_task_id"`
+	WorkflowID   string         `json:"workflow_id"`
+	VerifyResult sql.NullString `json:"verify_result"`
+	HumanResult  sql.NullString `json:"human_result"`
+	CurrentState string         `json:"current_state"`
+}
+
+func (q *Queries) ListLatestPipelineRunsByPlanFile(ctx context.Context, planFile sql.NullString) ([]ListLatestPipelineRunsByPlanFileRow, error) {
+	rows, err := q.db.QueryContext(ctx, listLatestPipelineRunsByPlanFile, planFile)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLatestPipelineRunsByPlanFileRow
+	for rows.Next() {
+		var i ListLatestPipelineRunsByPlanFileRow
+		if err := rows.Scan(
+			&i.PlanTaskID,
+			&i.WorkflowID,
+			&i.VerifyResult,
+			&i.HumanResult,
+			&i.CurrentState,
 		); err != nil {
 			return nil, err
 		}

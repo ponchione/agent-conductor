@@ -66,7 +66,7 @@ Turn a freeform spec into executable work orders:
 conductor plan spec.md --output ./work-orders/
 ```
 
-The plan command reads any text format and calls Claude Code to decompose it into a dependency-ordered sequence of properly-scoped work orders. Each work order is sized for a single conductor run (1–3 files changed).
+The plan command reads any text format and calls Claude Code to produce a hierarchical `plan.yaml` manifest of dependency-ordered epics and tasks. Each task is sized for a single conductor run (1–3 files changed).
 
 For existing projects, pass `--project` to ground the plan in the actual codebase:
 
@@ -80,12 +80,12 @@ For greenfield projects, omit `--project`. The planner operates from the spec al
 
 ### Audit Pass
 
-After generation, the plan command runs a second LLM pass that audits the work orders against the original spec. The audit checks for completeness, correctness, and proper scoping — it can add missing work orders, modify existing ones, or confirm them unchanged. Each audited work order is tagged with an `audit_source` field (`added`, `modified`, or omitted for unchanged).
+After generation, the plan command runs a second LLM pass that audits the assembled manifest against the original spec. The audit checks for completeness, correctness, and proper scoping. It can add missing tasks within an existing epic, modify existing tasks, or confirm them unchanged. Each changed task is tagged with an `audit_source` field (`added`, `modified`, or omitted for unchanged).
 
 ```
 Audit: 1 added, 2 modified, 3 unchanged
-  - Added work order for missing database migration
-  - Modified acceptance criteria on API endpoint work order
+  - Added missing migration task in epic-002
+  - Modified acceptance criteria on API endpoint task
 ```
 
 To skip the audit pass (faster, fewer tokens):
@@ -96,17 +96,21 @@ conductor plan spec.md --skip-audit
 
 ### Plan Metrics
 
-Each plan run records metrics to the `plan_runs` table: spec file, generation/audit model names, work order counts, audit summary (added/modified/unchanged), and token usage for both the generation and audit calls. These are best-effort — a recording failure does not block the plan command.
+Each plan run records metrics to the `plan_runs` table: spec file, generation/audit model names, epic/task counts, pre/post-audit task counts, audit summary (added/modified/unchanged), and token usage for generation and audit. These are best-effort; a recording failure does not block the plan command.
 
 ### Output
 
-Output is numbered YAML files ready for `conductor run`:
+Output is a single hierarchical `plan.yaml` manifest:
 
 ```
 work-orders/
-  001-initialize-project-structure.yaml
-  002-add-database-schema.yaml
-  003-implement-api-endpoints.yaml
+  plan.yaml
+```
+
+Run one task from the manifest by canonical task ID:
+
+```bash
+conductor run work-orders/plan.yaml --task task-001
 ```
 
 ## Prerequisites
@@ -273,7 +277,8 @@ executor:
   timeout_minutes: 30
 
 prompts:
-  plan: templates/plan-prompt.md
+  plan_epic: templates/plan-epic.md
+  plan_task: templates/plan-task.md
   plan_audit: templates/plan-audit.md
   scope_decompose: ""
   scope_analyze: ""
@@ -338,7 +343,8 @@ The pipeline steps with independent prompts are:
 | `verify_analyze` | `defaults/verify_analyze.md` | Analyze a single diff segment |
 | `verify_synthesize` | `defaults/verify_synthesize.md` | Produce final verify report |
 | `build` | `defaults/build.md` | Instructions for Claude Code |
-| `plan` | embedded default | Spec decomposition |
+| `plan_epic` | `defaults/plan_epic.md` | Pass 1 epic decomposition |
+| `plan_task` | `defaults/plan_task.md` | Pass 2 task decomposition |
 | `plan_audit` | `defaults/plan_audit.md` | Planner audit pass |
 | `describe` | `defaults/describe.md` | RAG chunk description generation |
 

@@ -30,28 +30,47 @@ func validationCriterion(reqID string) []models.TypedAcceptanceCriterion {
 	}
 }
 
+func validationTask(id, ref, epicID, title, targetModule, knownFile, reqID, reqText string) planTask {
+	return planTask{
+		ID:            id,
+		TaskRef:       ref,
+		SchemaVersion: 2,
+		EpicID:        epicID,
+		Title:         title,
+		Type:          "refactor",
+		TargetModule:  targetModule,
+		KnownFiles:    []string{knownFile},
+		Requirements: []models.WorkOrderRequirement{
+			{ID: reqID, Text: reqText},
+		},
+		AcceptanceCriteria: validationCriterion(reqID),
+	}
+}
+
+func validationDoc(epics ...planEpic) *planDocument {
+	return &planDocument{
+		Version: 1,
+		Epics:   epics,
+	}
+}
+
 func TestValidatePlanDocumentRejectsMissingRequirementCoverage(t *testing.T) {
 	projectDir := t.TempDir()
 	writePlanValidationFile(t, projectDir, "cmd/conductor/plan.go")
 
-	doc := &planDocument{
-		Requirements: []planRequirement{
-			{ID: "REQ-1", Text: "Covered"},
-			{ID: "REQ-2", Text: "Uncovered"},
+	doc := validationDoc(planEpic{
+		ID:          "epic-001",
+		EpicRef:     "planner-prompts",
+		Title:       "Planner prompts",
+		Description: "Wire planner prompts into the command.",
+		Covers:      []string{"REQ-1"},
+		Tasks: []planTask{
+			validationTask("task-001", "wire-prompts", "epic-001", "Wire planner prompts", "cmd/conductor", "cmd/conductor/plan.go", "REQ-1", "Covered"),
 		},
-		WorkOrders: []planWorkOrder{
-			{
-				SchemaVersion: 2,
-				Title:         "Wire planner prompts",
-				Type:          "refactor",
-				TargetModule:  "cmd/conductor",
-				KnownFiles:    []string{"cmd/conductor/plan.go"},
-				Requirements: []models.WorkOrderRequirement{
-					{ID: "REQ-1", Text: "Covered"},
-				},
-				AcceptanceCriteria: validationCriterion("REQ-1"),
-			},
-		},
+	})
+	doc.Requirements = []planRequirement{
+		{ID: "REQ-1", Text: "Covered"},
+		{ID: "REQ-2", Text: "Uncovered"},
 	}
 
 	err := validatePlanDocument(doc, validationConfig(projectDir))
@@ -65,57 +84,152 @@ func TestValidatePlanDocumentRejectsInvalidDependencyOrdering(t *testing.T) {
 	writePlanValidationFile(t, projectDir, "cmd/conductor/plan.go")
 	writePlanValidationFile(t, projectDir, "internal/config/config.go")
 
-	doc := &planDocument{
-		WorkOrders: []planWorkOrder{
-			{
-				SchemaVersion: 2,
-				Title:         "Second step",
-				Type:          "refactor",
-				TargetModule:  "cmd/conductor",
-				KnownFiles:    []string{"cmd/conductor/plan.go"},
-				Requirements: []models.WorkOrderRequirement{
-					{ID: "REQ-1", Text: "Run second"},
-				},
-				AcceptanceCriteria: validationCriterion("REQ-1"),
-				DependsOn:          []string{"Third step"},
-			},
-			{
-				SchemaVersion: 2,
-				Title:         "Third step",
-				Type:          "refactor",
-				TargetModule:  "internal/config",
-				KnownFiles:    []string{"internal/config/config.go"},
-				Requirements: []models.WorkOrderRequirement{
-					{ID: "REQ-2", Text: "Run third"},
-				},
-				AcceptanceCriteria: validationCriterion("REQ-2"),
-			},
-		},
+	first := validationTask("task-001", "second-step", "epic-001", "Second step", "cmd/conductor", "cmd/conductor/plan.go", "REQ-1", "Run second")
+	first.DependsOn = []string{"task-002"}
+	second := validationTask("task-002", "third-step", "epic-001", "Third step", "internal/config", "internal/config/config.go", "REQ-2", "Run third")
+
+	doc := validationDoc(planEpic{
+		ID:          "epic-001",
+		EpicRef:     "planner-prompts",
+		Title:       "Planner prompts",
+		Description: "Wire planner prompts into the command.",
+		Covers:      []string{"REQ-1", "REQ-2"},
+		Tasks:       []planTask{first, second},
+	})
+
+	err := validatePlanDocument(doc, validationConfig(projectDir))
+	if err == nil || !strings.Contains(err.Error(), "depends_on references task") {
+		t.Fatalf("validatePlanDocument() error = %v, want dependency ordering failure", err)
+	}
+}
+
+func TestValidatePlanDocumentRejectsUnknownDependencyRef(t *testing.T) {
+	projectDir := t.TempDir()
+	writePlanValidationFile(t, projectDir, "cmd/conductor/plan.go")
+
+	task := validationTask("task-001", "broken-deps", "epic-001", "Broken deps", "cmd/conductor", "cmd/conductor/plan.go", "REQ-1", "Task with unknown dependency")
+	task.DependsOn = []string{"task-999"}
+
+	doc := validationDoc(planEpic{
+		ID:          "epic-001",
+		EpicRef:     "planner-prompts",
+		Title:       "Planner prompts",
+		Description: "Wire planner prompts into the command.",
+		Covers:      []string{"REQ-1"},
+		Tasks:       []planTask{task},
+	})
+	doc.Requirements = []planRequirement{{ID: "REQ-1", Text: "Task with unknown dependency"}}
+
+	err := validatePlanDocument(doc, validationConfig(projectDir))
+	if err == nil || !strings.Contains(err.Error(), `unknown task id "task-999"`) {
+		t.Fatalf("validatePlanDocument() error = %v, want unknown dependency failure", err)
+	}
+}
+
+func TestValidatePlanDocumentRejectsTaskRefDependencyInsteadOfCanonicalTaskID(t *testing.T) {
+	projectDir := t.TempDir()
+	writePlanValidationFile(t, projectDir, "cmd/conductor/plan.go")
+	writePlanValidationFile(t, projectDir, "internal/config/config.go")
+
+	first := validationTask("task-001", "wire-prompts", "epic-001", "Wire prompts", "cmd/conductor", "cmd/conductor/plan.go", "REQ-1", "Wire prompts")
+	second := validationTask("task-002", "persist-metadata", "epic-001", "Persist metadata", "internal/config", "internal/config/config.go", "REQ-2", "Persist metadata")
+	second.DependsOn = []string{"wire-prompts"}
+
+	doc := validationDoc(planEpic{
+		ID:          "epic-001",
+		EpicRef:     "planner-prompts",
+		Title:       "Planner prompts",
+		Description: "Wire planner prompts into the command.",
+		Covers:      []string{"REQ-1", "REQ-2"},
+		Tasks:       []planTask{first, second},
+	})
+	doc.Requirements = []planRequirement{
+		{ID: "REQ-1", Text: "Wire prompts"},
+		{ID: "REQ-2", Text: "Persist metadata"},
 	}
 
 	err := validatePlanDocument(doc, validationConfig(projectDir))
-	if err == nil || !strings.Contains(err.Error(), "depends_on references work order") {
-		t.Fatalf("validatePlanDocument() error = %v, want dependency ordering failure", err)
+	if err == nil || !strings.Contains(err.Error(), `unknown task id "wire-prompts"`) {
+		t.Fatalf("validatePlanDocument() error = %v, want canonical task id dependency failure", err)
+	}
+}
+
+func TestValidatePlanDocumentRejectsDuplicateEpicRefs(t *testing.T) {
+	projectDir := t.TempDir()
+	writePlanValidationFile(t, projectDir, "cmd/conductor/plan.go")
+
+	doc := validationDoc(
+		planEpic{
+			ID:          "epic-001",
+			EpicRef:     "shared-ref",
+			Title:       "First epic",
+			Description: "First epic description.",
+			Covers:      []string{"REQ-1"},
+			Tasks: []planTask{
+				validationTask("task-001", "first-task", "epic-001", "First task", "cmd/conductor", "cmd/conductor/plan.go", "REQ-1", "First requirement"),
+			},
+		},
+		planEpic{
+			ID:          "epic-002",
+			EpicRef:     "shared-ref",
+			Title:       "Second epic",
+			Description: "Second epic description.",
+			Covers:      []string{"REQ-2"},
+			Tasks: []planTask{
+				validationTask("task-002", "second-task", "epic-002", "Second task", "cmd/conductor", "cmd/conductor/plan.go", "REQ-2", "Second requirement"),
+			},
+		},
+	)
+	doc.Requirements = []planRequirement{
+		{ID: "REQ-1", Text: "First requirement"},
+		{ID: "REQ-2", Text: "Second requirement"},
+	}
+
+	err := validatePlanDocument(doc, validationConfig(projectDir))
+	if err == nil || !strings.Contains(err.Error(), `duplicate epic_ref "shared-ref"`) {
+		t.Fatalf("validatePlanDocument() error = %v, want duplicate epic_ref failure", err)
+	}
+}
+
+func TestValidatePlanDocumentRejectsDuplicateTaskRefs(t *testing.T) {
+	projectDir := t.TempDir()
+	writePlanValidationFile(t, projectDir, "cmd/conductor/plan.go")
+
+	doc := validationDoc(planEpic{
+		ID:          "epic-001",
+		EpicRef:     "planner-prompts",
+		Title:       "Planner prompts",
+		Description: "Wire planner prompts into the command.",
+		Covers:      []string{"REQ-1", "REQ-2"},
+		Tasks: []planTask{
+			validationTask("task-001", "shared-task-ref", "epic-001", "First task", "cmd/conductor", "cmd/conductor/plan.go", "REQ-1", "First requirement"),
+			validationTask("task-002", "shared-task-ref", "epic-001", "Second task", "cmd/conductor", "cmd/conductor/plan.go", "REQ-2", "Second requirement"),
+		},
+	})
+	doc.Requirements = []planRequirement{
+		{ID: "REQ-1", Text: "First requirement"},
+		{ID: "REQ-2", Text: "Second requirement"},
+	}
+
+	err := validatePlanDocument(doc, validationConfig(projectDir))
+	if err == nil || !strings.Contains(err.Error(), `duplicate task_ref "shared-task-ref"`) {
+		t.Fatalf("validatePlanDocument() error = %v, want duplicate task_ref failure", err)
 	}
 }
 
 func TestValidatePlanDocumentRejectsImpossibleKnownFiles(t *testing.T) {
 	projectDir := t.TempDir()
-	doc := &planDocument{
-		WorkOrders: []planWorkOrder{
-			{
-				SchemaVersion: 2,
-				Title:         "Broken known files",
-				Type:          "bug_fix",
-				TargetModule:  "cmd/conductor",
-				KnownFiles:    []string{"does/not/exist.go"},
-				Requirements: []models.WorkOrderRequirement{
-					{ID: "REQ-1", Text: "Fix path handling"},
-				},
-				AcceptanceCriteria: validationCriterion("REQ-1"),
-			},
+	doc := validationDoc(planEpic{
+		ID:          "epic-001",
+		EpicRef:     "planner-prompts",
+		Title:       "Planner prompts",
+		Description: "Wire planner prompts into the command.",
+		Covers:      []string{"REQ-1"},
+		Tasks: []planTask{
+			validationTask("task-001", "broken-known-files", "epic-001", "Broken known files", "cmd/conductor", "does/not/exist.go", "REQ-1", "Fix path handling"),
 		},
-	}
+	})
+	doc.Requirements = []planRequirement{{ID: "REQ-1", Text: "Fix path handling"}}
 
 	err := validatePlanDocument(doc, validationConfig(projectDir))
 	if err == nil || !strings.Contains(err.Error(), `known_files path "does/not/exist.go" does not exist`) {
@@ -132,52 +246,39 @@ func TestValidatePlanDocumentRejectsOversizedAndObviousOverlap(t *testing.T) {
 		paths = append(paths, relPath)
 	}
 
-	doc := &planDocument{
-		WorkOrders: []planWorkOrder{
-			{
-				SchemaVersion: 2,
-				Title:         "Oversized work order",
-				Type:          "refactor",
-				TargetModule:  "internal",
-				KnownFiles:    paths,
-				Requirements: []models.WorkOrderRequirement{
-					{ID: "REQ-1", Text: "Refactor internal package"},
-				},
-				AcceptanceCriteria: validationCriterion("REQ-1"),
-			},
-		},
-	}
+	oversizedTask := validationTask("task-001", "oversized-task", "epic-001", "Oversized task", "internal", paths[0], "REQ-1", "Refactor internal package")
+	oversizedTask.KnownFiles = paths
+	doc := validationDoc(planEpic{
+		ID:          "epic-001",
+		EpicRef:     "oversized-epic",
+		Title:       "Oversized epic",
+		Description: "Contains an oversized task.",
+		Covers:      []string{"REQ-1"},
+		Tasks:       []planTask{oversizedTask},
+	})
+	doc.Requirements = []planRequirement{{ID: "REQ-1", Text: "Refactor internal package"}}
 
 	err := validatePlanDocument(doc, validationConfig(projectDir))
 	if err == nil || !strings.Contains(err.Error(), "is oversized") {
 		t.Fatalf("validatePlanDocument() error = %v, want oversized failure", err)
 	}
 
-	doc = &planDocument{
-		WorkOrders: []planWorkOrder{
-			{
-				SchemaVersion: 2,
-				Title:         "First",
-				Type:          "refactor",
-				TargetModule:  "internal",
-				KnownFiles:    []string{"internal/file0.go", "internal/file1.go"},
-				Requirements: []models.WorkOrderRequirement{
-					{ID: "REQ-1", Text: "Refactor file one"},
-				},
-				AcceptanceCriteria: validationCriterion("REQ-1"),
-			},
-			{
-				SchemaVersion: 2,
-				Title:         "Second",
-				Type:          "refactor",
-				TargetModule:  "internal",
-				KnownFiles:    []string{"internal/file1.go", "internal/file0.go"},
-				Requirements: []models.WorkOrderRequirement{
-					{ID: "REQ-2", Text: "Refactor file two"},
-				},
-				AcceptanceCriteria: validationCriterion("REQ-2"),
-			},
-		},
+	first := validationTask("task-001", "first", "epic-001", "First", "internal", "internal/file0.go", "REQ-1", "Refactor file one")
+	first.KnownFiles = []string{"internal/file0.go", "internal/file1.go"}
+	second := validationTask("task-002", "second", "epic-001", "Second", "internal", "internal/file1.go", "REQ-2", "Refactor file two")
+	second.KnownFiles = []string{"internal/file1.go", "internal/file0.go"}
+
+	doc = validationDoc(planEpic{
+		ID:          "epic-001",
+		EpicRef:     "overlap-epic",
+		Title:       "Overlap epic",
+		Description: "Contains overlapping tasks.",
+		Covers:      []string{"REQ-1", "REQ-2"},
+		Tasks:       []planTask{first, second},
+	})
+	doc.Requirements = []planRequirement{
+		{ID: "REQ-1", Text: "Refactor file one"},
+		{ID: "REQ-2", Text: "Refactor file two"},
 	}
 
 	err = validatePlanDocument(doc, validationConfig(projectDir))
@@ -195,16 +296,32 @@ func TestResolveAuditOutcomeFailsClosedByDefault(t *testing.T) {
 }
 
 func TestResolveAuditOutcomeAllowsExplicitFallback(t *testing.T) {
-	base := &planDocument{WorkOrders: []planWorkOrder{{
-		SchemaVersion: 2,
-		Title:         "Base",
-		Type:          "refactor",
-		TargetModule:  "cmd",
-		Requirements: []models.WorkOrderRequirement{
-			{ID: "REQ-1", Text: "Base requirement"},
+	base := &planDocument{
+		Version: 1,
+		Epics: []planEpic{
+			{
+				ID:          "epic-001",
+				EpicRef:     "base-epic",
+				Title:       "Base epic",
+				Description: "Base epic description.",
+				Tasks: []planTask{
+					{
+						ID:            "task-001",
+						TaskRef:       "base-task",
+						SchemaVersion: 2,
+						EpicID:        "epic-001",
+						Title:         "Base",
+						Type:          "refactor",
+						TargetModule:  "cmd",
+						Requirements: []models.WorkOrderRequirement{
+							{ID: "REQ-1", Text: "Base requirement"},
+						},
+						AcceptanceCriteria: validationCriterion("REQ-1"),
+					},
+				},
+			},
 		},
-		AcceptanceCriteria: validationCriterion("REQ-1"),
-	}}}
+	}
 	resolved, summary, result, err := resolveAuditOutcome(base, nil, nil, nil, fmt.Errorf("bad audit"), true)
 	if err != nil {
 		t.Fatalf("resolveAuditOutcome() error = %v", err)

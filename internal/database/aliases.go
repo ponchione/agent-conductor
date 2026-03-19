@@ -17,6 +17,7 @@ type Workflow = dbgen.Workflow
 // Params types
 type ClaimTaskParams = dbgen.ClaimTaskParams
 type CompleteTaskParams = dbgen.CompleteTaskParams
+type CountSuccessfulApprovedRunsByPlanTaskIDParams = dbgen.CountSuccessfulApprovedRunsByPlanTaskIDParams
 type CreateEventParams = dbgen.CreateEventParams
 type CreatePipelineRunParams = dbgen.CreatePipelineRunParams
 type CreateTaskParams = dbgen.CreateTaskParams
@@ -38,6 +39,7 @@ type UpdateWorkflowVerificationParams = dbgen.UpdateWorkflowVerificationParams
 type GetPipelineRunByWorkflowIDRow = dbgen.GetPipelineRunByWorkflowIDRow
 type GetPipelineStatsRow = dbgen.GetPipelineStatsRow
 type GetRecentPipelineRunsRow = dbgen.GetRecentPipelineRunsRow
+type ListLatestPipelineRunsByPlanFileRow = dbgen.ListLatestPipelineRunsByPlanFileRow
 type GetScopeQualityStatsRow = dbgen.GetScopeQualityStatsRow
 type GetStatsByWorkOrderTypeRow = dbgen.GetStatsByWorkOrderTypeRow
 type GetSubCallAggregatesByProviderRow = dbgen.GetSubCallAggregatesByProviderRow
