@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ponchione/agent-conductor/internal/config"
@@ -16,6 +17,8 @@ import (
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite"
 )
+
+var captureStdoutMu sync.Mutex
 
 func TestInitializeRunSessionPersistsManagedWorkOrderHistory(t *testing.T) {
 	t.Parallel()
@@ -504,6 +507,9 @@ func TestWarnOnUnmetPlanDependenciesIgnoresSuccessfulRunsFromOtherManifest(t *te
 }
 
 func captureStdout(fn func() error) (string, error) {
+	captureStdoutMu.Lock()
+	defer captureStdoutMu.Unlock()
+
 	originalStdout := os.Stdout
 	reader, writer, err := os.Pipe()
 	if err != nil {

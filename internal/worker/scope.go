@@ -101,7 +101,7 @@ func validateScopeOutput(repoRoot string, pkg *models.ContextPackage) *scopeVali
 
 func (w *Worker) runBootstrapScope(ctx context.Context, task *database.Task) error {
 	slog.Info("Starting Bootstrap Scope Phase (no LLM)", "task", task.ID)
-	w.db.LogEvent(task.WorkflowID, task.ID, "scope_started", map[string]any{"bootstrap": true})
+	w.emitPhaseStart(ctx, task, map[string]any{"bootstrap": true})
 
 	scopeStartedAt := time.Now()
 
@@ -121,6 +121,10 @@ func (w *Worker) runBootstrapScope(ctx context.Context, task *database.Task) err
 	}
 
 	fullPkg := w.assembler.AssembleBootstrap(&wo, wf.GitBranch)
+	w.emitScopeStep(ctx, task, "bootstrap_assembled", map[string]any{
+		"bootstrap": true,
+		"new_files": len(fullPkg.Scope.NewFiles),
+	})
 
 	pkgDir := filepath.Join(w.cfg.Project.DataDir, "artifacts", "context-packages")
 	if err := os.MkdirAll(pkgDir, 0755); err != nil {
@@ -175,7 +179,7 @@ func (w *Worker) runBootstrapScope(ctx context.Context, task *database.Task) err
 			"failed to update workflow state to scope_complete: %w", err)
 	}
 
-	w.db.LogEvent(task.WorkflowID, task.ID, "scope_completed", map[string]any{
+	w.emitPhaseComplete(ctx, task, map[string]any{
 		"context_package_path": pkgPath,
 		"bootstrap":            true,
 		"new_files":            len(fullPkg.Scope.NewFiles),
@@ -214,7 +218,7 @@ func (w *Worker) runBootstrapScope(ctx context.Context, task *database.Task) err
 
 func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	slog.Info("Starting Scope Phase", "task", task.ID)
-	w.db.LogEvent(task.WorkflowID, task.ID, "scope_started", nil)
+	w.emitPhaseStart(ctx, task, nil)
 
 	scopeStartedAt := time.Now()
 
@@ -259,7 +263,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 			len(valResult.strippedPaths), valResult.pathsChecked, stripThreshold*100)
 	}
 
-	w.db.LogEvent(task.WorkflowID, task.ID, "scope_validated", map[string]any{
+	w.emitScopeStep(ctx, task, "validation_complete", map[string]any{
 		"paths_checked":      valResult.pathsChecked,
 		"paths_stripped":     len(valResult.strippedPaths),
 		"paths_reclassified": len(valResult.reclassifiedPaths),
@@ -275,6 +279,11 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 	if err != nil {
 		return pipelineerrors.Fatalf("scope", task.WorkflowID, task.ID, "full context assembly failed: %w", err)
 	}
+	w.emitScopeStep(ctx, task, "context_assembled", map[string]any{
+		"files_to_modify":    len(fullPkg.Scope.FilesToModify),
+		"files_to_reference": len(fullPkg.Scope.FilesToReference),
+		"new_files":          len(fullPkg.Scope.NewFiles),
+	})
 
 	var ragDirect, ragHops int
 	for _, rc := range fullPkg.Scope.RelevantCode {
@@ -345,7 +354,7 @@ func (w *Worker) runScope(ctx context.Context, task *database.Task) error {
 			"failed to update workflow state to scope_complete: %w", err)
 	}
 
-	w.db.LogEvent(task.WorkflowID, task.ID, "scope_completed", map[string]any{
+	w.emitPhaseComplete(ctx, task, map[string]any{
 		"context_package_path": pkgPath,
 		"files_to_modify":      len(fullPkg.Scope.FilesToModify),
 	})

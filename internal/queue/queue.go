@@ -11,6 +11,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/database"
 	pipelineerrors "github.com/ponchione/agent-conductor/internal/errors"
+	"github.com/ponchione/agent-conductor/internal/pipeline"
 )
 
 // Workflow state constants.
@@ -136,8 +137,11 @@ func (q *Queue) triggerGate(workflowID, gateType, details string) {
 		slog.Warn("Failed to transition workflow to human_review", "workflow", workflowID, "error", err)
 	}
 
-	q.db.LogEvent(workflowID, "", "gate_triggered", map[string]any{
-		"gate_type": gateType,
-		"details":   details,
-	})
+	if err := q.db.LogWorkflowEvent(ctx, workflowID, "", pipeline.EventRunAwaitingReview, map[string]any{
+		"reason":        gateType,
+		"details":       details,
+		"current_state": StateReviewNeeded,
+	}); err != nil {
+		slog.Warn("Failed to log run_awaiting_review event", "workflow", workflowID, "error", err)
+	}
 }

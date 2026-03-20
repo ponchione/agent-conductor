@@ -70,10 +70,6 @@ func (w *Worker) ProcessNextTask(ctx stdctx.Context) {
 	}
 
 	slog.Info("Processing task", "id", task.ID, "phase", task.Phase)
-	w.db.LogEvent(task.WorkflowID, task.ID, "task_claimed", map[string]any{
-		"phase":     task.Phase,
-		"worker_id": w.ID,
-	})
 
 	var result error
 	switch task.Phase {
@@ -100,28 +96,45 @@ func (w *Worker) ProcessNextTask(ctx stdctx.Context) {
 		slog.Error("Task failed",
 			"id", task.ID, "phase", task.Phase,
 			"class", pe.Class.String(), "error", pe)
-		w.db.LogEvent(task.WorkflowID, task.ID, task.Phase+"_failed", map[string]any{
-			"error": pe.Error(), "class": pe.Class.String(),
-		})
+		w.handleTaskFailure(ctx, task, pe, result)
+	}
+}
 
-		switch pe.Class {
-		case pipelineerrors.Retryable:
-			if w.q.ShouldRetry(task, result) {
-				w.q.RetryTask(task.ID)
-				return
-			}
-		case pipelineerrors.NeedsHuman:
-			w.q.FailTask(task.ID, result)
-			if err := w.db.TransitionWorkflowState(ctx, task.WorkflowID, "human_review"); err != nil {
-				slog.Error("Failed to transition workflow to human_review", "workflow", task.WorkflowID, "error", err)
-			}
+func (w *Worker) handleTaskFailure(ctx stdctx.Context, task *database.Task, pe *pipelineerrors.PipelineError, result error) {
+	willRetry := pe.Class == pipelineerrors.Retryable && w.q.ShouldRetry(task, result)
+	w.emitPhaseError(ctx, task, pe, willRetry)
+
+	switch pe.Class {
+	case pipelineerrors.Retryable:
+		if willRetry {
+			w.q.RetryTask(task.ID)
 			return
 		}
+	case pipelineerrors.NeedsHuman:
 		w.q.FailTask(task.ID, result)
-		if err := w.db.TransitionWorkflowState(ctx, task.WorkflowID, "failed"); err != nil {
-			slog.Error("Failed to transition workflow to failed", "workflow", task.WorkflowID, "error", err)
+		if err := w.db.TransitionWorkflowState(ctx, task.WorkflowID, "human_review"); err != nil {
+			slog.Error("Failed to transition workflow to human_review", "workflow", task.WorkflowID, "error", err)
+			return
 		}
+		w.emitRunAwaitingReview(ctx, task.WorkflowID, task.ID, task.Phase, map[string]any{
+			"reason":      "needs_human",
+			"error":       pe.Error(),
+			"error_class": pe.Class.String(),
+		})
+		return
 	}
+
+	w.q.FailTask(task.ID, result)
+	if err := w.db.TransitionWorkflowState(ctx, task.WorkflowID, "failed"); err != nil {
+		slog.Error("Failed to transition workflow to failed", "workflow", task.WorkflowID, "error", err)
+		return
+	}
+	w.emitRunComplete(ctx, task.WorkflowID, task.ID, "failed", "", map[string]any{
+		"reason":      "phase_error",
+		"phase":       task.Phase,
+		"error":       pe.Error(),
+		"error_class": pe.Class.String(),
+	})
 }
 
 // isBootstrapWorkOrder reads the task's input artifact (work order YAML) and

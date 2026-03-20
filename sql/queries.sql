@@ -53,6 +53,13 @@ SELECT id, workflow_id, task_id, event_type, event_data, created_at FROM events
 WHERE workflow_id = ?
 ORDER BY created_at ASC;
 
+-- name: ListEventsSince :many
+SELECT id, workflow_id, task_id, event_type, event_data, created_at FROM events
+WHERE workflow_id = ?
+  AND id > ?
+ORDER BY id ASC
+LIMIT ?;
+
 -- name: ReleaseTask :exec
 UPDATE tasks
 SET state = 'pending', claimed_by = NULL, claimed_at = NULL

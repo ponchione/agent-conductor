@@ -7,6 +7,7 @@ import (
 
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/git"
+	"github.com/ponchione/agent-conductor/internal/pipeline"
 )
 
 // Approve merges the workflow's branch into the configured base branch and transitions the workflow
@@ -41,11 +42,14 @@ func Approve(ctx context.Context, db *database.DB, gitMgr *git.GitManager, workf
 		slog.Warn("Failed to update pipeline run human result", "workflow", workflowID, "error", err)
 	}
 
-	db.LogEvent(workflowID, "", "human_approved", map[string]any{
-		"workflow_id": workflowID,
-		"merged_into": baseBranch,
-		"branch":      wf.GitBranch,
-	})
+	if err := db.LogWorkflowEvent(ctx, workflowID, "", pipeline.EventRunComplete, map[string]any{
+		"final_state":  "completed",
+		"human_result": "approved",
+		"merged_into":  baseBranch,
+		"branch":       wf.GitBranch,
+	}); err != nil {
+		slog.Warn("Failed to log run_complete event", "workflow", workflowID, "error", err)
+	}
 
 	slog.Info("Workflow approved and merged", "workflow", workflowID, "branch", wf.GitBranch)
 	return nil
@@ -78,10 +82,13 @@ func Reject(ctx context.Context, db *database.DB, workflowID, reason string) err
 		slog.Warn("Failed to update pipeline run human result", "workflow", workflowID, "error", err)
 	}
 
-	db.LogEvent(workflowID, "", "human_rejected", map[string]any{
-		"workflow_id": workflowID,
-		"reason":      reason,
-	})
+	if err := db.LogWorkflowEvent(ctx, workflowID, "", pipeline.EventRunComplete, map[string]any{
+		"final_state":  "failed",
+		"human_result": "rejected",
+		"reason":       reason,
+	}); err != nil {
+		slog.Warn("Failed to log run_complete event", "workflow", workflowID, "error", err)
+	}
 
 	slog.Info("Workflow rejected", "workflow", workflowID, "reason", reason)
 	return nil

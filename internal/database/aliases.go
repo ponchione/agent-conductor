@@ -25,6 +25,7 @@ type CreateWorkflowParams = dbgen.CreateWorkflowParams
 type FailTaskParams = dbgen.FailTaskParams
 type InsertPlanRunParams = dbgen.InsertPlanRunParams
 type InsertSubCallParams = dbgen.InsertSubCallParams
+type ListEventsSinceParams = dbgen.ListEventsSinceParams
 type UpdatePipelineRunBuildParams = dbgen.UpdatePipelineRunBuildParams
 type UpdatePipelineRunHumanResultParams = dbgen.UpdatePipelineRunHumanResultParams
 type UpdatePipelineRunScopeParams = dbgen.UpdatePipelineRunScopeParams

@@ -971,6 +971,50 @@ func (q *Queries) ListEvents(ctx context.Context, workflowID sql.NullString) ([]
 	return items, nil
 }
 
+const listEventsSince = `-- name: ListEventsSince :many
+SELECT id, workflow_id, task_id, event_type, event_data, created_at FROM events
+WHERE workflow_id = ?
+  AND id > ?
+ORDER BY id ASC
+LIMIT ?
+`
+
+type ListEventsSinceParams struct {
+	WorkflowID sql.NullString `json:"workflow_id"`
+	ID         int64          `json:"id"`
+	Limit      int64          `json:"limit"`
+}
+
+func (q *Queries) ListEventsSince(ctx context.Context, arg ListEventsSinceParams) ([]Event, error) {
+	rows, err := q.db.QueryContext(ctx, listEventsSince, arg.WorkflowID, arg.ID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Event
+	for rows.Next() {
+		var i Event
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkflowID,
+			&i.TaskID,
+			&i.EventType,
+			&i.EventData,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLatestPipelineRunsByPlanFile = `-- name: ListLatestPipelineRunsByPlanFile :many
 SELECT
     latest.plan_task_id,

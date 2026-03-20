@@ -106,6 +106,15 @@ type planRunUsefulnessResponse struct {
 	CreatedAt               string   `json:"created_at"`
 }
 
+type eventStreamResponse struct {
+	ID         int64   `json:"id"`
+	WorkflowID *string `json:"workflow_id,omitempty"`
+	TaskID     *string `json:"task_id,omitempty"`
+	EventType  string  `json:"event_type"`
+	EventData  any     `json:"event_data"`
+	CreatedAt  string  `json:"created_at"`
+}
+
 func mapSessionSummaries(rows []database.SessionSummary) []sessionSummaryResponse {
 	out := make([]sessionSummaryResponse, 0, len(rows))
 	for _, row := range rows {
@@ -228,6 +237,17 @@ func mapPlanRunUsefulnessRows(rows []database.PlanRunUsefulness) []planRunUseful
 	return out
 }
 
+func mapEventStreamRow(row database.Event) eventStreamResponse {
+	return eventStreamResponse{
+		ID:         row.ID,
+		WorkflowID: stringPtr(row.WorkflowID),
+		TaskID:     stringPtr(row.TaskID),
+		EventType:  row.EventType,
+		EventData:  parseJSONValue(row.EventData),
+		CreatedAt:  row.CreatedAt,
+	}
+}
+
 func parseAuditChanges(raw sql.NullString) []string {
 	if !raw.Valid || raw.String == "" {
 		return nil
@@ -242,15 +262,19 @@ func parseAuditChanges(raw sql.NullString) []string {
 }
 
 func parseMetadata(raw sql.NullString) any {
+	return parseJSONValue(raw)
+}
+
+func parseJSONValue(raw sql.NullString) any {
 	if !raw.Valid || raw.String == "" {
 		return nil
 	}
 
-	var metadata any
-	if err := json.Unmarshal([]byte(raw.String), &metadata); err != nil {
+	var payload any
+	if err := json.Unmarshal([]byte(raw.String), &payload); err != nil {
 		return raw.String
 	}
-	return metadata
+	return payload
 }
 
 func stringPtr(v sql.NullString) *string {

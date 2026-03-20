@@ -35,6 +35,7 @@ type Querier interface {
 	InsertPlanRun(ctx context.Context, arg InsertPlanRunParams) error
 	InsertSubCall(ctx context.Context, arg InsertSubCallParams) error
 	ListEvents(ctx context.Context, workflowID sql.NullString) ([]Event, error)
+	ListEventsSince(ctx context.Context, arg ListEventsSinceParams) ([]Event, error)
 	ListLatestPipelineRunsByPlanFile(ctx context.Context, planFile sql.NullString) ([]ListLatestPipelineRunsByPlanFileRow, error)
 	ReleaseTask(ctx context.Context, id string) error
 	RetryTask(ctx context.Context, id string) error

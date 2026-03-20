@@ -24,6 +24,9 @@ go.work
 /work-orders
 /include
 /lib
+/web/node_modules
+/web/.vite
+/web/coverage
 
 # OS specific
 .DS_Store

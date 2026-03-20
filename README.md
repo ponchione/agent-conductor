@@ -113,6 +113,10 @@ Run one task from the manifest by canonical task ID:
 conductor run work-orders/plan.yaml --task task-001
 ```
 
+Generated plan manifests and narrow work-order files under `work-orders/` are runtime
+artifacts. Once a plan has been executed or superseded, archive or delete those files
+instead of keeping stale work orders checked in as active tasks.
+
 ## Prerequisites
 
 - **Go 1.21+** with CGo support
@@ -184,6 +188,23 @@ make build
 ```
 
 This produces `bin/conductor` with the LanceDB shared library path baked in via rpath.
+
+The React observability UI is embedded from `internal/api/static/app`. `make build` does
+not rebuild the frontend automatically; it embeds whatever assets are already present in
+that directory. If you changed anything under `web/`, rebuild the frontend first:
+
+```bash
+make web-build
+make build
+```
+
+For end-to-end observability verification, use:
+
+```bash
+make observability-verify
+```
+
+That runs `npm run test`, `npm run build`, and the repo `make test` path in order.
 
 ## Setup
 
@@ -301,7 +322,7 @@ verify:
   smoke:
     assets:
       command:
-        argv: ["make", "smoke"]
+        argv: ["make", "smoketest"]
         timeout_seconds: 180
 
 safety:
@@ -391,19 +412,19 @@ Canonical example:
 
 ```yaml
 schema_version: 2
-title: "Preserve observability assets"
+title: "Preserve embedded observability UI assets"
 type: refactor
 target_module: internal/api
 reference_module: internal/http
 known_files:
   - internal/api/server.go
-  - internal/api/static/observability.css
+  - internal/api/static/app/assets/app.css
 requirements:
   - id: REQ-1
-    text: Static observability assets remain reachable
+    text: Embedded observability assets remain reachable
 acceptance_criteria:
   - id: AC-1
-    description: GET /assets/observability.css returns 200
+    description: GET /assets/app.css returns 200
     requirement_ids: [REQ-1]
     required: true
     verification:
@@ -465,6 +486,62 @@ cd /path/to/repo && git diff main..feature/conducted-<prefix>
 ```
 
 On approve, the conducted branch is fast-forward merged into main and deleted. The work order is archived both as a file and in the database. If `auto_reindex` is enabled, the RAG index is updated.
+
+## Observability UI
+
+The primary UI is served at `/observability`. It is a React application built from `web/`
+and embedded into the Go server from `internal/api/static/app`.
+
+The UI currently covers:
+
+- Session dashboard and session detail
+- Plan-audit dashboard
+- Live workflow monitoring over the DB-backed SSE stream at `/api/events/stream`
+
+Frontend commands:
+
+```bash
+make web-test
+make web-build
+```
+
+If you only rebuild the Go binary without rebuilding the frontend, `/observability` will
+serve the previously embedded asset bundle.
+
+### Manual Validation
+
+Use this flow after changing the observability surface:
+
+1. Build the frontend and the binary:
+
+```bash
+make web-build
+make build
+```
+
+2. Start the API server against a concrete database:
+
+```bash
+./bin/conductor serve --db /absolute/path/to/conductor.db
+```
+
+3. Open `http://localhost:8082/observability`.
+
+4. Verify REST-backed data loads:
+   - the session dashboard renders session cards and session detail
+   - the plan-audit dashboard renders summary stats and recent runs
+
+5. Run a fresh work order in another terminal against the same project/database:
+
+```bash
+./bin/conductor run --project /absolute/path/to/project.yaml /absolute/path/to/work-order.yaml
+```
+
+6. Return to `/observability`, open the Live Monitor view, and verify:
+   - a workflow can be selected for the active session
+   - event replay appears after connection
+   - new events continue to appear without fixed polling
+   - connection state changes are visible if the SSE stream reconnects
 
 ## Metrics and Stats
 

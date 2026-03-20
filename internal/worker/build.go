@@ -22,7 +22,7 @@ import (
 
 func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	slog.Info("Starting Build Phase", "task", task.ID)
-	w.db.LogEvent(task.WorkflowID, task.ID, "build_started", nil)
+	w.emitPhaseStart(ctx, task, nil)
 
 	buildStartedAt := time.Now()
 
@@ -99,6 +99,7 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 	w.registerWorkflowArtifact(ctx, task.WorkflowID, task.ID, database.ArtifactTypeBuildStderr, result.StderrPath, map[string]any{
 		"phase": "build",
 	})
+	w.emitBuildStdout(ctx, task, result)
 
 	if !result.Success {
 		return pipelineerrors.NeedsHumanf("build", task.WorkflowID, task.ID,
@@ -173,9 +174,10 @@ func (w *Worker) runBuild(ctx context.Context, task *database.Task) error {
 			"failed to update workflow state to build_complete: %w", err)
 	}
 
-	w.db.LogEvent(task.WorkflowID, task.ID, "build_completed", map[string]any{
+	w.emitPhaseComplete(ctx, task, map[string]any{
 		"exit_code": result.ExitCode,
 		"duration":  result.Duration.String(),
+		"success":   result.Success,
 	})
 
 	var toolCallsJSON string

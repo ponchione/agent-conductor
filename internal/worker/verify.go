@@ -218,7 +218,7 @@ func (w *Worker) precheckTimeout(timeoutSeconds int) time.Duration {
 
 func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 	slog.Info("Starting Verify Phase", "task", task.ID)
-	w.db.LogEvent(task.WorkflowID, task.ID, "verify_started", nil)
+	w.emitPhaseStart(ctx, task, nil)
 
 	verifyStartedAt := time.Now()
 
@@ -254,6 +254,9 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 	}
 
 	preChecks := w.runPreChecks(ctx, &wo)
+	for _, result := range preChecks {
+		w.emitVerifyPrecheck(ctx, task, result)
+	}
 
 	allPreFailed := len(preChecks) > 0
 	for _, r := range preChecks {
@@ -331,15 +334,20 @@ func (w *Worker) runVerify(ctx context.Context, task *database.Task) error {
 			"failed to update workflow budget: %w", err)
 	}
 
+	w.emitVerifyResult(ctx, task, report)
+
 	if allPreFailed {
 		return pipelineerrors.NeedsHumanf("verify", task.WorkflowID, task.ID,
 			"all pre-checks failed; skipping LLM evaluation")
 	}
 
-	w.db.LogEvent(task.WorkflowID, task.ID, "verify_completed", map[string]any{
+	w.emitPhaseComplete(ctx, task, map[string]any{
 		"status":           report.Status,
 		"scope_drift":      report.ScopeDrift.Detected,
 		"all_criteria_met": report.Completeness.AllCriteriaMet,
+	})
+	w.emitRunAwaitingReview(ctx, task.WorkflowID, task.ID, task.Phase, map[string]any{
+		"status": report.Status,
 	})
 
 	slog.Info("Verify phase complete",
