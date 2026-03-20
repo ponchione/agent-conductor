@@ -3,6 +3,8 @@ import type {
   PlanAuditStatsResponse,
   SessionDetailResponse,
   SessionListResponse,
+  WorkflowDetailResponse,
+  WorkflowListResponse,
 } from "../types/api";
 
 export interface ListSessionsOptions {
@@ -70,4 +72,28 @@ export function openEventStream(options: OpenEventStreamOptions): EventSource {
     source.onerror = options.onError;
   }
   return source;
+}
+
+export interface ListWorkflowsOptions {
+  status?: string;
+  project?: string;
+  session_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function listWorkflows(options: ListWorkflowsOptions = {}): Promise<WorkflowListResponse> {
+  const params = new URLSearchParams();
+  if (options.status) params.set("status", options.status);
+  if (options.project) params.set("project", options.project);
+  if (options.session_id) params.set("session_id", options.session_id);
+  if (typeof options.limit === "number") params.set("limit", String(options.limit));
+  if (typeof options.offset === "number") params.set("offset", String(options.offset));
+
+  const query = params.toString();
+  return fetchJSON<WorkflowListResponse>(query ? `/api/workflows?${query}` : "/api/workflows");
+}
+
+export async function getWorkflow(id: string): Promise<WorkflowDetailResponse> {
+  return fetchJSON<WorkflowDetailResponse>(`/api/workflows/${encodeURIComponent(id)}`);
 }

@@ -127,3 +127,82 @@ export interface EventStreamEnvelope {
 }
 
 export type ShellView = "sessions" | "audit" | "live";
+
+export interface WorkflowSummary {
+  id: string;
+  current_state: string;
+  work_order_title: string;
+  work_order_type?: string;
+  project: string;
+  session_id?: string;
+  git_branch: string;
+  verify_result?: string;
+  human_result?: string;
+  total_cost_usd?: number;
+  total_duration_seconds?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowListResponse {
+  workflows: WorkflowSummary[];
+  total: number;
+}
+
+export interface WorkflowRecord {
+  id: string;
+  current_state: string;
+  original_intent: string;
+  original_file: string;
+  git_branch: string;
+  target_repo: string;
+  created_at: string;
+  updated_at: string;
+  error_message?: string;
+}
+
+export interface PipelineRunDetail {
+  id: string;
+  work_order_type?: string;
+  work_order_content?: string;
+  verify_result?: string;
+  human_result?: string;
+  scope_started_at?: string;
+  scope_completed_at?: string;
+  build_started_at?: string;
+  build_completed_at?: string;
+  verify_started_at?: string;
+  verify_completed_at?: string;
+  scope_model?: string;
+  build_model?: string;
+  verify_model?: string;
+  scope_files_suggested?: number;
+  build_files_changed?: number;
+  build_scope_drift?: number;
+  scope_estimated_complexity?: string;
+  scope_rag_direct?: number;
+  scope_rag_hops?: number;
+  scope_paths_stripped?: number;
+  scope_paths_reclassified?: number;
+  build_cost_usd?: number;
+  build_tool_calls?: string;
+}
+
+export interface SubCall {
+  phase: string;
+  step: string;
+  provider: string;
+  model: string;
+  tokens_in: number;
+  tokens_out: number;
+  latency_ms: number;
+  estimated_cost_usd: number;
+  success: boolean;
+  error_message?: string;
+}
+
+export interface WorkflowDetailResponse {
+  workflow: WorkflowRecord;
+  pipeline_run: PipelineRunDetail | null;
+  sub_calls: SubCall[];
+}

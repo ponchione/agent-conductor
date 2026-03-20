@@ -41,6 +41,8 @@ func NewServer(db *database.DB) http.Handler {
 	r.Get("/api/sessions/{id}", s.handleGetSession)
 	r.Get("/api/stats/plan-audit", s.handleGetPlanAuditStats)
 	r.Get("/api/events/stream", s.handleEventStream)
+	r.Get("/api/workflows", s.handleListWorkflows)
+	r.Get("/api/workflows/{id}", s.handleGetWorkflow)
 	r.Get("/*", s.handleSPAFallback)
 	return r
 }
@@ -237,6 +239,64 @@ func writeEventBatch(w http.ResponseWriter, flusher http.Flusher, rows []databas
 		*lastID = row.ID
 	}
 	return nil
+}
+
+func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
+	limit, err := parseLimit(r, 50)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	offset, err := parseOffset(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	status := r.URL.Query().Get("status")
+	project := r.URL.Query().Get("project")
+	sessionID := r.URL.Query().Get("session_id")
+
+	rows, total, err := s.db.ListWorkflowsForUI(r.Context(), status, project, sessionID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("list workflows: %v", err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, workflowListResponse{
+		Workflows: mapWorkflowSummaries(rows),
+		Total:     total,
+	})
+}
+
+func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	wf, pr, subCalls, err := s.db.GetWorkflowDetailForUI(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "workflow not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("get workflow: %v", err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, mapWorkflowDetail(wf, pr, subCalls))
+}
+
+func parseOffset(r *http.Request) (int, error) {
+	raw := r.URL.Query().Get("offset")
+	if raw == "" {
+		return 0, nil
+	}
+
+	offset, err := strconv.Atoi(raw)
+	if err != nil || offset < 0 {
+		return 0, fmt.Errorf("invalid offset %q", raw)
+	}
+	return offset, nil
 }
 
 func (s *Server) staticAssetsHandler() http.Handler {

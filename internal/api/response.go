@@ -293,10 +293,187 @@ func int64Ptr(v sql.NullInt64) *int64 {
 	return &value
 }
 
+func float64Ptr(v sql.NullFloat64) *float64 {
+	if !v.Valid {
+		return nil
+	}
+	value := v.Float64
+	return &value
+}
+
 func computeDelta(before, after sql.NullInt64) *int64 {
 	if !before.Valid || !after.Valid {
 		return nil
 	}
 	value := after.Int64 - before.Int64
 	return &value
+}
+
+// --- Workflow response types ---
+
+type workflowSummaryResponse struct {
+	ID                   string   `json:"id"`
+	CurrentState         string   `json:"current_state"`
+	WorkOrderTitle       string   `json:"work_order_title"`
+	WorkOrderType        *string  `json:"work_order_type,omitempty"`
+	Project              string   `json:"project"`
+	SessionID            *string  `json:"session_id,omitempty"`
+	GitBranch            string   `json:"git_branch"`
+	VerifyResult         *string  `json:"verify_result,omitempty"`
+	HumanResult          *string  `json:"human_result,omitempty"`
+	TotalCostUSD         *float64 `json:"total_cost_usd,omitempty"`
+	TotalDurationSeconds *int64   `json:"total_duration_seconds,omitempty"`
+	CreatedAt            string   `json:"created_at"`
+	UpdatedAt            string   `json:"updated_at"`
+}
+
+type workflowListResponse struct {
+	Workflows []workflowSummaryResponse `json:"workflows"`
+	Total     int                       `json:"total"`
+}
+
+type workflowRecordResponse struct {
+	ID             string  `json:"id"`
+	CurrentState   string  `json:"current_state"`
+	OriginalIntent string  `json:"original_intent"`
+	OriginalFile   string  `json:"original_file"`
+	GitBranch      string  `json:"git_branch"`
+	TargetRepo     string  `json:"target_repo"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
+	ErrorMessage   *string `json:"error_message,omitempty"`
+}
+
+type pipelineRunDetailResponse struct {
+	ID                       string   `json:"id"`
+	WorkOrderType            *string  `json:"work_order_type,omitempty"`
+	WorkOrderContent         *string  `json:"work_order_content,omitempty"`
+	VerifyResult             *string  `json:"verify_result,omitempty"`
+	HumanResult              *string  `json:"human_result,omitempty"`
+	ScopeStartedAt           *string  `json:"scope_started_at,omitempty"`
+	ScopeCompletedAt         *string  `json:"scope_completed_at,omitempty"`
+	BuildStartedAt           *string  `json:"build_started_at,omitempty"`
+	BuildCompletedAt         *string  `json:"build_completed_at,omitempty"`
+	VerifyStartedAt          *string  `json:"verify_started_at,omitempty"`
+	VerifyCompletedAt        *string  `json:"verify_completed_at,omitempty"`
+	ScopeModel               *string  `json:"scope_model,omitempty"`
+	BuildModel               *string  `json:"build_model,omitempty"`
+	VerifyModel              *string  `json:"verify_model,omitempty"`
+	ScopeFilesSuggested      *int64   `json:"scope_files_suggested,omitempty"`
+	BuildFilesChanged        *int64   `json:"build_files_changed,omitempty"`
+	BuildScopeDrift          int      `json:"build_scope_drift"`
+	ScopeEstimatedComplexity *string  `json:"scope_estimated_complexity,omitempty"`
+	ScopeRagDirect           *int64   `json:"scope_rag_direct,omitempty"`
+	ScopeRagHops             *int64   `json:"scope_rag_hops,omitempty"`
+	ScopePathsStripped       *int64   `json:"scope_paths_stripped,omitempty"`
+	ScopePathsReclassified   *int64   `json:"scope_paths_reclassified,omitempty"`
+	BuildCostUSD             *float64 `json:"build_cost_usd,omitempty"`
+	BuildToolCalls           *string  `json:"build_tool_calls,omitempty"`
+}
+
+type subCallResponse struct {
+	Phase            string  `json:"phase"`
+	Step             string  `json:"step"`
+	Provider         string  `json:"provider"`
+	Model            string  `json:"model"`
+	TokensIn         int     `json:"tokens_in"`
+	TokensOut        int     `json:"tokens_out"`
+	LatencyMs        int     `json:"latency_ms"`
+	EstimatedCostUSD float64 `json:"estimated_cost_usd"`
+	Success          bool    `json:"success"`
+	ErrorMessage     *string `json:"error_message,omitempty"`
+}
+
+type workflowDetailResponse struct {
+	Workflow    workflowRecordResponse     `json:"workflow"`
+	PipelineRun *pipelineRunDetailResponse `json:"pipeline_run"`
+	SubCalls    []subCallResponse          `json:"sub_calls"`
+}
+
+func mapWorkflowSummaries(rows []database.UIWorkflowSummary) []workflowSummaryResponse {
+	out := make([]workflowSummaryResponse, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, workflowSummaryResponse{
+			ID:                   row.ID,
+			CurrentState:         row.CurrentState,
+			WorkOrderTitle:       row.WorkOrderTitle,
+			WorkOrderType:        stringPtr(row.WorkOrderType),
+			Project:              row.Project,
+			SessionID:            stringPtr(row.SessionID),
+			GitBranch:            row.GitBranch,
+			VerifyResult:         stringPtr(row.VerifyResult),
+			HumanResult:          stringPtr(row.HumanResult),
+			TotalCostUSD:         float64Ptr(row.TotalCostUSD),
+			TotalDurationSeconds: int64Ptr(row.TotalDurationSeconds),
+			CreatedAt:            row.CreatedAt,
+			UpdatedAt:            row.UpdatedAt,
+		})
+	}
+	return out
+}
+
+func mapWorkflowDetail(w database.UIWorkflowDetail, pr *database.UIPipelineRunDetail, subCalls []database.UISubCall) workflowDetailResponse {
+	resp := workflowDetailResponse{
+		Workflow: workflowRecordResponse{
+			ID:             w.ID,
+			CurrentState:   w.CurrentState,
+			OriginalIntent: w.OriginalIntent,
+			OriginalFile:   w.OriginalFile,
+			GitBranch:      w.GitBranch,
+			TargetRepo:     w.TargetRepo,
+			CreatedAt:      w.CreatedAt,
+			UpdatedAt:      w.UpdatedAt,
+			ErrorMessage:   stringPtr(w.ErrorMessage),
+		},
+		SubCalls: mapSubCalls(subCalls),
+	}
+	if pr != nil {
+		detail := pipelineRunDetailResponse{
+			ID:                       pr.ID,
+			WorkOrderType:            stringPtr(pr.WorkOrderType),
+			WorkOrderContent:         stringPtr(pr.WorkOrderContent),
+			VerifyResult:             stringPtr(pr.VerifyResult),
+			HumanResult:              stringPtr(pr.HumanResult),
+			ScopeStartedAt:           stringPtr(pr.ScopeStartedAt),
+			ScopeCompletedAt:         stringPtr(pr.ScopeCompletedAt),
+			BuildStartedAt:           stringPtr(pr.BuildStartedAt),
+			BuildCompletedAt:         stringPtr(pr.BuildCompletedAt),
+			VerifyStartedAt:          stringPtr(pr.VerifyStartedAt),
+			VerifyCompletedAt:        stringPtr(pr.VerifyCompletedAt),
+			ScopeModel:               stringPtr(pr.ScopeModel),
+			BuildModel:               stringPtr(pr.BuildModel),
+			VerifyModel:              stringPtr(pr.VerifyModel),
+			ScopeFilesSuggested:      int64Ptr(pr.ScopeFilesSuggested),
+			BuildFilesChanged:        int64Ptr(pr.BuildFilesChanged),
+			BuildScopeDrift:          pr.BuildScopeDrift,
+			ScopeEstimatedComplexity: stringPtr(pr.ScopeEstimatedComplexity),
+			ScopeRagDirect:           int64Ptr(pr.ScopeRagDirect),
+			ScopeRagHops:             int64Ptr(pr.ScopeRagHops),
+			ScopePathsStripped:       int64Ptr(pr.ScopePathsStripped),
+			ScopePathsReclassified:   int64Ptr(pr.ScopePathsReclassified),
+			BuildCostUSD:             float64Ptr(pr.BuildCostUSD),
+			BuildToolCalls:           stringPtr(pr.BuildToolCalls),
+		}
+		resp.PipelineRun = &detail
+	}
+	return resp
+}
+
+func mapSubCalls(rows []database.UISubCall) []subCallResponse {
+	out := make([]subCallResponse, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, subCallResponse{
+			Phase:            row.Phase,
+			Step:             row.Step,
+			Provider:         row.Provider,
+			Model:            row.Model,
+			TokensIn:         row.TokensIn,
+			TokensOut:        row.TokensOut,
+			LatencyMs:        row.LatencyMs,
+			EstimatedCostUSD: row.EstimatedCostUSD,
+			Success:          row.Success,
+			ErrorMessage:     stringPtr(row.ErrorMessage),
+		})
+	}
+	return out
 }
