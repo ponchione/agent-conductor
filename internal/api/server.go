@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -164,6 +165,9 @@ func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
 		case <-ticker.C:
 			events, err := s.loadEventBatch(r.Context(), workflowID, lastID)
 			if err != nil {
+				if r.Context().Err() == nil {
+					slog.Warn("event stream poll failed", "workflow_id", workflowID, "error", err)
+				}
 				return
 			}
 			if err := writeEventBatch(w, flusher, events, &lastID); err != nil {
