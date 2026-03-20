@@ -36,21 +36,16 @@ type Server struct {
 func NewServer(db *database.DB) http.Handler {
 	s := &Server{db: db}
 	r := chi.NewRouter()
-	r.Get("/", s.handleIndex)
-	r.Get("/observability", s.handleObservabilityPage)
 	r.Mount("/assets/", s.staticAssetsHandler())
 	r.Get("/api/sessions", s.handleListSessions)
 	r.Get("/api/sessions/{id}", s.handleGetSession)
 	r.Get("/api/stats/plan-audit", s.handleGetPlanAuditStats)
 	r.Get("/api/events/stream", s.handleEventStream)
+	r.Get("/*", s.handleSPAFallback)
 	return r
 }
 
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/observability", http.StatusTemporaryRedirect)
-}
-
-func (s *Server) handleObservabilityPage(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSPAFallback(w http.ResponseWriter, r *http.Request) {
 	content, err := fs.ReadFile(staticFiles, "static/app/index.html")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("load observability UI: %v (run make web-build to refresh embedded assets)", err))

@@ -394,27 +394,40 @@ func TestGetPlanAuditStatsEndpointRejectsInvalidLimit(t *testing.T) {
 	}
 }
 
-func TestObservabilityPageEndpoint(t *testing.T) {
+func TestSPAFallbackEndpoint(t *testing.T) {
 	t.Parallel()
 
 	db := newTestDB(t)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/observability", nil)
+	handler := NewServer(db)
 
-	NewServer(db).ServeHTTP(rec, req)
+	paths := []string{
+		"/",
+		"/observability",
+		"/pipeline/some-id/build",
+		"/any/arbitrary/path",
+	}
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if contentType := rec.Header().Get("Content-Type"); contentType != "text/html; charset=utf-8" {
-		t.Fatalf("Content-Type = %q, want text/html; charset=utf-8", contentType)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "Conductor Observability") {
-		t.Fatalf("body missing page title, body = %q", body)
-	}
-	if !strings.Contains(body, "/assets/app.js") {
-		t.Fatalf("body missing React bundle path, body = %q", body)
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+			if contentType := rec.Header().Get("Content-Type"); contentType != "text/html; charset=utf-8" {
+				t.Fatalf("Content-Type = %q, want text/html; charset=utf-8", contentType)
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, "topham") {
+				t.Fatalf("body missing page title, body = %q", body)
+			}
+			if !strings.Contains(body, "/assets/app.js") {
+				t.Fatalf("body missing React bundle path, body = %q", body)
+			}
+		})
 	}
 }
 
@@ -430,8 +443,12 @@ func TestObservabilityAssetsEndpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if !strings.Contains(rec.Body.String(), "Observability Console") {
-		t.Fatalf("body missing React app marker, body = %q", rec.Body.String())
+	if rec.Body.Len() == 0 {
+		t.Fatal("body is empty, expected JS bundle content")
+	}
+	ct := rec.Header().Get("Content-Type")
+	if !strings.Contains(ct, "javascript") && !strings.Contains(ct, "application/") {
+		t.Fatalf("Content-Type = %q, expected JavaScript content type", ct)
 	}
 }
 
