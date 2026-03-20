@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -8,10 +9,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ponchione/agent-conductor/internal/database"
+	"github.com/ponchione/agent-conductor/internal/pipeline"
 )
 
 func TestListSessionsEndpoint(t *testing.T) {
@@ -405,8 +409,211 @@ func TestObservabilityPageEndpoint(t *testing.T) {
 	if contentType := rec.Header().Get("Content-Type"); contentType != "text/html; charset=utf-8" {
 		t.Fatalf("Content-Type = %q, want text/html; charset=utf-8", contentType)
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "Observability Console") {
+	body := rec.Body.String()
+	if !strings.Contains(body, "Conductor Observability") {
 		t.Fatalf("body missing page title, body = %q", body)
+	}
+	if !strings.Contains(body, "/assets/app.js") {
+		t.Fatalf("body missing React bundle path, body = %q", body)
+	}
+}
+
+func TestObservabilityAssetsEndpoint(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
+
+	NewServer(db).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if !strings.Contains(rec.Body.String(), "Observability Console") {
+		t.Fatalf("body missing React app marker, body = %q", rec.Body.String())
+	}
+}
+
+func TestEventStreamEndpointReplaysExistingEvents(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	createEventWorkflowAndTask(t, db, "wf-stream-replay", "task-1")
+	if err := db.LogEvent("wf-stream-replay", "task-1", pipeline.EventPhaseStart, map[string]any{"phase": "scope", "step": "decompose"}); err != nil {
+		t.Fatalf("LogEvent(phase_start) error: %v", err)
+	}
+	if err := db.LogEvent("wf-stream-replay", "task-1", pipeline.EventPhaseComplete, map[string]any{"phase": "build", "duration": "1s"}); err != nil {
+		t.Fatalf("LogEvent(phase_complete) error: %v", err)
+	}
+
+	server := httptest.NewServer(NewServer(db))
+	defer server.Close()
+
+	resp, reader, closeStream := openEventStream(t, server.URL+"/api/events/stream?workflow_id=wf-stream-replay")
+	defer closeStream()
+
+	if contentType := resp.Header.Get("Content-Type"); contentType != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", contentType)
+	}
+	if cacheControl := resp.Header.Get("Cache-Control"); cacheControl != "no-cache" {
+		t.Fatalf("Cache-Control = %q, want no-cache", cacheControl)
+	}
+
+	first := readNextSSEEvent(t, reader)
+	second := readNextSSEEvent(t, reader)
+
+	if first.Event != pipeline.EventPhaseStart {
+		t.Fatalf("first.Event = %q, want %s", first.Event, pipeline.EventPhaseStart)
+	}
+	if first.Payload.WorkflowID == nil || *first.Payload.WorkflowID != "wf-stream-replay" {
+		t.Fatalf("first.Payload.WorkflowID = %#v, want wf-stream-replay", first.Payload.WorkflowID)
+	}
+	firstData, ok := first.Payload.EventData.(map[string]any)
+	if !ok || firstData["step"] != "decompose" {
+		t.Fatalf("first.Payload.EventData = %#v, want step=decompose", first.Payload.EventData)
+	}
+
+	if second.Event != pipeline.EventPhaseComplete {
+		t.Fatalf("second.Event = %q, want %s", second.Event, pipeline.EventPhaseComplete)
+	}
+	secondData, ok := second.Payload.EventData.(map[string]any)
+	if !ok || secondData["duration"] != "1s" {
+		t.Fatalf("second.Payload.EventData = %#v, want duration=1s", second.Payload.EventData)
+	}
+	if second.ID <= first.ID {
+		t.Fatalf("event IDs should increase, got first=%d second=%d", first.ID, second.ID)
+	}
+}
+
+func TestEventStreamEndpointReplaysFromCursor(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	createEventWorkflowAndTask(t, db, "wf-stream-cursor", "task-1")
+	if err := db.LogEvent("wf-stream-cursor", "task-1", pipeline.EventPhaseStart, map[string]any{"phase": "scope"}); err != nil {
+		t.Fatalf("LogEvent(phase_start) error: %v", err)
+	}
+	if err := db.LogEvent("wf-stream-cursor", "task-1", pipeline.EventScopeStep, map[string]any{"phase": "scope", "step": "validated"}); err != nil {
+		t.Fatalf("LogEvent(scope_step) error: %v", err)
+	}
+	if err := db.LogEvent("wf-stream-cursor", "task-1", pipeline.EventVerifyResult, map[string]any{"phase": "verify", "status": "PASS"}); err != nil {
+		t.Fatalf("LogEvent(verify_result) error: %v", err)
+	}
+
+	rows, err := db.ListEvents(context.Background(), sql.NullString{String: "wf-stream-cursor", Valid: true})
+	if err != nil {
+		t.Fatalf("ListEvents() error: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("len(rows) = %d, want 3", len(rows))
+	}
+
+	server := httptest.NewServer(NewServer(db))
+	defer server.Close()
+
+	url := server.URL + "/api/events/stream?workflow_id=wf-stream-cursor&cursor=" + strconv.FormatInt(rows[1].ID, 10)
+	_, reader, closeStream := openEventStream(t, url)
+	defer closeStream()
+
+	event := readNextSSEEvent(t, reader)
+	if event.ID != rows[2].ID {
+		t.Fatalf("event.ID = %d, want %d", event.ID, rows[2].ID)
+	}
+	if event.Event != pipeline.EventVerifyResult {
+		t.Fatalf("event.Event = %q, want %s", event.Event, pipeline.EventVerifyResult)
+	}
+}
+
+func TestEventStreamEndpointScopesByWorkflow(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	createEventWorkflowAndTask(t, db, "wf-stream-a", "task-a")
+	createEventWorkflowAndTask(t, db, "wf-stream-b", "task-b")
+	if err := db.LogEvent("wf-stream-a", "task-a", pipeline.EventPhaseStart, map[string]any{"phase": "scope", "workflow": "a"}); err != nil {
+		t.Fatalf("LogEvent(wf-stream-a) error: %v", err)
+	}
+	if err := db.LogEvent("wf-stream-b", "task-b", pipeline.EventPhaseStart, map[string]any{"phase": "scope", "workflow": "b"}); err != nil {
+		t.Fatalf("LogEvent(wf-stream-b) error: %v", err)
+	}
+
+	server := httptest.NewServer(NewServer(db))
+	defer server.Close()
+
+	_, reader, closeStream := openEventStream(t, server.URL+"/api/events/stream?workflow_id=wf-stream-a")
+	defer closeStream()
+
+	event := readNextSSEEvent(t, reader)
+	if event.Payload.WorkflowID == nil || *event.Payload.WorkflowID != "wf-stream-a" {
+		t.Fatalf("event.Payload.WorkflowID = %#v, want wf-stream-a", event.Payload.WorkflowID)
+	}
+	if event.Event != pipeline.EventPhaseStart {
+		t.Fatalf("event.Event = %q, want %s", event.Event, pipeline.EventPhaseStart)
+	}
+	data, ok := event.Payload.EventData.(map[string]any)
+	if !ok || data["workflow"] != "a" {
+		t.Fatalf("event.Payload.EventData = %#v, want workflow=a", event.Payload.EventData)
+	}
+}
+
+func TestEventStreamEndpointDeliversNewEvents(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	createEventWorkflowAndTask(t, db, "wf-stream-tail", "task-1")
+	server := httptest.NewServer(NewServer(db))
+	defer server.Close()
+
+	_, reader, closeStream := openEventStream(t, server.URL+"/api/events/stream?workflow_id=wf-stream-tail")
+	defer closeStream()
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		_ = db.LogEvent("wf-stream-tail", "task-1", pipeline.EventBuildStdout, map[string]any{"phase": "build", "duration": "2s"})
+	}()
+
+	event := readNextSSEEvent(t, reader)
+	if event.Event != pipeline.EventBuildStdout {
+		t.Fatalf("event.Event = %q, want %s", event.Event, pipeline.EventBuildStdout)
+	}
+	data, ok := event.Payload.EventData.(map[string]any)
+	if !ok || data["duration"] != "2s" {
+		t.Fatalf("event.Payload.EventData = %#v, want duration=2s", event.Payload.EventData)
+	}
+}
+
+func TestEventStreamEndpointStopsOnCancel(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/events/stream?workflow_id=wf-stream-cancel", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		NewServer(db).ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream handler did not stop after request cancellation")
+	}
+
+	if contentType := rec.Header().Get("Content-Type"); contentType != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", contentType)
+	}
+	if cacheControl := rec.Header().Get("Cache-Control"); cacheControl != "no-cache" {
+		t.Fatalf("Cache-Control = %q, want no-cache", cacheControl)
+	}
+	if connection := rec.Header().Get("Connection"); connection != "keep-alive" {
+		t.Fatalf("Connection = %q, want keep-alive", connection)
 	}
 }
 
@@ -420,4 +627,129 @@ func newTestDB(t *testing.T) *database.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func createEventWorkflowAndTask(t *testing.T, db *database.DB, workflowID, taskID string) {
+	t.Helper()
+
+	ctx := context.Background()
+	if err := db.CreateWorkflow(ctx, database.CreateWorkflowParams{
+		ID:                     workflowID,
+		OriginalIntent:         "stream test",
+		OriginalFile:           "/tmp/work-order.yaml",
+		CurrentState:           "pending",
+		TargetRepo:             "repo",
+		GitBranch:              "feature/stream-test",
+		ContextPackagePath:     sql.NullString{},
+		VerificationReportPath: sql.NullString{},
+		MaxDepth:               3,
+		MaxFilesChanged:        10,
+		MaxDurationMins:        30,
+	}); err != nil {
+		t.Fatalf("CreateWorkflow() error: %v", err)
+	}
+
+	if err := db.CreateTask(ctx, database.CreateTaskParams{
+		ID:            taskID,
+		WorkflowID:    workflowID,
+		SequenceNum:   1,
+		TaskType:      "analysis",
+		AgentType:     "test-agent",
+		TargetRepo:    "repo",
+		Phase:         "scope",
+		InputArtifact: "/tmp/input.yaml",
+		State:         "pending",
+		MaxAttempts:   1,
+	}); err != nil {
+		t.Fatalf("CreateTask() error: %v", err)
+	}
+}
+
+type sseEvent struct {
+	ID      int64
+	Event   string
+	Payload eventStreamResponse
+}
+
+func openEventStream(t *testing.T, url string) (*http.Response, *bufio.Reader, func()) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		cancel()
+		t.Fatalf("NewRequestWithContext() error: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		cancel()
+		t.Fatalf("Do() error: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		cancel()
+		_ = resp.Body.Close()
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	closeStream := func() {
+		cancel()
+		_ = resp.Body.Close()
+	}
+	return resp, bufio.NewReader(resp.Body), closeStream
+}
+
+func readNextSSEEvent(t *testing.T, reader *bufio.Reader) sseEvent {
+	t.Helper()
+
+	var (
+		eventID  int64
+		eventSet bool
+		data     strings.Builder
+	)
+
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("ReadString() error: %v", err)
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			break
+		}
+
+		switch {
+		case strings.HasPrefix(line, "id: "):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "id: "))
+			parsed, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				t.Fatalf("ParseInt(%q) error: %v", value, err)
+			}
+			eventID = parsed
+			eventSet = true
+		case strings.HasPrefix(line, "data: "):
+			if data.Len() > 0 {
+				data.WriteByte('\n')
+			}
+			data.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data: ")))
+		}
+	}
+
+	if !eventSet {
+		t.Fatal("missing SSE id field")
+	}
+	if data.Len() == 0 {
+		t.Fatal("missing SSE data field")
+	}
+
+	var payload eventStreamResponse
+	if err := json.Unmarshal([]byte(data.String()), &payload); err != nil {
+		t.Fatalf("Unmarshal(data) error: %v", err)
+	}
+
+	return sseEvent{
+		ID:      eventID,
+		Event:   payload.EventType,
+		Payload: payload,
+	}
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -9,12 +10,18 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ponchione/agent-conductor/internal/database"
 )
 
-const defaultLimit = 20
+const (
+	defaultLimit            = 20
+	eventStreamBatchLimit   = 100
+	eventStreamPollInterval = 250 * time.Millisecond
+)
 
 //go:embed static/*
 var staticFiles embed.FS
@@ -34,6 +41,7 @@ func NewServer(db *database.DB) http.Handler {
 	r.Get("/api/sessions", s.handleListSessions)
 	r.Get("/api/sessions/{id}", s.handleGetSession)
 	r.Get("/api/stats/plan-audit", s.handleGetPlanAuditStats)
+	r.Get("/api/events/stream", s.handleEventStream)
 	return r
 }
 
@@ -42,9 +50,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleObservabilityPage(w http.ResponseWriter, r *http.Request) {
-	content, err := fs.ReadFile(staticFiles, "static/observability.html")
+	content, err := fs.ReadFile(staticFiles, "static/app/index.html")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("load observability UI: %v", err))
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("load observability UI: %v (run make web-build to refresh embedded assets)", err))
 		return
 	}
 
@@ -110,6 +118,61 @@ func (s *Server) handleGetPlanAuditStats(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
+	workflowID := strings.TrimSpace(r.URL.Query().Get("workflow_id"))
+	if workflowID == "" {
+		writeError(w, http.StatusBadRequest, "workflow_id is required")
+		return
+	}
+
+	cursor, err := parseEventCursor(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming is not supported")
+		return
+	}
+
+	events, err := s.loadEventBatch(r.Context(), workflowID, cursor)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("list events: %v", err))
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	lastID := cursor
+	if err := writeEventBatch(w, flusher, events, &lastID); err != nil {
+		return
+	}
+
+	ticker := time.NewTicker(eventStreamPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			events, err := s.loadEventBatch(r.Context(), workflowID, lastID)
+			if err != nil {
+				return
+			}
+			if err := writeEventBatch(w, flusher, events, &lastID); err != nil {
+				return
+			}
+		}
+	}
+}
+
 func parseLimit(r *http.Request, defaultValue int) (int, error) {
 	raw := r.URL.Query().Get("limit")
 	if raw == "" {
@@ -121,6 +184,22 @@ func parseLimit(r *http.Request, defaultValue int) (int, error) {
 		return 0, fmt.Errorf("invalid limit %q", raw)
 	}
 	return limit, nil
+}
+
+func parseEventCursor(r *http.Request) (int64, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+	}
+	if raw == "" {
+		return 0, nil
+	}
+
+	cursor, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || cursor < 0 {
+		return 0, fmt.Errorf("invalid event cursor %q", raw)
+	}
+	return cursor, nil
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
@@ -135,8 +214,34 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	}
 }
 
+func (s *Server) loadEventBatch(ctx context.Context, workflowID string, afterID int64) ([]database.Event, error) {
+	return s.db.ListEventsSince(ctx, database.ListEventsSinceParams{
+		WorkflowID: sql.NullString{String: workflowID, Valid: true},
+		ID:         afterID,
+		Limit:      eventStreamBatchLimit,
+	})
+}
+
+func writeEventBatch(w http.ResponseWriter, flusher http.Flusher, rows []database.Event, lastID *int64) error {
+	for _, row := range rows {
+		payload, err := json.Marshal(mapEventStreamRow(row))
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "id: %d\n", row.ID); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+			return err
+		}
+		flusher.Flush()
+		*lastID = row.ID
+	}
+	return nil
+}
+
 func (s *Server) staticAssetsHandler() http.Handler {
-	assetsFS, err := fs.Sub(staticFiles, "static")
+	assetsFS, err := fs.Sub(staticFiles, "static/app/assets")
 	if err != nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("load assets: %v", err))
