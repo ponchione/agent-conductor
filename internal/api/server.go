@@ -21,7 +21,7 @@ import (
 const (
 	defaultLimit            = 20
 	eventStreamBatchLimit   = 100
-	eventStreamPollInterval = 250 * time.Millisecond
+	eventStreamPollInterval = 1 * time.Second
 )
 
 //go:embed static/*
