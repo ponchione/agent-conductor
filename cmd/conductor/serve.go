@@ -10,6 +10,7 @@ import (
 
 	"github.com/ponchione/agent-conductor/internal/api"
 	"github.com/ponchione/agent-conductor/internal/database"
+	"github.com/ponchione/agent-conductor/internal/git"
 	"github.com/spf13/cobra"
 )
 
@@ -39,8 +40,14 @@ var serveCmd = &cobra.Command{
 		}
 		defer db.Close()
 
+		gitMgr := git.New(nil)
+		baseBranch := "main"
+		if cfg != nil && cfg.Git.BaseBranch != "" {
+			baseBranch = cfg.Git.BaseBranch
+		}
+
 		slog.Info("starting observability API server", "addr", serveAddr, "db", dbPath)
-		if err := http.ListenAndServe(serveAddr, api.NewServer(db)); err != nil {
+		if err := http.ListenAndServe(serveAddr, api.NewServer(db, gitMgr, baseBranch)); err != nil {
 			return fmt.Errorf("serve API: %w", err)
 		}
 		return nil

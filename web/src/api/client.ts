@@ -1,10 +1,14 @@
 import type {
+  ApproveResponse,
   EventStreamEnvelope,
   PlanAuditStatsResponse,
+  RejectResponse,
   SessionDetailResponse,
   SessionListResponse,
   WorkflowDetailResponse,
+  WorkflowDiffResponse,
   WorkflowListResponse,
+  WorkflowScopeResponse,
 } from "../types/api";
 
 export interface ListSessionsOptions {
@@ -96,4 +100,49 @@ export async function listWorkflows(options: ListWorkflowsOptions = {}): Promise
 
 export async function getWorkflow(id: string): Promise<WorkflowDetailResponse> {
   return fetchJSON<WorkflowDetailResponse>(`/api/workflows/${encodeURIComponent(id)}`);
+}
+
+async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as { error?: string };
+  if (!response.ok) {
+    throw new Error(payload.error || `Request failed: ${response.status}`);
+  }
+  return payload as T;
+}
+
+export async function getWorkflowDiff(id: string): Promise<WorkflowDiffResponse> {
+  return fetchJSON<WorkflowDiffResponse>(`/api/workflows/${encodeURIComponent(id)}/diff`);
+}
+
+export async function getWorkflowScope(id: string): Promise<WorkflowScopeResponse> {
+  return fetchJSON<WorkflowScopeResponse>(`/api/workflows/${encodeURIComponent(id)}/scope`);
+}
+
+export async function approveWorkflow(
+  id: string,
+  options: { reindex: boolean },
+): Promise<ApproveResponse> {
+  return postJSON<ApproveResponse>(
+    `/api/workflows/${encodeURIComponent(id)}/approve`,
+    options,
+  );
+}
+
+export async function rejectWorkflow(
+  id: string,
+  options: { reason?: string },
+): Promise<RejectResponse> {
+  return postJSON<RejectResponse>(
+    `/api/workflows/${encodeURIComponent(id)}/reject`,
+    options,
+  );
 }

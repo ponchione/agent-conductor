@@ -2,10 +2,15 @@ import type { PipelineRunDetail, SubCall } from "@/types/api";
 import { MetricCard } from "@/components/MetricCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { TimeAgo } from "@/components/TimeAgo";
+import { Button } from "@/components/ui/button";
 
 interface WorkflowOverviewProps {
   pipelineRun: PipelineRunDetail | null;
   subCalls: SubCall[];
+  workflowState: string;
+  workflowId: string;
+  onApprove?: () => void;
+  onReject?: () => void;
 }
 
 function formatDuration(startedAt?: string, completedAt?: string): string {
@@ -58,7 +63,14 @@ interface PhaseRow {
   completedAt?: string;
 }
 
-export default function WorkflowOverview({ pipelineRun, subCalls }: WorkflowOverviewProps) {
+export default function WorkflowOverview({
+  pipelineRun,
+  subCalls,
+  workflowState,
+  workflowId: _workflowId,
+  onApprove,
+  onReject,
+}: WorkflowOverviewProps) {
   if (!pipelineRun) {
     return (
       <div className="flex items-center justify-center p-6 text-sm text-muted-foreground">
@@ -101,8 +113,73 @@ export default function WorkflowOverview({ pipelineRun, subCalls }: WorkflowOver
   const verifyTokensIn = verifyCalls.reduce((sum, sc) => sum + sc.tokens_in, 0);
   const verifyTokensOut = verifyCalls.reduce((sum, sc) => sum + sc.tokens_out, 0);
 
+  const showReviewSummary = workflowState === "human_review" && pipelineRun;
+
+  // Duration calculation for review summary
+  const totalDuration = pipelineRun
+    ? formatDuration(pipelineRun.scope_started_at, pipelineRun.verify_completed_at ?? pipelineRun.build_completed_at)
+    : null;
+
   return (
     <div className="space-y-8 p-4">
+      {/* Review Summary */}
+      {showReviewSummary && (
+        <section className="rounded-lg border-2 border-amber-500/50 bg-amber-500/5 p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-amber-400">Review Required</h3>
+          <div className="flex items-center gap-4 flex-wrap">
+            {pipelineRun.verify_result && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Verify:</span>
+                <StatusBadge
+                  status={pipelineRun.verify_result.toLowerCase() === "pass" ? "completed" : "failed"}
+                  size="sm"
+                />
+                <span className="text-xs font-medium">
+                  {pipelineRun.verify_result.toUpperCase()}
+                </span>
+              </div>
+            )}
+            <span className="text-xs text-muted-foreground">
+              {pipelineRun.build_files_changed ?? 0} files changed
+            </span>
+            {buildCost > 0 && (
+              <span className="text-xs text-muted-foreground">
+                Cost: {formatCost(totalCost)}
+              </span>
+            )}
+            {totalDuration && (
+              <span className="text-xs text-muted-foreground">
+                Duration: {totalDuration}
+              </span>
+            )}
+          </div>
+          {(onApprove || onReject) && (
+            <div className="flex items-center gap-2 pt-1">
+              {onApprove && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-green-500/50 text-green-400 hover:bg-green-500/10"
+                  onClick={onApprove}
+                >
+                  Approve
+                </Button>
+              )}
+              {onReject && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                  onClick={onReject}
+                >
+                  Reject
+                </Button>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Section 1: Phase Timing Breakdown */}
       <section>
         <h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-muted-foreground">

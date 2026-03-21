@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Loader2, GitBranch } from "lucide-react";
-import { getWorkflow } from "@/api/client";
+import { getWorkflow, approveWorkflow, rejectWorkflow } from "@/api/client";
 import type { WorkflowDetailResponse } from "@/types/api";
 import { StatusBadge } from "@/components/StatusBadge";
 import { CopyableID } from "@/components/CopyableID";
 import { PhaseProgressStrip } from "@/components/PhaseProgressStrip";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import WorkflowOverview from "@/pages/WorkflowOverview";
 import WorkflowEvents from "@/pages/WorkflowEvents";
+import WorkflowBuild from "@/pages/WorkflowBuild";
+import WorkflowVerify from "@/pages/WorkflowVerify";
+import WorkflowScope from "@/pages/WorkflowScope";
 
 const TAB_VALUES = ["overview", "scope", "build", "verify", "events"] as const;
 type TabValue = (typeof TAB_VALUES)[number];
@@ -44,6 +48,13 @@ export default function WorkflowDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [reindexAfterMerge, setReindexAfterMerge] = useState(true);
+
   const activeTab: TabValue = isValidTab(tab) ? tab : "overview";
 
   useEffect(() => {
@@ -74,6 +85,44 @@ export default function WorkflowDetail() {
       cancelled = true;
     };
   }, [workflowId]);
+
+  function refetchWorkflow() {
+    if (!workflowId) return;
+    getWorkflow(workflowId)
+      .then((response) => setData(response))
+      .catch(() => {});
+  }
+
+  async function handleApprove() {
+    if (!workflowId) return;
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await approveWorkflow(workflowId, { reindex: reindexAfterMerge });
+      setApproveOpen(false);
+      refetchWorkflow();
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Approve failed");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function handleReject() {
+    if (!workflowId) return;
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await rejectWorkflow(workflowId, { reason: rejectReason || undefined });
+      setRejectOpen(false);
+      setRejectReason("");
+      refetchWorkflow();
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Reject failed");
+    } finally {
+      setActionLoading(false);
+    }
+  }
 
   function handleTabChange(value: string) {
     if (value === "overview") {
@@ -111,14 +160,26 @@ export default function WorkflowDetail() {
             <h1 className="truncate text-lg font-semibold">{title}</h1>
             <StatusBadge status={workflow.current_state} size="md" />
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" disabled>
-              Approve
-            </Button>
-            <Button variant="outline" size="sm" disabled>
-              Reject
-            </Button>
-          </div>
+          {workflow.current_state === "human_review" && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-green-500/50 text-green-400 hover:bg-green-500/10"
+                onClick={() => setApproveOpen(true)}
+              >
+                Approve
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                onClick={() => setRejectOpen(true)}
+              >
+                Reject
+              </Button>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-4 text-xs text-muted-foreground">
@@ -161,22 +222,31 @@ export default function WorkflowDetail() {
 
         <div className="min-h-0 flex-1 overflow-auto">
           <TabsContent value="overview">
-            <WorkflowOverview pipelineRun={pipeline_run} subCalls={sub_calls} />
+            <WorkflowOverview
+              pipelineRun={pipeline_run}
+              subCalls={sub_calls}
+              workflowState={workflow.current_state}
+              workflowId={workflow.id}
+              onApprove={() => setApproveOpen(true)}
+              onReject={() => setRejectOpen(true)}
+            />
           </TabsContent>
           <TabsContent value="scope">
-            <div className="flex items-center justify-center p-6 text-sm text-muted-foreground">
-              Scope details coming soon
-            </div>
+            <WorkflowScope workflowId={workflow.id} />
           </TabsContent>
           <TabsContent value="build">
-            <div className="flex items-center justify-center p-6 text-sm text-muted-foreground">
-              Build output coming soon
-            </div>
+            <WorkflowBuild
+              workflowId={workflow.id}
+              workflowState={workflow.current_state}
+              pipelineRun={pipeline_run}
+            />
           </TabsContent>
           <TabsContent value="verify">
-            <div className="flex items-center justify-center p-6 text-sm text-muted-foreground">
-              Verify results coming soon
-            </div>
+            <WorkflowVerify
+              workflowId={workflow.id}
+              workflowState={workflow.current_state}
+              pipelineRun={pipeline_run}
+            />
           </TabsContent>
           <TabsContent value="events">
             <WorkflowEvents
@@ -186,6 +256,67 @@ export default function WorkflowDetail() {
           </TabsContent>
         </div>
       </Tabs>
+
+      {/* Approve confirmation dialog */}
+      <ConfirmDialog
+        open={approveOpen}
+        title="Approve Workflow"
+        description={`This will merge the branch "${workflow.git_branch}" into the base branch.`}
+        confirmLabel="Approve & Merge"
+        onConfirm={handleApprove}
+        onCancel={() => {
+          setApproveOpen(false);
+          setActionError(null);
+        }}
+      >
+        <div className="space-y-3 py-2">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={reindexAfterMerge}
+              onChange={(e) => setReindexAfterMerge(e.target.checked)}
+              className="rounded border-border"
+            />
+            Re-index codebase after merge
+          </label>
+          {actionError && (
+            <p className="text-sm text-destructive">{actionError}</p>
+          )}
+          {actionLoading && (
+            <p className="text-sm text-muted-foreground">Processing...</p>
+          )}
+        </div>
+      </ConfirmDialog>
+
+      {/* Reject confirmation dialog */}
+      <ConfirmDialog
+        open={rejectOpen}
+        title="Reject Workflow"
+        description="This workflow will be marked as rejected. The branch will not be merged."
+        confirmLabel="Reject"
+        onConfirm={handleReject}
+        onCancel={() => {
+          setRejectOpen(false);
+          setRejectReason("");
+          setActionError(null);
+        }}
+      >
+        <div className="space-y-3 py-2">
+          <textarea
+            placeholder="Reason for rejection (optional)"
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            rows={3}
+          />
+          {actionError && (
+            <p className="text-sm text-destructive">{actionError}</p>
+          )}
+          {actionLoading && (
+            <p className="text-sm text-muted-foreground">Processing...</p>
+          )}
+        </div>
+      </ConfirmDialog>
     </div>
   );
 }

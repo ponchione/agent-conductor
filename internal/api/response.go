@@ -477,3 +477,44 @@ func mapSubCalls(rows []database.UISubCall) []subCallResponse {
 	}
 	return out
 }
+
+// --- Diff / Scope / Approve / Reject response types ---
+
+type diffStatsResponse struct {
+	Additions int `json:"additions"`
+	Deletions int `json:"deletions"`
+	Files     int `json:"files"`
+}
+
+type workflowDiffResponse struct {
+	Diff           string            `json:"diff"`
+	BaseBranch     string            `json:"base_branch"`
+	WorkflowBranch string            `json:"workflow_branch"`
+	FilesChanged   []string          `json:"files_changed"`
+	Stats          diffStatsResponse `json:"stats"`
+}
+
+type workflowScopeResponse struct {
+	ContextPackage json.RawMessage `json:"context_package"`
+	Source         string          `json:"source"`
+}
+
+type approveRequest struct {
+	Reindex bool `json:"reindex"`
+}
+
+type approveResponse struct {
+	Status     string `json:"status"`
+	WorkflowID string `json:"workflow_id"`
+	Merged     bool   `json:"merged"`
+	Reindexed  bool   `json:"reindexed"`
+}
+
+type rejectRequest struct {
+	Reason string `json:"reason"`
+}
+
+type rejectResponse struct {
+	Status     string `json:"status"`
+	WorkflowID string `json:"workflow_id"`
+}

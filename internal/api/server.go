@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ponchione/agent-conductor/internal/database"
+	"github.com/ponchione/agent-conductor/internal/git"
 )
 
 const (
@@ -29,12 +30,14 @@ var staticFiles embed.FS
 
 // Server exposes read-only observability endpoints backed by the conductor DB.
 type Server struct {
-	db *database.DB
+	db         *database.DB
+	gitMgr     *git.GitManager
+	baseBranch string
 }
 
 // NewServer builds the HTTP handler tree for observability reads.
-func NewServer(db *database.DB) http.Handler {
-	s := &Server{db: db}
+func NewServer(db *database.DB, gitMgr *git.GitManager, baseBranch string) http.Handler {
+	s := &Server{db: db, gitMgr: gitMgr, baseBranch: baseBranch}
 	r := chi.NewRouter()
 	r.Mount("/assets/", s.staticAssetsHandler())
 	r.Get("/api/sessions", s.handleListSessions)
@@ -43,6 +46,10 @@ func NewServer(db *database.DB) http.Handler {
 	r.Get("/api/events/stream", s.handleEventStream)
 	r.Get("/api/workflows", s.handleListWorkflows)
 	r.Get("/api/workflows/{id}", s.handleGetWorkflow)
+	r.Get("/api/workflows/{id}/diff", s.handleGetWorkflowDiff)
+	r.Get("/api/workflows/{id}/scope", s.handleGetWorkflowScope)
+	r.Post("/api/workflows/{id}/approve", s.handleApproveWorkflow)
+	r.Post("/api/workflows/{id}/reject", s.handleRejectWorkflow)
 	r.Get("/*", s.handleSPAFallback)
 	return r
 }

@@ -206,3 +206,36 @@ export interface WorkflowDetailResponse {
   pipeline_run: PipelineRunDetail | null;
   sub_calls: SubCall[];
 }
+
+// --- Spec 03: Interactive Pipeline types ---
+
+export interface DiffStats {
+  additions: number;
+  deletions: number;
+  files: number;
+}
+
+export interface WorkflowDiffResponse {
+  diff: string;
+  base_branch: string;
+  workflow_branch: string;
+  files_changed: string[];
+  stats: DiffStats;
+}
+
+export interface WorkflowScopeResponse {
+  context_package: Record<string, unknown>;
+  source: string;
+}
+
+export interface ApproveResponse {
+  status: string;
+  workflow_id: string;
+  merged: boolean;
+  reindexed: boolean;
+}
+
+export interface RejectResponse {
+  status: string;
+  workflow_id: string;
+}
