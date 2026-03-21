@@ -1,16 +1,22 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strconv"
+	"syscall"
 
 	"github.com/ponchione/agent-conductor/internal/api"
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/git"
+	"github.com/ponchione/agent-conductor/internal/lock"
 	"github.com/spf13/cobra"
 )
 
@@ -34,6 +40,35 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 
+		// Resolve data dir for lock file
+		dataDir := ""
+		if cfg != nil {
+			dataDir = cfg.Project.DataDir
+		} else if serveDataDir != "" {
+			dataDir = serveDataDir
+		}
+
+		// Parse port from addr for lock file
+		_, portStr, _ := net.SplitHostPort(serveAddr)
+		port, _ := strconv.Atoi(portStr)
+
+		// Check for existing live server
+		if dataDir != "" {
+			existing, err := lock.CheckLock(dataDir)
+			if err != nil {
+				return fmt.Errorf("check lock: %w", err)
+			}
+			if existing != nil {
+				return fmt.Errorf("another topham server is already running (PID %d, port %d). Stop it first or use that instance.", existing.PID, existing.Port)
+			}
+
+			// Write lock
+			if err := lock.WriteLock(dataDir, port); err != nil {
+				return fmt.Errorf("write lock: %w", err)
+			}
+			defer lock.RemoveLock(dataDir)
+		}
+
 		db, err := database.NewDB(dbPath)
 		if err != nil {
 			return fmt.Errorf("failed to open database: %w", err)
@@ -53,8 +88,21 @@ var serveCmd = &cobra.Command{
 			workOrderDir = filepath.Join(cfg.Project.DataDir, "work-orders")
 		}
 
+		handler := api.NewServer(db, gitMgr, baseBranch, rq, workOrderDir, cfg)
+		srv := &http.Server{Addr: serveAddr, Handler: handler}
+
+		// Signal handling for graceful shutdown
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+
+		go func() {
+			<-ctx.Done()
+			slog.Info("shutting down server")
+			srv.Shutdown(context.Background())
+		}()
+
 		slog.Info("starting observability API server", "addr", serveAddr, "db", dbPath)
-		if err := http.ListenAndServe(serveAddr, api.NewServer(db, gitMgr, baseBranch, rq, workOrderDir, cfg)); err != nil {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			return fmt.Errorf("serve API: %w", err)
 		}
 		return nil

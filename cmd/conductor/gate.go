@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ponchione/agent-conductor/internal/database"
+	"github.com/ponchione/agent-conductor/internal/lock"
 	"github.com/ponchione/agent-conductor/internal/gate"
 	"github.com/ponchione/agent-conductor/internal/git"
 	"github.com/ponchione/agent-conductor/internal/rag"
@@ -34,6 +35,10 @@ The workflow ID must be a full UUID (e.g. from 'conductor list').`,
 		workflowID := args[0]
 		if _, err := uuid.Parse(workflowID); err != nil {
 			return fmt.Errorf("invalid workflow ID %q: expected a UUID (e.g. from 'conductor list')", workflowID)
+		}
+
+		if err := lock.CheckServerLock(cfg.Project.DataDir); err != nil {
+			return err
 		}
 
 		db, err := openDB()
@@ -85,6 +90,10 @@ An optional reason can be provided as the second argument.`,
 		workflowID := args[0]
 		if _, err := uuid.Parse(workflowID); err != nil {
 			return fmt.Errorf("invalid workflow ID %q: expected a UUID (e.g. from 'conductor list')", workflowID)
+		}
+
+		if err := lock.CheckServerLock(cfg.Project.DataDir); err != nil {
+			return err
 		}
 
 		reason := ""

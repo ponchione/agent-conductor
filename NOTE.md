@@ -8,20 +8,17 @@
 - **Spec 04: Queue System** — committed as `c7e0b50`
 - **Spec 05: Plan Space** — committed as `e447a8d`
 - **Spec 06: Config & Overrides** — committed as `b41ef00`
+- **Spec 07: Analytics Space** — committed as `5f24572`
+- **Spec 08: CLI Lock Mechanism** — uncommitted, ready to commit
+  - `internal/lock/` package: CheckLock, WriteLock, RemoveLock, CheckServerLock, isProcessAlive
+  - `cmd/conductor/serve.go`: lock acquire on start, signal-based graceful shutdown, lock release via defer
+  - `cmd/conductor/run.go`, `plan.go`, `gate.go`: lock guards on mutation commands (run, plan, approve, reject)
+  - Read-only commands (list, status, stats, index, etc.) unaffected
 
-- **Spec 07: Analytics Space** — uncommitted, ready to commit
-  - Backend: `internal/database/analytics.go` — ParseTimeRange, GetPipelineSummary, GetPlanSummary, GetPipelineRunTrends, GetPlanRunTrends, GetModelStats
-  - 3 API endpoints: `GET /api/stats/summary`, `GET /api/stats/trends`, `GET /api/stats/models`
-  - Frontend: Full AnalyticsSpace dashboard with Recharts — time range selector, project filter, 8 summary cards, 7 charts (cost over time, duration by phase, verify distribution pie, scope quality scatter, model comparison table, verify-human agreement trend, plan audit effectiveness)
-  - Known v1 limitations: project filter dropdown has no dynamic project list (hardcoded "All Projects" only), connection status hardcoded
-
-## Pick Up Next
-
-- **Spec 08: CLI Lock Mechanism** — next in line
+## All 8 UI Specs Complete
 
 ## Build Verification
 
 All passing as of end of session:
 - `make build` — pass
-- `make test` — pass (all 22 packages, 0 failures)
-- `cd web && npm run build` — pass (chunk size warning from Recharts/CodeMirror is expected)
+- `make test` — pass (all 23 packages, 0 failures)

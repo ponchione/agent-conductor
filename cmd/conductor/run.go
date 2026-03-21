@@ -13,6 +13,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/config"
 	condctx "github.com/ponchione/agent-conductor/internal/context"
 	"github.com/ponchione/agent-conductor/internal/database"
+	"github.com/ponchione/agent-conductor/internal/lock"
 	"github.com/ponchione/agent-conductor/internal/executor"
 	"github.com/ponchione/agent-conductor/internal/git"
 	"github.com/ponchione/agent-conductor/internal/models"
@@ -44,6 +45,10 @@ var runCmd = &cobra.Command{
 
 		if err := config.Validate(cfg); err != nil {
 			return fmt.Errorf("invalid config: %w", err)
+		}
+
+		if err := lock.CheckServerLock(cfg.Project.DataDir); err != nil {
+			return err
 		}
 
 		var prompts *templates.LoadedPrompts

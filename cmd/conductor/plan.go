@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/database"
+	"github.com/ponchione/agent-conductor/internal/lock"
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/logging"
 	"github.com/ponchione/agent-conductor/internal/streaming"
@@ -69,6 +70,10 @@ func init() {
 }
 
 func runPlan(cmd *cobra.Command, args []string) (err error) {
+	if err := lock.CheckServerLock(cfg.Project.DataDir); err != nil {
+		return err
+	}
+
 	specPath := args[0]
 	specData, err := os.ReadFile(specPath)
 	if err != nil {
