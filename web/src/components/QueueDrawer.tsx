@@ -13,7 +13,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import type { QueueItem } from "@/types/api";
+import { useConfig } from "@/hooks/useConfig";
+import { RoleOverrideDropdown, formatRoleName } from "@/components/ConfigPanel";
+import type { QueueItem, ModelOverride, RoleConfig, ProviderModels } from "@/types/api";
 import type { useQueue } from "@/hooks/useQueue";
 
 interface QueueDrawerProps {
@@ -24,6 +26,7 @@ interface QueueDrawerProps {
 
 export function QueueDrawer({ open, onClose, queue }: QueueDrawerProps) {
   const navigate = useNavigate();
+  const config = useConfig();
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [draggedId, setDraggedId] = useState<string | null>(null);
@@ -207,6 +210,9 @@ export function QueueDrawer({ open, onClose, queue }: QueueDrawerProps) {
                 <PendingItemRow
                   key={item.id}
                   item={item}
+                  roles={config.roles}
+                  availableModels={config.availableModels}
+                  sessionOverrides={config.overrides}
                   isDragOver={dragOverId === item.id}
                   isDragged={draggedId === item.id}
                   isExpanded={expandedOverrides.has(item.id)}
@@ -287,6 +293,9 @@ function ExecutingItemRow({
 
 function PendingItemRow({
   item,
+  roles,
+  availableModels,
+  sessionOverrides,
   isDragOver,
   isDragged,
   isExpanded,
@@ -299,6 +308,9 @@ function PendingItemRow({
   onDragEnd,
 }: {
   item: QueueItem;
+  roles: RoleConfig[];
+  availableModels: ProviderModels[];
+  sessionOverrides: Record<string, ModelOverride>;
   isDragOver: boolean;
   isDragged: boolean;
   isExpanded: boolean;
@@ -335,34 +347,51 @@ function PendingItemRow({
           </p>
         </div>
         <div className="flex items-center gap-1">
-          {hasOverrides && (
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={onToggleOverrides}
-              className="text-xs text-muted-foreground"
-            >
-              {isExpanded ? (
-                <ChevronDown className="h-3 w-3" />
-              ) : (
-                <ChevronRight className="h-3 w-3" />
-              )}
-              Custom overrides
-            </Button>
-          )}
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={onToggleOverrides}
+            className="text-xs text-muted-foreground"
+          >
+            {isExpanded ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+            Overrides
+          </Button>
           <Button size="icon-xs" variant="ghost" onClick={onRemove}>
             <Trash2 className="h-3 w-3" />
           </Button>
         </div>
       </div>
-      {isExpanded && hasOverrides && (
-        <div className="mt-2 rounded bg-muted/50 p-2 text-xs">
-          {Object.entries(item.overrides).map(([key, value]) => (
-            <div key={key} className="flex gap-2">
-              <span className="font-mono text-muted-foreground">{key}:</span>
-              <span>{value}</span>
-            </div>
-          ))}
+      {isExpanded && (
+        <div className="mt-2 space-y-2 rounded bg-muted/50 p-2">
+          <p className="text-xs font-medium text-muted-foreground">Override for this run</p>
+          {roles.map((role) => {
+            const itemOverrideRaw = item.overrides?.[role.name];
+            let activeOverride: ModelOverride | undefined;
+            if (itemOverrideRaw) {
+              const parts = itemOverrideRaw.split("::");
+              if (parts.length === 2) {
+                activeOverride = { provider: parts[0], model: parts[1] };
+              }
+            } else if (sessionOverrides[role.name]) {
+              activeOverride = sessionOverrides[role.name];
+            }
+
+            return (
+              <RoleOverrideDropdown
+                key={role.name}
+                role={role}
+                availableModels={availableModels}
+                activeOverride={activeOverride}
+                onChange={() => {}}
+                onClear={() => {}}
+                disabled
+              />
+            );
+          })}
         </div>
       )}
     </div>

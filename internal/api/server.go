@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/git"
 )
@@ -30,16 +31,22 @@ var staticFiles embed.FS
 
 // Server exposes read-only observability endpoints backed by the conductor DB.
 type Server struct {
-	db           *database.DB
-	gitMgr       *git.GitManager
-	baseBranch   string
-	runQueue     *RunQueue
-	workOrderDir string
+	db            *database.DB
+	gitMgr        *git.GitManager
+	baseBranch    string
+	runQueue      *RunQueue
+	workOrderDir  string
+	cfg           *config.ProjectConfig
+	overrideStore *OverrideStore
 }
 
 // NewServer builds the HTTP handler tree for observability reads.
-func NewServer(db *database.DB, gitMgr *git.GitManager, baseBranch string, runQueue *RunQueue, workOrderDir string) http.Handler {
-	s := &Server{db: db, gitMgr: gitMgr, baseBranch: baseBranch, runQueue: runQueue, workOrderDir: workOrderDir}
+func NewServer(db *database.DB, gitMgr *git.GitManager, baseBranch string, runQueue *RunQueue, workOrderDir string, cfg *config.ProjectConfig) http.Handler {
+	s := &Server{
+		db: db, gitMgr: gitMgr, baseBranch: baseBranch,
+		runQueue: runQueue, workOrderDir: workOrderDir,
+		cfg: cfg, overrideStore: NewOverrideStore(),
+	}
 	r := chi.NewRouter()
 	r.Mount("/assets/", s.staticAssetsHandler())
 	r.Get("/api/sessions", s.handleListSessions)
@@ -64,6 +71,9 @@ func NewServer(db *database.DB, gitMgr *git.GitManager, baseBranch string, runQu
 	r.Get("/api/work-orders/{filename}", s.handleGetWorkOrder)
 	r.Put("/api/work-orders/{filename}", s.handleUpdateWorkOrder)
 	r.Post("/api/plan", s.handleSubmitPlan)
+	r.Get("/api/config/roles", s.handleGetConfigRoles)
+	r.Get("/api/config/overrides", s.handleGetConfigOverrides)
+	r.Put("/api/config/overrides", s.handlePutConfigOverrides)
 	r.Get("/*", s.handleSPAFallback)
 	return r
 }

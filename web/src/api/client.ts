@@ -1,6 +1,9 @@
 import type {
   ApproveResponse,
+  ConfigOverridesResponse,
+  ConfigRolesResponse,
   EventStreamEnvelope,
+  ModelOverride,
   PlanAuditStatsResponse,
   PlanSubmitResponse,
   QueueAddItem,
@@ -212,4 +215,37 @@ export async function updateWorkOrder(filename: string, content: string): Promis
 
 export async function submitPlan(options: { spec_content?: string; spec_file_path?: string }): Promise<PlanSubmitResponse> {
   return postJSON<PlanSubmitResponse>("/api/plan", options);
+}
+
+async function putJSON<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: "PUT",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as { error?: string };
+  if (!response.ok) {
+    throw new Error(payload.error || `Request failed: ${response.status}`);
+  }
+  return payload as T;
+}
+
+// --- Config API ---
+
+export async function getConfigRoles(): Promise<ConfigRolesResponse> {
+  return fetchJSON<ConfigRolesResponse>("/api/config/roles");
+}
+
+export async function getConfigOverrides(): Promise<ConfigOverridesResponse> {
+  return fetchJSON<ConfigOverridesResponse>("/api/config/overrides");
+}
+
+export async function putConfigOverrides(
+  overrides: Record<string, ModelOverride>,
+): Promise<ConfigOverridesResponse> {
+  return putJSON<ConfigOverridesResponse>("/api/config/overrides", { overrides });
 }

@@ -301,3 +301,38 @@ export interface PlanSubmitResponse {
   session_id: string;
   status: string;
 }
+
+// --- Spec 06: Config & Override types ---
+
+export interface RoleConfig {
+  name: string;
+  current_provider: string;
+  current_model: string;
+  description: string;
+}
+
+export interface ProviderModels {
+  provider: string;
+  models: string[];
+}
+
+export interface ProjectInfo {
+  name: string;
+  path: string;
+  data_dir: string;
+}
+
+export interface ModelOverride {
+  provider: string;
+  model: string;
+}
+
+export interface ConfigRolesResponse {
+  roles: RoleConfig[];
+  available_models: ProviderModels[];
+  project: ProjectInfo;
+}
+
+export interface ConfigOverridesResponse {
+  overrides: Record<string, ModelOverride>;
+}

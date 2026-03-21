@@ -68,7 +68,7 @@ func TestListSessionsEndpoint(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions?state=running&limit=1", nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -179,7 +179,7 @@ func TestGetSessionDetailEndpoint(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/"+sessionID, nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -230,7 +230,7 @@ func TestGetSessionDetailEndpointNotFound(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/does-not-exist", nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
@@ -251,7 +251,7 @@ func TestGetSessionDetailEndpointEmptyLinkedData(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/"+sessionID, nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -300,7 +300,7 @@ func TestGetPlanAuditStatsEndpoint(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stats/plan-audit?limit=0", nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -349,7 +349,7 @@ func TestGetPlanAuditStatsEndpointEmpty(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stats/plan-audit", nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -374,7 +374,7 @@ func TestListSessionsEndpointRejectsInvalidLimit(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions?limit=-1", nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
@@ -388,7 +388,7 @@ func TestGetPlanAuditStatsEndpointRejectsInvalidLimit(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/stats/plan-audit?limit=abc", nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
@@ -399,7 +399,7 @@ func TestSPAFallbackEndpoint(t *testing.T) {
 	t.Parallel()
 
 	db := newTestDB(t)
-	handler := NewServer(db, nil, "main", nil, "")
+	handler := NewServer(db, nil, "main", nil, "", nil)
 
 	paths := []string{
 		"/",
@@ -439,7 +439,7 @@ func TestObservabilityAssetsEndpoint(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -465,7 +465,7 @@ func TestEventStreamEndpointReplaysExistingEvents(t *testing.T) {
 		t.Fatalf("LogEvent(phase_complete) error: %v", err)
 	}
 
-	server := httptest.NewServer(NewServer(db, nil, "main", nil, ""))
+	server := httptest.NewServer(NewServer(db, nil, "main", nil, "", nil))
 	defer server.Close()
 
 	resp, reader, closeStream := openEventStream(t, server.URL+"/api/events/stream?workflow_id=wf-stream-replay")
@@ -527,7 +527,7 @@ func TestEventStreamEndpointReplaysFromCursor(t *testing.T) {
 		t.Fatalf("len(rows) = %d, want 3", len(rows))
 	}
 
-	server := httptest.NewServer(NewServer(db, nil, "main", nil, ""))
+	server := httptest.NewServer(NewServer(db, nil, "main", nil, "", nil))
 	defer server.Close()
 
 	url := server.URL + "/api/events/stream?workflow_id=wf-stream-cursor&cursor=" + strconv.FormatInt(rows[1].ID, 10)
@@ -556,7 +556,7 @@ func TestEventStreamEndpointScopesByWorkflow(t *testing.T) {
 		t.Fatalf("LogEvent(wf-stream-b) error: %v", err)
 	}
 
-	server := httptest.NewServer(NewServer(db, nil, "main", nil, ""))
+	server := httptest.NewServer(NewServer(db, nil, "main", nil, "", nil))
 	defer server.Close()
 
 	_, reader, closeStream := openEventStream(t, server.URL+"/api/events/stream?workflow_id=wf-stream-a")
@@ -580,7 +580,7 @@ func TestEventStreamEndpointDeliversNewEvents(t *testing.T) {
 
 	db := newTestDB(t)
 	createEventWorkflowAndTask(t, db, "wf-stream-tail", "task-1")
-	server := httptest.NewServer(NewServer(db, nil, "main", nil, ""))
+	server := httptest.NewServer(NewServer(db, nil, "main", nil, "", nil))
 	defer server.Close()
 
 	_, reader, closeStream := openEventStream(t, server.URL+"/api/events/stream?workflow_id=wf-stream-tail")
@@ -611,7 +611,7 @@ func TestEventStreamEndpointStopsOnCancel(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+		NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 		close(done)
 	}()
 
@@ -802,7 +802,7 @@ func TestGetWorkflowDiffEndpointNotFound(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/workflows/does-not-exist/diff", nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNotFound, rec.Body.String())
@@ -818,7 +818,7 @@ func TestGetWorkflowScopeEndpointNoPackage(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/workflows/wf-scope-none/scope", nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNotFound, rec.Body.String())
@@ -858,7 +858,7 @@ func TestGetWorkflowScopeEndpointFromFile(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/workflows/wf-scope-file/scope", nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -885,7 +885,7 @@ func TestRejectWorkflowEndpointWrongState(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/workflows/wf-reject-wrong/reject", nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusConflict, rec.Body.String())
@@ -901,7 +901,7 @@ func TestApproveWorkflowEndpointNoGitMgr(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/workflows/wf-approve-nogit/approve", nil)
 
-	NewServer(db, nil, "main", nil, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
@@ -917,7 +917,7 @@ func TestGetQueueEndpointEmpty(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/queue", nil)
 
-	NewServer(db, nil, "main", rq, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", rq, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -952,7 +952,7 @@ func TestAddQueueItemsEndpoint(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/queue", strings.NewReader(body))
 
-	NewServer(db, nil, "main", rq, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", rq, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -982,7 +982,7 @@ func TestStartQueueEndpointInvalidState(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/queue/start", nil)
 
-	NewServer(db, nil, "main", rq, "").ServeHTTP(rec, req)
+	NewServer(db, nil, "main", rq, "", nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusConflict)
@@ -995,7 +995,7 @@ func TestListWorkOrdersEndpointEmpty(t *testing.T) {
 	dir := t.TempDir()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/work-orders", nil)
-	NewServer(db, nil, "main", nil, dir).ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, dir, nil).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -1018,7 +1018,7 @@ func TestListWorkOrdersWithFiles(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/work-orders", nil)
-	NewServer(db, nil, "main", nil, dir).ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, dir, nil).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -1040,7 +1040,7 @@ func TestGetWorkOrderPathTraversal(t *testing.T) {
 	dir := t.TempDir()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/work-orders/..%2Fetc%2Fpasswd", nil)
-	NewServer(db, nil, "main", nil, dir).ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, dir, nil).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
@@ -1052,7 +1052,7 @@ func TestGetWorkOrderNotFound(t *testing.T) {
 	dir := t.TempDir()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/work-orders/nonexistent.yaml", nil)
-	NewServer(db, nil, "main", nil, dir).ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, dir, nil).ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
@@ -1066,7 +1066,7 @@ func TestUpdateWorkOrderValidYAML(t *testing.T) {
 	body := strings.NewReader(`{"content":"title: Updated\ntype: refactor\n"}`)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/api/work-orders/update.yaml", body)
-	NewServer(db, nil, "main", nil, dir).ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, dir, nil).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -1085,7 +1085,7 @@ func TestUpdateWorkOrderInvalidYAML(t *testing.T) {
 	body := strings.NewReader(`{"content":":\n  bad:\n  - [unterminated"}`)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/api/work-orders/bad.yaml", body)
-	NewServer(db, nil, "main", nil, dir).ServeHTTP(rec, req)
+	NewServer(db, nil, "main", nil, dir, nil).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}

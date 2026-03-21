@@ -6,6 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { useQueue } from "@/hooks/useQueue";
 import { QueueStrip } from "@/components/QueueStrip";
 import { QueueDrawer } from "@/components/QueueDrawer";
+import { ConfigPanel } from "@/components/ConfigPanel";
 
 const navItems = [
   { to: "/plan", label: "Plan", icon: ClipboardList },
@@ -52,16 +53,7 @@ export function Sidebar() {
       {/* Config panel — pushed to bottom */}
       <div className="mt-auto">
         <Separator className="mb-4" />
-        <p className="mb-2 text-xs font-medium uppercase text-muted-foreground">
-          Config
-        </p>
-        <p className="mb-3 text-sm text-muted-foreground">
-          No project loaded
-        </p>
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="inline-block h-2 w-2 rounded-full bg-zinc-500" />
-          <span>Disconnected</span>
-        </div>
+        <ConfigPanel />
       </div>
     </div>
   );
