@@ -582,3 +582,46 @@ func mapQueueItem(item QueueItem) queueItemResponse {
 		AddedAt:       item.AddedAt.Format(time.RFC3339),
 	}
 }
+
+// --- Work order response types ---
+
+type workOrderFileResponse struct {
+	Filename     string `json:"filename"`
+	Title        string `json:"title,omitempty"`
+	Type         string `json:"type,omitempty"`
+	TargetModule string `json:"target_module,omitempty"`
+	SizeBytes    int64  `json:"size_bytes"`
+	ModTime      string `json:"mod_time,omitempty"`
+}
+
+type workOrderListResponse struct {
+	WorkOrders []workOrderFileResponse `json:"work_orders"`
+	Directory  string                  `json:"directory,omitempty"`
+}
+
+type workOrderContentResponse struct {
+	Filename string `json:"filename"`
+	Content  string `json:"content"`
+}
+
+type workOrderUpdateRequest struct {
+	Content string `json:"content"`
+}
+
+type workOrderUpdateResponse struct {
+	Filename string `json:"filename"`
+	Content  string `json:"content"`
+	Valid    bool   `json:"valid"`
+}
+
+// --- Plan submission types ---
+
+type planSubmitRequest struct {
+	SpecContent  string `json:"spec_content"`
+	SpecFilePath string `json:"spec_file_path"`
+}
+
+type planSubmitResponse struct {
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
+}

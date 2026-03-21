@@ -26,6 +26,12 @@ const (
 	EventQueueStateChanged  = "queue_state_changed"
 	EventQueueItemStarted   = "queue_item_started"
 	EventQueueItemCompleted = "queue_item_completed"
+
+	// Plan events.
+	EventPlanStarted   = "plan_started"
+	EventPlanStep      = "plan_step"
+	EventPlanCompleted = "plan_completed"
+	EventPlanFailed    = "plan_failed"
 )
 
 // EventSink receives events emitted during a pipeline run.

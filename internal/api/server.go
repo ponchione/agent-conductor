@@ -60,6 +60,10 @@ func NewServer(db *database.DB, gitMgr *git.GitManager, baseBranch string, runQu
 	r.Post("/api/queue/pause", s.handlePauseQueue)
 	r.Post("/api/queue/continue", s.handleContinueQueue)
 	r.Get("/api/queue/events", s.handleQueueEvents)
+	r.Get("/api/work-orders", s.handleListWorkOrders)
+	r.Get("/api/work-orders/{filename}", s.handleGetWorkOrder)
+	r.Put("/api/work-orders/{filename}", s.handleUpdateWorkOrder)
+	r.Post("/api/plan", s.handleSubmitPlan)
 	r.Get("/*", s.handleSPAFallback)
 	return r
 }

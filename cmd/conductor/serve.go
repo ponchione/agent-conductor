@@ -48,8 +48,13 @@ var serveCmd = &cobra.Command{
 
 		rq := api.NewRunQueue()
 
+		workOrderDir := ""
+		if cfg != nil {
+			workOrderDir = filepath.Join(cfg.Project.DataDir, "work-orders")
+		}
+
 		slog.Info("starting observability API server", "addr", serveAddr, "db", dbPath)
-		if err := http.ListenAndServe(serveAddr, api.NewServer(db, gitMgr, baseBranch, rq, "")); err != nil {
+		if err := http.ListenAndServe(serveAddr, api.NewServer(db, gitMgr, baseBranch, rq, workOrderDir)); err != nil {
 			return fmt.Errorf("serve API: %w", err)
 		}
 		return nil

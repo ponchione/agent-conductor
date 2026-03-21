@@ -269,3 +269,35 @@ export interface QueueAddItem {
   work_order_file: string;
   overrides?: Record<string, string>;
 }
+
+// --- Spec 05: Plan Space types ---
+
+export interface WorkOrderFile {
+  filename: string;
+  title: string;
+  type: string;
+  target_module: string;
+  size_bytes: number;
+  modified_at: string;
+}
+
+export interface WorkOrderListResponse {
+  work_orders: WorkOrderFile[];
+  directory: string;
+}
+
+export interface WorkOrderContentResponse {
+  filename: string;
+  content: string;
+}
+
+export interface WorkOrderUpdateResponse {
+  filename: string;
+  content: string;
+  valid: boolean;
+}
+
+export interface PlanSubmitResponse {
+  session_id: string;
+  status: string;
+}

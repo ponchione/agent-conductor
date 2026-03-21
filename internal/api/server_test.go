@@ -988,3 +988,105 @@ func TestStartQueueEndpointInvalidState(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusConflict)
 	}
 }
+
+func TestListWorkOrdersEndpointEmpty(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	dir := t.TempDir()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/work-orders", nil)
+	NewServer(db, nil, "main", nil, dir).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var payload workOrderListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.WorkOrders) != 0 {
+		t.Fatalf("len(payload.WorkOrders) = %d, want 0", len(payload.WorkOrders))
+	}
+}
+
+func TestListWorkOrdersWithFiles(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	dir := t.TempDir()
+	content := "title: Add login feature\ntype: new_feature\ntarget_module: auth\n"
+	if err := os.WriteFile(filepath.Join(dir, "test.yaml"), []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/work-orders", nil)
+	NewServer(db, nil, "main", nil, dir).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var payload workOrderListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.WorkOrders) != 1 {
+		t.Fatalf("len(payload.WorkOrders) = %d, want 1", len(payload.WorkOrders))
+	}
+	if payload.WorkOrders[0].Title != "Add login feature" {
+		t.Fatalf("Title = %q, want Add login feature", payload.WorkOrders[0].Title)
+	}
+}
+
+func TestGetWorkOrderPathTraversal(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	dir := t.TempDir()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/work-orders/..%2Fetc%2Fpasswd", nil)
+	NewServer(db, nil, "main", nil, dir).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestGetWorkOrderNotFound(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	dir := t.TempDir()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/work-orders/nonexistent.yaml", nil)
+	NewServer(db, nil, "main", nil, dir).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestUpdateWorkOrderValidYAML(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "update.yaml"), []byte("title: Original\n"), 0644)
+	body := strings.NewReader(`{"content":"title: Updated\ntype: refactor\n"}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/work-orders/update.yaml", body)
+	NewServer(db, nil, "main", nil, dir).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var payload workOrderUpdateResponse
+	json.NewDecoder(rec.Body).Decode(&payload)
+	if !payload.Valid {
+		t.Fatal("valid = false, want true")
+	}
+}
+
+func TestUpdateWorkOrderInvalidYAML(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte("title: Original\n"), 0644)
+	body := strings.NewReader(`{"content":":\n  bad:\n  - [unterminated"}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/work-orders/bad.yaml", body)
+	NewServer(db, nil, "main", nil, dir).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}

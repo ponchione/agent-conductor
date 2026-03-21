@@ -2,6 +2,7 @@ import type {
   ApproveResponse,
   EventStreamEnvelope,
   PlanAuditStatsResponse,
+  PlanSubmitResponse,
   QueueAddItem,
   QueueState,
   RejectResponse,
@@ -11,6 +12,9 @@ import type {
   WorkflowDiffResponse,
   WorkflowListResponse,
   WorkflowScopeResponse,
+  WorkOrderContentResponse,
+  WorkOrderListResponse,
+  WorkOrderUpdateResponse,
 } from "../types/api";
 
 export interface ListSessionsOptions {
@@ -183,4 +187,29 @@ export async function pauseQueue(): Promise<QueueState> {
 
 export async function continueQueue(): Promise<QueueState> {
   return postJSON<QueueState>("/api/queue/continue", {});
+}
+
+// --- Work Order & Plan API ---
+
+export async function listWorkOrders(): Promise<WorkOrderListResponse> {
+  return fetchJSON<WorkOrderListResponse>("/api/work-orders");
+}
+
+export async function getWorkOrder(filename: string): Promise<WorkOrderContentResponse> {
+  return fetchJSON<WorkOrderContentResponse>(`/api/work-orders/${encodeURIComponent(filename)}`);
+}
+
+export async function updateWorkOrder(filename: string, content: string): Promise<WorkOrderUpdateResponse> {
+  const response = await fetch(`/api/work-orders/${encodeURIComponent(filename)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as { error?: string };
+  if (!response.ok) throw new Error(payload.error || `Request failed: ${response.status}`);
+  return payload as WorkOrderUpdateResponse;
+}
+
+export async function submitPlan(options: { spec_content?: string; spec_file_path?: string }): Promise<PlanSubmitResponse> {
+  return postJSON<PlanSubmitResponse>("/api/plan", options);
 }
