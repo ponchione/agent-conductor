@@ -13,6 +13,7 @@ index:
     - "**/.conductor/**"
     - "**/*.md"
     - "**/dbgen/**"
+    - "**_test.go"
   max_rag_results: 30
   max_tree_lines: 200
   auto_reindex: true
