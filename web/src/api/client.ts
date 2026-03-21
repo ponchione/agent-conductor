@@ -11,6 +11,9 @@ import type {
   RejectResponse,
   SessionDetailResponse,
   SessionListResponse,
+  StatsModelsResponse,
+  StatsSummaryResponse,
+  StatsTrendsResponse,
   WorkflowDetailResponse,
   WorkflowDiffResponse,
   WorkflowListResponse,
@@ -248,4 +251,29 @@ export async function putConfigOverrides(
   overrides: Record<string, ModelOverride>,
 ): Promise<ConfigOverridesResponse> {
   return putJSON<ConfigOverridesResponse>("/api/config/overrides", { overrides });
+}
+
+// --- Stats API ---
+
+export async function getStatsSummary(range_?: string, project?: string): Promise<StatsSummaryResponse> {
+  const params = new URLSearchParams();
+  if (range_) params.set("range", range_);
+  if (project) params.set("project", project);
+  const query = params.toString();
+  return fetchJSON<StatsSummaryResponse>(query ? `/api/stats/summary?${query}` : "/api/stats/summary");
+}
+
+export async function getStatsTrends(range_?: string, project?: string): Promise<StatsTrendsResponse> {
+  const params = new URLSearchParams();
+  if (range_) params.set("range", range_);
+  if (project) params.set("project", project);
+  const query = params.toString();
+  return fetchJSON<StatsTrendsResponse>(query ? `/api/stats/trends?${query}` : "/api/stats/trends");
+}
+
+export async function getStatsModels(range_?: string): Promise<StatsModelsResponse> {
+  const params = new URLSearchParams();
+  if (range_) params.set("range", range_);
+  const query = params.toString();
+  return fetchJSON<StatsModelsResponse>(query ? `/api/stats/models?${query}` : "/api/stats/models");
 }

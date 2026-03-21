@@ -336,3 +336,85 @@ export interface ConfigRolesResponse {
 export interface ConfigOverridesResponse {
   overrides: Record<string, ModelOverride>;
 }
+
+// --- Spec 07: Analytics types ---
+
+export interface StatsSummaryResponse {
+  range: string;
+  pipeline: {
+    total_runs: number;
+    pass_count: number;
+    fail_count: number;
+    error_count: number;
+    pass_rate: number;
+    avg_cost_usd: number;
+    avg_duration_seconds: number;
+    total_cost_usd: number;
+    verify_human_agreement_rate: number;
+  };
+  plan: {
+    total_runs: number;
+    avg_generation_cost_usd: number;
+    avg_audit_cost_usd: number;
+    total_cost_usd: number;
+    avg_work_orders_per_plan: number;
+    avg_audit_delta: number;
+  };
+  combined_total_cost_usd: number;
+}
+
+export interface PipelineRunTrend {
+  id: string;
+  date: string;
+  pipeline_cost_usd: number;
+  scope_duration_seconds: number;
+  build_duration_seconds: number;
+  verify_duration_seconds: number;
+  total_duration_seconds: number;
+  verify_result: string;
+  human_result?: string;
+  human_agreed?: boolean;
+  scope_model?: string;
+  build_model?: string;
+  verify_model?: string;
+  scope_files_suggested?: number;
+  scope_paths_stripped?: number;
+  scope_paths_reclassified?: number;
+  build_files_changed?: number;
+  build_scope_drift?: number;
+}
+
+export interface PlanRunTrend {
+  id: string;
+  date: string;
+  generation_cost_usd: number;
+  audit_cost_usd: number;
+  total_cost_usd: number;
+  work_orders_generated: number;
+  pre_audit_count: number;
+  post_audit_count: number;
+  audit_delta: number;
+  generation_model?: string;
+  audit_model?: string;
+}
+
+export interface StatsTrendsResponse {
+  pipeline_runs: PipelineRunTrend[];
+  plan_runs: PlanRunTrend[];
+}
+
+export interface ModelStat {
+  model: string;
+  provider: string;
+  role: string;
+  run_count: number;
+  avg_cost_usd: number;
+  avg_duration_seconds: number;
+  avg_tokens_in: number;
+  avg_tokens_out: number;
+  pass_rate: number | null;
+}
+
+export interface StatsModelsResponse {
+  models: ModelStat[];
+}

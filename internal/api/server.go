@@ -74,6 +74,9 @@ func NewServer(db *database.DB, gitMgr *git.GitManager, baseBranch string, runQu
 	r.Get("/api/config/roles", s.handleGetConfigRoles)
 	r.Get("/api/config/overrides", s.handleGetConfigOverrides)
 	r.Put("/api/config/overrides", s.handlePutConfigOverrides)
+	r.Get("/api/stats/summary", s.handleGetStatsSummary)
+	r.Get("/api/stats/trends", s.handleGetStatsTrends)
+	r.Get("/api/stats/models", s.handleGetStatsModels)
 	r.Get("/*", s.handleSPAFallback)
 	return r
 }
