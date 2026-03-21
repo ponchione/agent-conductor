@@ -591,7 +591,7 @@ type workOrderFileResponse struct {
 	Type         string `json:"type,omitempty"`
 	TargetModule string `json:"target_module,omitempty"`
 	SizeBytes    int64  `json:"size_bytes"`
-	ModTime      string `json:"mod_time,omitempty"`
+	ModTime      string `json:"modified_at,omitempty"`
 }
 
 type workOrderListResponse struct {

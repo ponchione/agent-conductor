@@ -48,12 +48,15 @@ export function QueueStrip({ state, onManageClick }: QueueStripProps) {
 
       <p className="mb-1 text-sm font-medium">{getStateLabel(state)}</p>
 
-      {state.state === "running" && state.current && (
-        <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500" />
-          <span className="truncate">{state.current.title}</span>
-        </div>
-      )}
+      {state.state === "running" && state.current && (() => {
+        const currentItem = state.items.find((i) => i.id === state.current);
+        return currentItem ? (
+          <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
+            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+            <span className="truncate">{currentItem.title}</span>
+          </div>
+        ) : null;
+      })()}
 
       {state.state === "paused" && (
         <p className="mb-2 text-sm text-muted-foreground">

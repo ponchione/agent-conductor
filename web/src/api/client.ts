@@ -166,7 +166,7 @@ export async function getQueue(): Promise<QueueState> {
 }
 
 export async function addQueueItems(items: QueueAddItem[]): Promise<QueueState> {
-  return postJSON<QueueState>("/api/queue", items);
+  return postJSON<QueueState>("/api/queue", { items });
 }
 
 export async function removeQueueItem(id: string): Promise<QueueState> {

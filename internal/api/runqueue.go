@@ -79,6 +79,7 @@ type RunQueue struct {
 	executeFn   ExecuteFn
 	monitorFn   MonitorFn
 
+	subMu       sync.RWMutex
 	subscribers map[chan QueueEvent]struct{}
 }
 
@@ -260,8 +261,8 @@ func (rq *RunQueue) Continue() error {
 
 // Subscribe returns a channel that receives queue events.
 func (rq *RunQueue) Subscribe() chan QueueEvent {
-	rq.mu.Lock()
-	defer rq.mu.Unlock()
+	rq.subMu.Lock()
+	defer rq.subMu.Unlock()
 
 	ch := make(chan QueueEvent, 16)
 	rq.subscribers[ch] = struct{}{}
@@ -270,8 +271,8 @@ func (rq *RunQueue) Subscribe() chan QueueEvent {
 
 // Unsubscribe removes and closes a subscriber channel.
 func (rq *RunQueue) Unsubscribe(ch chan QueueEvent) {
-	rq.mu.Lock()
-	defer rq.mu.Unlock()
+	rq.subMu.Lock()
+	defer rq.subMu.Unlock()
 
 	if _, ok := rq.subscribers[ch]; ok {
 		delete(rq.subscribers, ch)
@@ -280,10 +281,11 @@ func (rq *RunQueue) Unsubscribe(ch chan QueueEvent) {
 }
 
 // broadcast sends an event to all subscribers. Drops for slow consumers.
-// Must NOT hold rq.mu when called from outside locked context.
-// When called from within a locked context, the caller must be aware
-// that slow consumers will have their events dropped.
+// Uses subMu (not mu) so it can be called while mu is held.
 func (rq *RunQueue) broadcast(event QueueEvent) {
+	rq.subMu.RLock()
+	defer rq.subMu.RUnlock()
+
 	for ch := range rq.subscribers {
 		select {
 		case ch <- event:

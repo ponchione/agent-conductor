@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Outlet, useParams, useNavigate } from "react-router-dom";
+import { Outlet, useParams, useNavigate, useLocation } from "react-router-dom";
 import { getPlanAuditStats } from "@/api/client";
 import type { PlanAuditRun } from "@/types/api";
 import { TimeAgo } from "@/components/TimeAgo";
@@ -35,6 +35,8 @@ function DeltaBadge({ delta }: { delta: number | undefined }) {
 export default function PlanSpace() {
   const { planRunId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const hasChildRoute = planRunId != null || location.pathname.endsWith("/new");
   const [runs, setRuns] = useState<PlanAuditRun[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -137,7 +139,7 @@ export default function PlanSpace() {
 
       {/* Right panel */}
       <div className="overflow-y-auto">
-        {planRunId ? (
+        {hasChildRoute ? (
           <Outlet />
         ) : (
           <div className="flex h-full items-center justify-center p-6">

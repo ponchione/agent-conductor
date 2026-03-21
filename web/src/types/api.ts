@@ -261,7 +261,7 @@ export interface QueueItem {
 export interface QueueState {
   state: QueueStateValue;
   items: QueueItem[];
-  current?: QueueItem;
+  current?: string;
   pause_reason?: string;
 }
 
