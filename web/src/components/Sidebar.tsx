@@ -1,8 +1,11 @@
+import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import { ClipboardList, GitBranch, BarChart3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
-import { Button } from "@/components/ui/button";
+import { useQueue } from "@/hooks/useQueue";
+import { QueueStrip } from "@/components/QueueStrip";
+import { QueueDrawer } from "@/components/QueueDrawer";
 
 const navItems = [
   { to: "/plan", label: "Plan", icon: ClipboardList },
@@ -11,6 +14,9 @@ const navItems = [
 ] as const;
 
 export function Sidebar() {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const queue = useQueue();
+
   return (
     <div className="flex h-full flex-col p-4">
       {/* Navigation section */}
@@ -39,14 +45,9 @@ export function Sidebar() {
       {/* Queue strip */}
       <div className="mt-6">
         <Separator className="mb-4" />
-        <p className="mb-2 text-xs font-medium uppercase text-muted-foreground">
-          Queue
-        </p>
-        <p className="mb-3 text-sm text-muted-foreground">No items queued</p>
-        <Button variant="outline" size="sm" disabled>
-          Manage Queue
-        </Button>
+        <QueueStrip state={queue.state} onManageClick={() => setDrawerOpen(true)} />
       </div>
+      <QueueDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} queue={queue} />
 
       {/* Config panel — pushed to bottom */}
       <div className="mt-auto">

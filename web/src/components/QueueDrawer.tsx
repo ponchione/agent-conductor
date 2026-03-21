@@ -1,0 +1,370 @@
+import { useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  X,
+  Play,
+  Pause,
+  SkipForward,
+  GripVertical,
+  Trash2,
+  ChevronDown,
+  ChevronRight,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/StatusBadge";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import type { QueueItem } from "@/types/api";
+import type { useQueue } from "@/hooks/useQueue";
+
+interface QueueDrawerProps {
+  open: boolean;
+  onClose: () => void;
+  queue: ReturnType<typeof useQueue>;
+}
+
+export function QueueDrawer({ open, onClose, queue }: QueueDrawerProps) {
+  const navigate = useNavigate();
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [expandedOverrides, setExpandedOverrides] = useState<Set<string>>(
+    new Set(),
+  );
+
+  const { state } = queue;
+  const pendingItems = state.items.filter((i) => i.status === "pending");
+  const completedItems = state.items.filter(
+    (i) => i.status === "completed" || i.status === "failed" || i.status === "skipped",
+  );
+  const executingItem = state.items.find((i) => i.status === "executing");
+  const hasPending = pendingItems.length > 0;
+
+  const toggleOverrides = useCallback((id: string) => {
+    setExpandedOverrides((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleDragStart = useCallback(
+    (e: React.DragEvent<HTMLDivElement>, id: string) => {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", id);
+      setDraggedId(id);
+    },
+    [],
+  );
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent<HTMLDivElement>, id: string) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      setDragOverId(id);
+    },
+    [],
+  );
+
+  const handleDragLeave = useCallback(() => {
+    setDragOverId(null);
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>, targetId: string) => {
+      e.preventDefault();
+      setDragOverId(null);
+      setDraggedId(null);
+
+      const sourceId = e.dataTransfer.getData("text/plain");
+      if (!sourceId || sourceId === targetId) return;
+
+      const ids = pendingItems.map((i) => i.id);
+      const sourceIdx = ids.indexOf(sourceId);
+      const targetIdx = ids.indexOf(targetId);
+      if (sourceIdx === -1 || targetIdx === -1) return;
+
+      ids.splice(sourceIdx, 1);
+      ids.splice(targetIdx, 0, sourceId);
+      queue.reorder(ids);
+    },
+    [pendingItems, queue],
+  );
+
+  const handleDragEnd = useCallback(() => {
+    setDragOverId(null);
+    setDraggedId(null);
+  }, []);
+
+  const handleClearConfirm = useCallback(() => {
+    setClearConfirmOpen(false);
+    for (const item of pendingItems) {
+      queue.removeItem(item.id);
+    }
+  }, [pendingItems, queue]);
+
+  if (!open) return null;
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 z-40 bg-black/50"
+        onClick={onClose}
+      />
+
+      {/* Drawer */}
+      <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col border-l bg-background shadow-xl">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <div className="flex items-center gap-3">
+            <h2 className="text-lg font-semibold">Run Queue</h2>
+            <StatusBadge status={state.state} size="sm" />
+          </div>
+          <div className="flex items-center gap-2">
+            {state.state === "ready" && (
+              <Button size="sm" onClick={queue.start}>
+                <Play className="h-4 w-4" />
+                Start
+              </Button>
+            )}
+            {state.state === "paused" && (
+              <Button size="sm" onClick={queue.continue_}>
+                <SkipForward className="h-4 w-4" />
+                Continue
+              </Button>
+            )}
+            {state.state === "running" && (
+              <Button size="sm" variant="outline" onClick={queue.pause}>
+                <Pause className="h-4 w-4" />
+                Pause
+              </Button>
+            )}
+            {hasPending && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setClearConfirmOpen(true)}
+              >
+                Clear
+              </Button>
+            )}
+            <Button size="icon-sm" variant="ghost" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        {/* Item list */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Completed items */}
+          {completedItems.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-medium uppercase text-muted-foreground">
+                Completed
+              </p>
+              {completedItems.map((item) => (
+                <CompletedItemRow
+                  key={item.id}
+                  item={item}
+                  onView={
+                    item.workflow_id
+                      ? () => navigate(`/pipeline/${item.workflow_id}`)
+                      : undefined
+                  }
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Executing item */}
+          {executingItem && (
+            <div className="space-y-2">
+              <p className="text-xs font-medium uppercase text-muted-foreground">
+                Executing
+              </p>
+              <ExecutingItemRow
+                item={executingItem}
+                onView={
+                  executingItem.workflow_id
+                    ? () => navigate(`/pipeline/${executingItem.workflow_id}`)
+                    : undefined
+                }
+              />
+            </div>
+          )}
+
+          {/* Pending items */}
+          {pendingItems.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-medium uppercase text-muted-foreground">
+                Pending
+              </p>
+              {pendingItems.map((item) => (
+                <PendingItemRow
+                  key={item.id}
+                  item={item}
+                  isDragOver={dragOverId === item.id}
+                  isDragged={draggedId === item.id}
+                  isExpanded={expandedOverrides.has(item.id)}
+                  onToggleOverrides={() => toggleOverrides(item.id)}
+                  onRemove={() => queue.removeItem(item.id)}
+                  onDragStart={(e) => handleDragStart(e, item.id)}
+                  onDragOver={(e) => handleDragOver(e, item.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, item.id)}
+                  onDragEnd={handleDragEnd}
+                />
+              ))}
+            </div>
+          )}
+
+          {state.items.length === 0 && (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              No items in queue
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Clear confirm dialog */}
+      <ConfirmDialog
+        open={clearConfirmOpen}
+        title="Clear pending items"
+        description={`Remove all ${pendingItems.length} pending item${pendingItems.length === 1 ? "" : "s"} from the queue?`}
+        confirmLabel="Clear"
+        onConfirm={handleClearConfirm}
+        onCancel={() => setClearConfirmOpen(false)}
+      />
+    </>
+  );
+}
+
+// --- Sub-components ---
+
+function CompletedItemRow({
+  item,
+  onView,
+}: {
+  item: QueueItem;
+  onView?: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 rounded-md border px-3 py-2 opacity-60">
+      <StatusBadge status={item.status} size="sm" />
+      <span className="flex-1 truncate text-sm">{item.title}</span>
+      {onView && (
+        <Button size="xs" variant="ghost" onClick={onView}>
+          View
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function ExecutingItemRow({
+  item,
+  onView,
+}: {
+  item: QueueItem;
+  onView?: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-blue-500/50 bg-blue-500/5 px-3 py-2">
+      <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+      <span className="flex-1 truncate text-sm font-medium">{item.title}</span>
+      {onView && (
+        <Button size="xs" variant="ghost" onClick={onView}>
+          View
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function PendingItemRow({
+  item,
+  isDragOver,
+  isDragged,
+  isExpanded,
+  onToggleOverrides,
+  onRemove,
+  onDragStart,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  onDragEnd,
+}: {
+  item: QueueItem;
+  isDragOver: boolean;
+  isDragged: boolean;
+  isExpanded: boolean;
+  onToggleOverrides: () => void;
+  onRemove: () => void;
+  onDragStart: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragLeave: () => void;
+  onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
+  onDragEnd: () => void;
+}) {
+  const hasOverrides =
+    item.overrides && Object.keys(item.overrides).length > 0;
+
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
+      className={`rounded-md border px-3 py-2 transition-colors ${
+        isDragOver ? "border-blue-400 bg-blue-500/10" : ""
+      } ${isDragged ? "opacity-50" : ""}`}
+    >
+      <div className="flex items-center gap-2">
+        <GripVertical className="h-4 w-4 shrink-0 cursor-grab text-muted-foreground" />
+        <div className="flex-1 min-w-0">
+          <p className="truncate text-sm font-medium">{item.title}</p>
+          <p className="text-xs text-muted-foreground">
+            {item.type}
+            {item.target_module ? ` \u00B7 ${item.target_module}` : ""}
+          </p>
+        </div>
+        <div className="flex items-center gap-1">
+          {hasOverrides && (
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={onToggleOverrides}
+              className="text-xs text-muted-foreground"
+            >
+              {isExpanded ? (
+                <ChevronDown className="h-3 w-3" />
+              ) : (
+                <ChevronRight className="h-3 w-3" />
+              )}
+              Custom overrides
+            </Button>
+          )}
+          <Button size="icon-xs" variant="ghost" onClick={onRemove}>
+            <Trash2 className="h-3 w-3" />
+          </Button>
+        </div>
+      </div>
+      {isExpanded && hasOverrides && (
+        <div className="mt-2 rounded bg-muted/50 p-2 text-xs">
+          {Object.entries(item.overrides).map(([key, value]) => (
+            <div key={key} className="flex gap-2">
+              <span className="font-mono text-muted-foreground">{key}:</span>
+              <span>{value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

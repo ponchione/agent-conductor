@@ -239,3 +239,33 @@ export interface RejectResponse {
   status: string;
   workflow_id: string;
 }
+
+// --- Spec 04: Queue System types ---
+
+export type QueueItemStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'skipped';
+export type QueueStateValue = 'idle' | 'ready' | 'running' | 'paused' | 'completed';
+
+export interface QueueItem {
+  id: string;
+  work_order_file: string;
+  title: string;
+  type: string;
+  target_module: string;
+  overrides: Record<string, string>;
+  status: QueueItemStatus;
+  workflow_id?: string;
+  error?: string;
+  added_at: string;
+}
+
+export interface QueueState {
+  state: QueueStateValue;
+  items: QueueItem[];
+  current?: QueueItem;
+  pause_reason?: string;
+}
+
+export interface QueueAddItem {
+  work_order_file: string;
+  overrides?: Record<string, string>;
+}

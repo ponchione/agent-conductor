@@ -46,8 +46,10 @@ var serveCmd = &cobra.Command{
 			baseBranch = cfg.Git.BaseBranch
 		}
 
+		rq := api.NewRunQueue()
+
 		slog.Info("starting observability API server", "addr", serveAddr, "db", dbPath)
-		if err := http.ListenAndServe(serveAddr, api.NewServer(db, gitMgr, baseBranch)); err != nil {
+		if err := http.ListenAndServe(serveAddr, api.NewServer(db, gitMgr, baseBranch, rq, "")); err != nil {
 			return fmt.Errorf("serve API: %w", err)
 		}
 		return nil

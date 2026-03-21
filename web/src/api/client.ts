@@ -2,6 +2,8 @@ import type {
   ApproveResponse,
   EventStreamEnvelope,
   PlanAuditStatsResponse,
+  QueueAddItem,
+  QueueState,
   RejectResponse,
   SessionDetailResponse,
   SessionListResponse,
@@ -145,4 +147,40 @@ export async function rejectWorkflow(
     `/api/workflows/${encodeURIComponent(id)}/reject`,
     options,
   );
+}
+
+// --- Queue API ---
+
+export async function getQueue(): Promise<QueueState> {
+  return fetchJSON<QueueState>("/api/queue");
+}
+
+export async function addQueueItems(items: QueueAddItem[]): Promise<QueueState> {
+  return postJSON<QueueState>("/api/queue", items);
+}
+
+export async function removeQueueItem(id: string): Promise<QueueState> {
+  const response = await fetch(`/api/queue/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
+  });
+  const payload = (await response.json().catch(() => ({}))) as { error?: string };
+  if (!response.ok) throw new Error(payload.error || `Request failed: ${response.status}`);
+  return payload as QueueState;
+}
+
+export async function reorderQueue(order: string[]): Promise<QueueState> {
+  return postJSON<QueueState>("/api/queue/reorder", { order });
+}
+
+export async function startQueue(): Promise<QueueState> {
+  return postJSON<QueueState>("/api/queue/start", {});
+}
+
+export async function pauseQueue(): Promise<QueueState> {
+  return postJSON<QueueState>("/api/queue/pause", {});
+}
+
+export async function continueQueue(): Promise<QueueState> {
+  return postJSON<QueueState>("/api/queue/continue", {});
 }

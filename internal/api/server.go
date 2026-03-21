@@ -30,14 +30,16 @@ var staticFiles embed.FS
 
 // Server exposes read-only observability endpoints backed by the conductor DB.
 type Server struct {
-	db         *database.DB
-	gitMgr     *git.GitManager
-	baseBranch string
+	db           *database.DB
+	gitMgr       *git.GitManager
+	baseBranch   string
+	runQueue     *RunQueue
+	workOrderDir string
 }
 
 // NewServer builds the HTTP handler tree for observability reads.
-func NewServer(db *database.DB, gitMgr *git.GitManager, baseBranch string) http.Handler {
-	s := &Server{db: db, gitMgr: gitMgr, baseBranch: baseBranch}
+func NewServer(db *database.DB, gitMgr *git.GitManager, baseBranch string, runQueue *RunQueue, workOrderDir string) http.Handler {
+	s := &Server{db: db, gitMgr: gitMgr, baseBranch: baseBranch, runQueue: runQueue, workOrderDir: workOrderDir}
 	r := chi.NewRouter()
 	r.Mount("/assets/", s.staticAssetsHandler())
 	r.Get("/api/sessions", s.handleListSessions)
@@ -50,6 +52,14 @@ func NewServer(db *database.DB, gitMgr *git.GitManager, baseBranch string) http.
 	r.Get("/api/workflows/{id}/scope", s.handleGetWorkflowScope)
 	r.Post("/api/workflows/{id}/approve", s.handleApproveWorkflow)
 	r.Post("/api/workflows/{id}/reject", s.handleRejectWorkflow)
+	r.Get("/api/queue", s.handleGetQueue)
+	r.Post("/api/queue", s.handleAddQueueItems)
+	r.Delete("/api/queue/{id}", s.handleRemoveQueueItem)
+	r.Post("/api/queue/reorder", s.handleReorderQueue)
+	r.Post("/api/queue/start", s.handleStartQueue)
+	r.Post("/api/queue/pause", s.handlePauseQueue)
+	r.Post("/api/queue/continue", s.handleContinueQueue)
+	r.Get("/api/queue/events", s.handleQueueEvents)
 	r.Get("/*", s.handleSPAFallback)
 	return r
 }

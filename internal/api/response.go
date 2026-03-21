@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"github.com/ponchione/agent-conductor/internal/database"
 )
@@ -517,4 +518,67 @@ type rejectRequest struct {
 type rejectResponse struct {
 	Status     string `json:"status"`
 	WorkflowID string `json:"workflow_id"`
+}
+
+// --- Queue response/request types ---
+
+type queueItemResponse struct {
+	ID            string            `json:"id"`
+	WorkOrderFile string            `json:"work_order_file"`
+	Title         string            `json:"title"`
+	Type          string            `json:"type"`
+	TargetModule  string            `json:"target_module"`
+	Overrides     map[string]string `json:"overrides,omitempty"`
+	Status        string            `json:"status"`
+	WorkflowID    string            `json:"workflow_id,omitempty"`
+	Error         string            `json:"error,omitempty"`
+	AddedAt       string            `json:"added_at"`
+}
+
+type queueStateResponse struct {
+	State       string              `json:"state"`
+	Items       []queueItemResponse `json:"items"`
+	Current     string              `json:"current,omitempty"`
+	PauseReason string              `json:"pause_reason,omitempty"`
+}
+
+type queueAddItemRequest struct {
+	WorkOrderFile string            `json:"work_order_file"`
+	Overrides     map[string]string `json:"overrides,omitempty"`
+}
+
+type queueAddRequest struct {
+	Items []queueAddItemRequest `json:"items"`
+}
+
+type queueReorderRequest struct {
+	Order []string `json:"order"`
+}
+
+func mapQueueState(snap QueueSnapshot) queueStateResponse {
+	items := make([]queueItemResponse, 0, len(snap.Items))
+	for _, item := range snap.Items {
+		items = append(items, mapQueueItem(item))
+	}
+	return queueStateResponse{
+		State:       snap.State,
+		Items:       items,
+		Current:     snap.Current,
+		PauseReason: snap.PauseReason,
+	}
+}
+
+func mapQueueItem(item QueueItem) queueItemResponse {
+	return queueItemResponse{
+		ID:            item.ID,
+		WorkOrderFile: item.WorkOrderFile,
+		Title:         item.Title,
+		Type:          item.Type,
+		TargetModule:  item.TargetModule,
+		Overrides:     item.Overrides,
+		Status:        item.Status,
+		WorkflowID:    item.WorkflowID,
+		Error:         item.Error,
+		AddedAt:       item.AddedAt.Format(time.RFC3339),
+	}
 }

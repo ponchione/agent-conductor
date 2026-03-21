@@ -21,6 +21,11 @@ const (
 	EventVerifyResult      = "verify_result"
 	EventRunComplete       = "run_complete"
 	EventRunAwaitingReview = "run_awaiting_review"
+
+	// Queue events.
+	EventQueueStateChanged  = "queue_state_changed"
+	EventQueueItemStarted   = "queue_item_started"
+	EventQueueItemCompleted = "queue_item_completed"
 )
 
 // EventSink receives events emitted during a pipeline run.
