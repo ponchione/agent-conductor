@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   X,
@@ -15,6 +15,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useConfig } from "@/hooks/useConfig";
 import { RoleOverrideDropdown, formatRoleName } from "@/components/ConfigPanel";
+import { cn } from "@/lib/utils";
 import type { QueueItem, ModelOverride, RoleConfig, ProviderModels } from "@/types/api";
 import type { useQueue } from "@/hooks/useQueue";
 
@@ -109,18 +110,54 @@ export function QueueDrawer({ open, onClose, queue }: QueueDrawerProps) {
     }
   }, [pendingItems, queue]);
 
-  if (!open) return null;
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<Element | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      // Remember the element that had focus before opening
+      triggerRef.current = document.activeElement;
+      // Focus the first focusable element inside the drawer
+      const timer = requestAnimationFrame(() => {
+        const focusable = drawerRef.current?.querySelector<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        );
+        focusable?.focus();
+      });
+      return () => cancelAnimationFrame(timer);
+    } else {
+      // Return focus to the trigger that opened the drawer
+      if (triggerRef.current instanceof HTMLElement) {
+        triggerRef.current.focus();
+      }
+      triggerRef.current = null;
+    }
+  }, [open]);
 
   return (
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 z-40 bg-black/50"
+        className={cn(
+          "fixed inset-0 z-40 bg-black/50 transition-opacity",
+          open ? "opacity-100 duration-200" : "opacity-0 pointer-events-none duration-150",
+        )}
+        aria-hidden={!open}
         onClick={onClose}
       />
 
       {/* Drawer */}
-      <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col border-l bg-background shadow-xl">
+      <div
+        ref={drawerRef}
+        role="dialog"
+        aria-label="Run Queue"
+        aria-hidden={!open}
+        className={cn(
+          "fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col border-l bg-background shadow-xl",
+          "transition-transform",
+          open ? "translate-x-0 duration-250 ease-out" : "translate-x-full duration-200 ease-in",
+        )}
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b px-4 py-3">
           <div className="flex items-center gap-3">

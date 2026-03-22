@@ -1,11 +1,6 @@
+import { Settings } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
 import type { ModelOverride, ProviderModels, RoleConfig } from "@/types/api";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
 /** Converts a snake_case role name to Title Case (e.g. "scope_decompose" → "Scope Decompose"). */
 export function formatRoleName(name: string): string {
@@ -78,108 +73,58 @@ export function RoleOverrideDropdown({
   );
 }
 
-/** Sidebar config panel showing project info, connection status, and role override dropdowns. */
-export function ConfigPanel() {
-  const {
-    roles,
-    availableModels,
-    project,
-    overrides,
-    loading,
-    error,
-    setOverride,
-    clearOverride,
-    clearAllOverrides,
-  } = useConfig();
+interface ConfigIndicatorProps {
+  /** Render prop for the gear icon button. The caller wraps this with a PopoverTrigger. */
+  gearButton?: React.ReactNode;
+}
+
+/** Compact config indicator for the sidebar bottom. The gear button is injected by the parent to avoid circular imports. */
+export function ConfigIndicator({ gearButton }: ConfigIndicatorProps) {
+  const { project, overrides, loading } = useConfig();
+
+  const settingsButton = gearButton ?? (
+    <button
+      type="button"
+      className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+      aria-label="Settings"
+    >
+      <Settings className="h-4 w-4" />
+    </button>
+  );
 
   if (loading) {
-    return (
-      <p className="text-sm text-muted-foreground">Loading...</p>
-    );
+    return <p className="text-sm text-muted-foreground">Loading...</p>;
   }
 
   if (!project.name) {
     return (
-      <>
-        <p className="mb-2 text-xs font-medium uppercase text-muted-foreground">
-          Config
-        </p>
-        <p className="mb-3 text-sm text-muted-foreground">
-          No project loaded
-        </p>
+      <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span className="inline-block h-2 w-2 rounded-full bg-zinc-500" />
           <span>Disconnected</span>
         </div>
-      </>
+        {settingsButton}
+      </div>
     );
   }
 
-  const hasOverrides = Object.keys(overrides).length > 0;
-
-  // Truncate path for display; show full path in tooltip.
-  const maxPathLen = 30;
-  const truncatedPath =
-    project.path.length > maxPathLen
-      ? "..." + project.path.slice(project.path.length - maxPathLen)
-      : project.path;
+  const overrideCount = Object.keys(overrides).length;
 
   return (
-    <div>
-      <p className="mb-2 text-xs font-medium uppercase text-muted-foreground">
-        Config
-      </p>
-
-      {/* Project name */}
-      <p className="mb-0.5 text-sm font-medium">{project.name}</p>
-
-      {/* Truncated path with tooltip */}
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <p className="mb-2 cursor-default truncate text-xs text-muted-foreground">
-              {truncatedPath}
-            </p>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            <span>{project.path}</span>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-
-      {/* Connection status */}
-      <div className="mb-3 flex items-center gap-2 text-sm text-muted-foreground">
-        <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
-        <span>Connected</span>
+    <div className="flex items-center justify-between gap-2">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{project.name}</p>
+        <div className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-green-500" />
+          <span className="text-xs text-muted-foreground">Connected</span>
+          {overrideCount > 0 && (
+            <span className="ml-1 rounded-full bg-blue-500/15 px-1.5 py-0.5 text-[10px] font-medium text-blue-500">
+              {overrideCount} {overrideCount === 1 ? "override" : "overrides"}
+            </span>
+          )}
+        </div>
       </div>
-
-      {/* Role override dropdowns */}
-      {roles.map((role) => (
-        <RoleOverrideDropdown
-          key={role.name}
-          role={role}
-          availableModels={availableModels}
-          activeOverride={overrides[role.name]}
-          onChange={(provider, model) => setOverride(role.name, provider, model)}
-          onClear={() => clearOverride(role.name)}
-        />
-      ))}
-
-      {/* Reset All link */}
-      {hasOverrides && (
-        <button
-          type="button"
-          className="mt-1 text-xs text-blue-500 hover:underline"
-          onClick={clearAllOverrides}
-        >
-          Reset All
-        </button>
-      )}
-
-      {/* Error message */}
-      {error && (
-        <p className="mt-2 text-xs text-red-500">{error}</p>
-      )}
+      {settingsButton}
     </div>
   );
 }

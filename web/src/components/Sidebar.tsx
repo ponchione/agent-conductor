@@ -1,12 +1,18 @@
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
-import { ClipboardList, GitBranch, BarChart3 } from "lucide-react";
+import { ClipboardList, GitBranch, BarChart3, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { useQueue } from "@/hooks/useQueue";
 import { QueueStrip } from "@/components/QueueStrip";
 import { QueueDrawer } from "@/components/QueueDrawer";
-import { ConfigPanel } from "@/components/ConfigPanel";
+import { ConfigIndicator } from "@/components/ConfigPanel";
+import { SettingsPopover } from "@/components/SettingsPopover";
 
 const navItems = [
   { to: "/plan", label: "Plan", icon: ClipboardList },
@@ -50,10 +56,27 @@ export function Sidebar() {
       </div>
       <QueueDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} queue={queue} />
 
-      {/* Config panel — pushed to bottom */}
+      {/* Config indicator — pushed to bottom */}
       <div className="mt-auto">
         <Separator className="mb-4" />
-        <ConfigPanel />
+        <Popover>
+          <ConfigIndicator
+            gearButton={
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  aria-label="Settings"
+                >
+                  <Settings className="h-4 w-4" />
+                </button>
+              </PopoverTrigger>
+            }
+          />
+          <PopoverContent side="top" align="start" className="w-80">
+            <SettingsPopover />
+          </PopoverContent>
+        </Popover>
       </div>
     </div>
   );

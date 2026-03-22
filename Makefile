@@ -13,7 +13,7 @@ CGO_ENV := CGO_CFLAGS="$(CGO_CFLAGS_COMMON)" CGO_LDFLAGS="$(CGO_LDFLAGS_COMMON)"
 #	CGO_LDFLAGS="-L$(CURDIR)/lib/linux_amd64 -llancedb_go -lm -ldl -lpthread -Wl,-rpath,'$$ORIGIN/../lib/linux_amd64'" \
 #	go build -o bin/conductor ./cmd/conductor
 
-build:
+build: web-build
 	$(GO_ENV) \
 	CGO_CFLAGS="$(CGO_CFLAGS_COMMON)" \
 	CGO_LDFLAGS="$(CGO_LDFLAGS_COMMON) -Wl,-rpath,$(CURDIR)/lib/linux_amd64" \
