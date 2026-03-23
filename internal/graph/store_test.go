@@ -236,3 +236,30 @@ func TestSetAndGetMeta(t *testing.T) {
 		t.Fatalf("expected timestamp, got %s", val)
 	}
 }
+
+func TestDropAndRecreate(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	// Insert data
+	store.InsertSymbols([]Symbol{
+		{ID: "go:pkg:function:Foo", Name: "Foo", Kind: "function", Language: "go", Package: "pkg", FilePath: "foo.go", LineStart: 1, LineEnd: 10},
+	})
+
+	var count int
+	store.db.QueryRow("SELECT count(*) FROM symbols").Scan(&count)
+	if count != 1 {
+		t.Fatalf("expected 1 symbol before drop, got %d", count)
+	}
+
+	// Drop and recreate
+	if err := store.DropAndRecreate(); err != nil {
+		t.Fatalf("DropAndRecreate: %v", err)
+	}
+
+	// Verify tables exist but are empty
+	store.db.QueryRow("SELECT count(*) FROM symbols").Scan(&count)
+	if count != 0 {
+		t.Fatalf("expected 0 symbols after drop, got %d", count)
+	}
+}

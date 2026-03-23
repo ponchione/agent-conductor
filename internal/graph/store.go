@@ -346,3 +346,38 @@ func (s *GraphStore) GetMeta(key string) (string, error) {
 	err := s.db.QueryRow(`SELECT value FROM graph_meta WHERE key = ?`, key).Scan(&value)
 	return value, err
 }
+
+// DropAndRecreate drops all graph tables and recreates the schema.
+// Used for full re-index.
+func (s *GraphStore) DropAndRecreate() error {
+	drops := []string{
+		"DROP TABLE IF EXISTS chunk_mapping",
+		"DROP TABLE IF EXISTS edges",
+		"DROP TABLE IF EXISTS boundary_symbols",
+		"DROP TABLE IF EXISTS symbols",
+		"DROP TABLE IF EXISTS graph_meta",
+	}
+	for _, stmt := range drops {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("drop: %w", err)
+		}
+	}
+	if _, err := s.db.Exec(graphDDL); err != nil {
+		return fmt.Errorf("recreate schema: %w", err)
+	}
+	return nil
+}
+
+// StoreAnalysisResult stores a complete analysis result (symbols + edges + boundary symbols).
+func (s *GraphStore) StoreAnalysisResult(result *AnalysisResult) error {
+	if err := s.InsertSymbols(result.Symbols); err != nil {
+		return fmt.Errorf("insert symbols: %w", err)
+	}
+	if err := s.InsertBoundarySymbols(result.BoundarySymbols); err != nil {
+		return fmt.Errorf("insert boundary symbols: %w", err)
+	}
+	if err := s.InsertEdges(result.Edges); err != nil {
+		return fmt.Errorf("insert edges: %w", err)
+	}
+	return nil
+}
