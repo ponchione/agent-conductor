@@ -277,3 +277,87 @@ func TestBlastRadius_MinConfidenceFilter(t *testing.T) {
 		t.Fatalf("expected 1 downstream (filtered by confidence), got %d", len(result.Downstream))
 	}
 }
+
+func TestIntegration_FullGraphLifecycle(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	// Simulate a small Go project:
+	// HandleLogin -> CreateSession -> FindUserByEmail
+	//                              -> sessions.Create
+	//                              -> context.WithTimeout (boundary)
+	// HandleRegister -> CreateSession
+	// CreateSession implements SessionCreator
+
+	result := &AnalysisResult{
+		Symbols: []Symbol{
+			{ID: "go:api:function:HandleLogin", Name: "HandleLogin", Kind: "function", Language: "go", Package: "api", FilePath: "internal/api/auth.go", LineStart: 45, LineEnd: 70, Signature: "func HandleLogin(w http.ResponseWriter, r *http.Request)", Exported: true},
+			{ID: "go:api:function:HandleRegister", Name: "HandleRegister", Kind: "function", Language: "go", Package: "api", FilePath: "internal/api/auth.go", LineStart: 72, LineEnd: 100, Signature: "func HandleRegister(w http.ResponseWriter, r *http.Request)", Exported: true},
+			{ID: "go:auth:method:Service.CreateSession", Name: "CreateSession", Kind: "method", Language: "go", Package: "auth", FilePath: "internal/auth/service.go", LineStart: 45, LineEnd: 82, Signature: "func (s *Service) CreateSession(ctx context.Context, req SessionRequest) (*Session, error)", Exported: true, Receiver: "Service"},
+			{ID: "go:auth:method:Repository.FindUserByEmail", Name: "FindUserByEmail", Kind: "method", Language: "go", Package: "auth", FilePath: "internal/auth/repository.go", LineStart: 31, LineEnd: 50, Signature: "func (r *Repository) FindUserByEmail(ctx context.Context, email string) (*User, error)", Exported: true, Receiver: "Repository"},
+			{ID: "go:session:method:Store.Create", Name: "Create", Kind: "method", Language: "go", Package: "session", FilePath: "internal/session/store.go", LineStart: 18, LineEnd: 40, Signature: "func (s *Store) Create(ctx context.Context, userID string) (*Session, error)", Exported: true, Receiver: "Store"},
+			{ID: "go:auth:interface:SessionCreator", Name: "SessionCreator", Kind: "interface", Language: "go", Package: "auth", FilePath: "internal/auth/interfaces.go", LineStart: 5, LineEnd: 8, Signature: "type SessionCreator interface", Exported: true},
+		},
+		Edges: []Edge{
+			{SourceID: "go:api:function:HandleLogin", TargetID: "go:auth:method:Service.CreateSession", EdgeType: "CALLS", Confidence: 1.0, SourceLine: 55},
+			{SourceID: "go:api:function:HandleRegister", TargetID: "go:auth:method:Service.CreateSession", EdgeType: "CALLS", Confidence: 1.0, SourceLine: 85},
+			{SourceID: "go:auth:method:Service.CreateSession", TargetID: "go:auth:method:Repository.FindUserByEmail", EdgeType: "CALLS", Confidence: 1.0, SourceLine: 52},
+			{SourceID: "go:auth:method:Service.CreateSession", TargetID: "go:session:method:Store.Create", EdgeType: "CALLS", Confidence: 1.0, SourceLine: 60},
+			{SourceID: "go:auth:method:Service.CreateSession", TargetID: "go:context:function:WithTimeout", EdgeType: "CALLS", Confidence: 1.0, SourceLine: 48},
+			{SourceID: "go:auth:method:Service.CreateSession", TargetID: "go:auth:interface:SessionCreator", EdgeType: "IMPLEMENTS", Confidence: 1.0},
+		},
+		BoundarySymbols: []BoundarySymbol{
+			{ID: "go:context:function:WithTimeout", Name: "WithTimeout", Kind: "function", Language: "go", Package: "context"},
+		},
+	}
+
+	// Store everything
+	if err := store.StoreAnalysisResult(result); err != nil {
+		t.Fatalf("StoreAnalysisResult: %v", err)
+	}
+
+	// Blast radius on CreateSession
+	br, err := store.BlastRadius(BlastRadiusRequest{
+		TargetSymbol:  "go:auth:method:Service.CreateSession",
+		Direction:     Both,
+		MaxDepth:      3,
+		Budget:        30,
+		MinConfidence: 0.5,
+	})
+	if err != nil {
+		t.Fatalf("BlastRadius: %v", err)
+	}
+
+	// Upstream: HandleLogin, HandleRegister
+	if len(br.Upstream) != 2 {
+		t.Errorf("expected 2 upstream callers, got %d", len(br.Upstream))
+	}
+
+	// Downstream: FindUserByEmail, Store.Create (boundary excluded)
+	if len(br.Downstream) != 2 {
+		t.Errorf("expected 2 downstream callees, got %d", len(br.Downstream))
+	}
+
+	// Interfaces: SessionCreator
+	if len(br.Interfaces) != 1 {
+		t.Errorf("expected 1 interface, got %d", len(br.Interfaces))
+	}
+
+	// Verify symbols by file
+	syms, err := store.GetSymbolsByFile("internal/api/auth.go")
+	if err != nil {
+		t.Fatalf("GetSymbolsByFile: %v", err)
+	}
+	if len(syms) != 2 {
+		t.Errorf("expected 2 symbols in auth.go, got %d", len(syms))
+	}
+
+	// Verify drop and recreate
+	if err := store.DropAndRecreate(); err != nil {
+		t.Fatalf("DropAndRecreate: %v", err)
+	}
+	syms, _ = store.GetSymbolsByFile("internal/api/auth.go")
+	if len(syms) != 0 {
+		t.Errorf("expected 0 symbols after drop, got %d", len(syms))
+	}
+}

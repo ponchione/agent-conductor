@@ -139,6 +139,7 @@ func (s *GraphStore) blastDownstream(targetID string, req BlastRadiusRequest) ([
 			WHERE e.source_id = ?
 			  AND e.confidence >= ?
 			  AND e.target_id NOT IN (SELECT id FROM boundary_symbols)
+			  AND e.edge_type != 'IMPLEMENTS'
 			  %s
 
 			UNION ALL
@@ -152,6 +153,7 @@ func (s *GraphStore) blastDownstream(targetID string, req BlastRadiusRequest) ([
 			  AND e.target_id NOT IN (SELECT id FROM boundary_symbols)
 			  AND instr(b.path, e.target_id) = 0
 			  AND e.target_id != ?
+			  AND e.edge_type != 'IMPLEMENTS'
 			  %s
 		)
 		SELECT s.id, s.name, s.kind, s.language, s.package, s.file_path,
