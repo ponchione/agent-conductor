@@ -105,3 +105,82 @@ func NewGraphStore(dsn string) (*GraphStore, error) {
 func (s *GraphStore) Close() error {
 	return s.db.Close()
 }
+
+// InsertSymbols batch-inserts symbols into the graph store.
+func (s *GraphStore) InsertSymbols(symbols []Symbol) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO symbols
+		(id, name, kind, language, package, file_path, line_start, line_end, signature, exported, receiver)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, sym := range symbols {
+		exported := 0
+		if sym.Exported {
+			exported = 1
+		}
+		if _, err := stmt.Exec(sym.ID, sym.Name, sym.Kind, sym.Language, sym.Package,
+			sym.FilePath, sym.LineStart, sym.LineEnd, sym.Signature, exported, sym.Receiver); err != nil {
+			return fmt.Errorf("insert symbol %s: %w", sym.ID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// InsertEdges batch-inserts edges into the graph store.
+func (s *GraphStore) InsertEdges(edges []Edge) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT INTO edges
+		(source_id, target_id, edge_type, confidence, source_line, metadata)
+		VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, e := range edges {
+		if _, err := stmt.Exec(e.SourceID, e.TargetID, e.EdgeType, e.Confidence, e.SourceLine, e.Metadata); err != nil {
+			return fmt.Errorf("insert edge %s->%s: %w", e.SourceID, e.TargetID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// InsertBoundarySymbols batch-inserts boundary symbols.
+func (s *GraphStore) InsertBoundarySymbols(bounds []BoundarySymbol) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO boundary_symbols
+		(id, name, kind, language, package) VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, b := range bounds {
+		if _, err := stmt.Exec(b.ID, b.Name, b.Kind, b.Language, b.Package); err != nil {
+			return fmt.Errorf("insert boundary symbol %s: %w", b.ID, err)
+		}
+	}
+
+	return tx.Commit()
+}
