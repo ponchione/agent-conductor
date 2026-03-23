@@ -1,0 +1,55 @@
+package graph
+
+import "testing"
+
+// buildTestGraph creates: A->B->C, D->B (two callers of B, B calls C)
+func buildTestGraph(t *testing.T) *GraphStore {
+	t.Helper()
+	store := newTestStore(t)
+
+	store.InsertSymbols([]Symbol{
+		{ID: "go:p:function:A", Name: "A", Kind: "function", Language: "go", Package: "p", FilePath: "a.go", LineStart: 1, LineEnd: 10, Signature: "func A()"},
+		{ID: "go:p:function:B", Name: "B", Kind: "function", Language: "go", Package: "p", FilePath: "b.go", LineStart: 1, LineEnd: 10, Signature: "func B()"},
+		{ID: "go:p:function:C", Name: "C", Kind: "function", Language: "go", Package: "p", FilePath: "c.go", LineStart: 1, LineEnd: 10, Signature: "func C()"},
+		{ID: "go:p:function:D", Name: "D", Kind: "function", Language: "go", Package: "p", FilePath: "d.go", LineStart: 1, LineEnd: 10, Signature: "func D()"},
+	})
+
+	store.InsertEdges([]Edge{
+		{SourceID: "go:p:function:A", TargetID: "go:p:function:B", EdgeType: "CALLS", Confidence: 1.0},
+		{SourceID: "go:p:function:D", TargetID: "go:p:function:B", EdgeType: "CALLS", Confidence: 1.0},
+		{SourceID: "go:p:function:B", TargetID: "go:p:function:C", EdgeType: "CALLS", Confidence: 1.0},
+	})
+
+	return store
+}
+
+func TestBlastRadius_Upstream(t *testing.T) {
+	store := buildTestGraph(t)
+	defer store.Close()
+
+	result, err := store.BlastRadius(BlastRadiusRequest{
+		TargetSymbol:  "go:p:function:B",
+		Direction:     Upstream,
+		MaxDepth:      3,
+		Budget:        30,
+		MinConfidence: 0.5,
+	})
+	if err != nil {
+		t.Fatalf("BlastRadius: %v", err)
+	}
+
+	if result.Target.Name != "B" {
+		t.Fatalf("expected target B, got %s", result.Target.Name)
+	}
+
+	if len(result.Upstream) != 2 {
+		t.Fatalf("expected 2 upstream (A, D), got %d", len(result.Upstream))
+	}
+
+	// Both should be depth 1
+	for _, node := range result.Upstream {
+		if node.Depth != 1 {
+			t.Errorf("expected depth 1 for %s, got %d", node.Symbol.Name, node.Depth)
+		}
+	}
+}
