@@ -87,3 +87,62 @@ func TestBlastRadius_Downstream(t *testing.T) {
 		t.Errorf("expected C at depth 2, got %d", result.Downstream[1].Depth)
 	}
 }
+
+func TestBlastRadius_Both(t *testing.T) {
+	store := buildTestGraph(t)
+	defer store.Close()
+
+	result, err := store.BlastRadius(BlastRadiusRequest{
+		TargetSymbol:  "go:p:function:B",
+		Direction:     Both,
+		MaxDepth:      3,
+		Budget:        30,
+		MinConfidence: 0.5,
+	})
+	if err != nil {
+		t.Fatalf("BlastRadius: %v", err)
+	}
+
+	// Upstream: A, D call B
+	if len(result.Upstream) != 2 {
+		t.Fatalf("expected 2 upstream, got %d", len(result.Upstream))
+	}
+	// Downstream: B calls C
+	if len(result.Downstream) != 1 {
+		t.Fatalf("expected 1 downstream, got %d", len(result.Downstream))
+	}
+	if result.Downstream[0].Symbol.Name != "C" {
+		t.Errorf("expected downstream C, got %s", result.Downstream[0].Symbol.Name)
+	}
+}
+
+func TestBlastRadius_Interfaces(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	store.InsertSymbols([]Symbol{
+		{ID: "go:p:type:MyService", Name: "MyService", Kind: "type", Language: "go", Package: "p", FilePath: "svc.go", LineStart: 1, LineEnd: 10},
+		{ID: "go:p:interface:ServiceIface", Name: "ServiceIface", Kind: "interface", Language: "go", Package: "p", FilePath: "iface.go", LineStart: 1, LineEnd: 5},
+	})
+	store.InsertEdges([]Edge{
+		{SourceID: "go:p:type:MyService", TargetID: "go:p:interface:ServiceIface", EdgeType: "IMPLEMENTS", Confidence: 1.0},
+	})
+
+	result, err := store.BlastRadius(BlastRadiusRequest{
+		TargetSymbol:  "go:p:type:MyService",
+		Direction:     Both,
+		MaxDepth:      3,
+		Budget:        30,
+		MinConfidence: 0.5,
+	})
+	if err != nil {
+		t.Fatalf("BlastRadius: %v", err)
+	}
+
+	if len(result.Interfaces) != 1 {
+		t.Fatalf("expected 1 interface, got %d", len(result.Interfaces))
+	}
+	if result.Interfaces[0].Name != "ServiceIface" {
+		t.Errorf("expected ServiceIface, got %s", result.Interfaces[0].Name)
+	}
+}
