@@ -53,3 +53,37 @@ func TestBlastRadius_Upstream(t *testing.T) {
 		}
 	}
 }
+
+func TestBlastRadius_Downstream(t *testing.T) {
+	store := buildTestGraph(t)
+	defer store.Close()
+
+	result, err := store.BlastRadius(BlastRadiusRequest{
+		TargetSymbol:  "go:p:function:A",
+		Direction:     Downstream,
+		MaxDepth:      3,
+		Budget:        30,
+		MinConfidence: 0.5,
+	})
+	if err != nil {
+		t.Fatalf("BlastRadius: %v", err)
+	}
+
+	// A calls B, B calls C -> downstream should be B (depth 1), C (depth 2)
+	if len(result.Downstream) != 2 {
+		t.Fatalf("expected 2 downstream (B, C), got %d", len(result.Downstream))
+	}
+
+	if result.Downstream[0].Symbol.Name != "B" {
+		t.Errorf("expected first downstream to be B, got %s", result.Downstream[0].Symbol.Name)
+	}
+	if result.Downstream[0].Depth != 1 {
+		t.Errorf("expected B at depth 1, got %d", result.Downstream[0].Depth)
+	}
+	if result.Downstream[1].Symbol.Name != "C" {
+		t.Errorf("expected second downstream to be C, got %s", result.Downstream[1].Symbol.Name)
+	}
+	if result.Downstream[1].Depth != 2 {
+		t.Errorf("expected C at depth 2, got %d", result.Downstream[1].Depth)
+	}
+}
