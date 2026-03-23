@@ -292,3 +292,57 @@ func (s *GraphStore) InsertBoundarySymbols(bounds []BoundarySymbol) error {
 
 	return tx.Commit()
 }
+
+// InsertChunkMappings links a symbol to one or more LanceDB chunk IDs.
+func (s *GraphStore) InsertChunkMappings(symbolID string, chunkIDs []string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO chunk_mapping (symbol_id, chunk_id) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, cid := range chunkIDs {
+		if _, err := stmt.Exec(symbolID, cid); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetChunkMappingsForSymbol returns LanceDB chunk IDs for a symbol.
+func (s *GraphStore) GetChunkMappingsForSymbol(symbolID string) ([]string, error) {
+	rows, err := s.db.Query(`SELECT chunk_id FROM chunk_mapping WHERE symbol_id = ?`, symbolID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// SetMeta sets a key-value pair in graph_meta.
+func (s *GraphStore) SetMeta(key, value string) error {
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO graph_meta (key, value) VALUES (?, ?)`, key, value)
+	return err
+}
+
+// GetMeta retrieves a value from graph_meta.
+func (s *GraphStore) GetMeta(key string) (string, error) {
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM graph_meta WHERE key = ?`, key).Scan(&value)
+	return value, err
+}

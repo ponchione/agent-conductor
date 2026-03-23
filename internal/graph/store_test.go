@@ -198,3 +198,41 @@ func TestGetEdgesTo(t *testing.T) {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
 }
+
+func TestChunkMapping(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	store.InsertSymbols([]Symbol{
+		{ID: "go:pkg:function:Foo", Name: "Foo", Kind: "function", Language: "go", Package: "pkg", FilePath: "foo.go", LineStart: 1, LineEnd: 10},
+	})
+
+	if err := store.InsertChunkMappings("go:pkg:function:Foo", []string{"chunk-abc", "chunk-def"}); err != nil {
+		t.Fatalf("InsertChunkMappings: %v", err)
+	}
+
+	chunks, err := store.GetChunkMappingsForSymbol("go:pkg:function:Foo")
+	if err != nil {
+		t.Fatalf("GetChunkMappingsForSymbol: %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunk mappings, got %d", len(chunks))
+	}
+}
+
+func TestSetAndGetMeta(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	if err := store.SetMeta("indexed_at", "2026-03-23T10:00:00Z"); err != nil {
+		t.Fatalf("SetMeta: %v", err)
+	}
+
+	val, err := store.GetMeta("indexed_at")
+	if err != nil {
+		t.Fatalf("GetMeta: %v", err)
+	}
+	if val != "2026-03-23T10:00:00Z" {
+		t.Fatalf("expected timestamp, got %s", val)
+	}
+}
