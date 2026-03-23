@@ -161,6 +161,114 @@ func (s *GraphStore) InsertEdges(edges []Edge) error {
 	return tx.Commit()
 }
 
+// GetSymbol retrieves a single symbol by ID.
+func (s *GraphStore) GetSymbol(id string) (*Symbol, error) {
+	row := s.db.QueryRow(`SELECT id, name, kind, language, package, file_path,
+		line_start, line_end, signature, exported, receiver
+		FROM symbols WHERE id = ?`, id)
+	return scanSymbol(row)
+}
+
+// GetSymbolsByFile returns all symbols in the given file.
+func (s *GraphStore) GetSymbolsByFile(filePath string) ([]Symbol, error) {
+	rows, err := s.db.Query(`SELECT id, name, kind, language, package, file_path,
+		line_start, line_end, signature, exported, receiver
+		FROM symbols WHERE file_path = ? ORDER BY line_start`, filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanSymbols(rows)
+}
+
+// GetSymbolsByName returns all symbols with the given name.
+func (s *GraphStore) GetSymbolsByName(name string) ([]Symbol, error) {
+	rows, err := s.db.Query(`SELECT id, name, kind, language, package, file_path,
+		line_start, line_end, signature, exported, receiver
+		FROM symbols WHERE name = ?`, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanSymbols(rows)
+}
+
+// GetEdgesFrom returns all edges originating from the given symbol.
+func (s *GraphStore) GetEdgesFrom(symbolID string) ([]Edge, error) {
+	rows, err := s.db.Query(`SELECT source_id, target_id, edge_type, confidence, source_line, metadata
+		FROM edges WHERE source_id = ?`, symbolID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanEdges(rows)
+}
+
+// GetEdgesTo returns all edges targeting the given symbol.
+func (s *GraphStore) GetEdgesTo(symbolID string) ([]Edge, error) {
+	rows, err := s.db.Query(`SELECT source_id, target_id, edge_type, confidence, source_line, metadata
+		FROM edges WHERE target_id = ?`, symbolID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanEdges(rows)
+}
+
+// scanSymbol scans a single symbol from a row.
+func scanSymbol(row *sql.Row) (*Symbol, error) {
+	var sym Symbol
+	var exported int
+	var pkg, sig, recv sql.NullString
+	err := row.Scan(&sym.ID, &sym.Name, &sym.Kind, &sym.Language, &pkg,
+		&sym.FilePath, &sym.LineStart, &sym.LineEnd, &sig, &exported, &recv)
+	if err != nil {
+		return nil, err
+	}
+	sym.Package = pkg.String
+	sym.Signature = sig.String
+	sym.Receiver = recv.String
+	sym.Exported = exported == 1
+	return &sym, nil
+}
+
+// scanSymbols scans multiple symbols from rows.
+func scanSymbols(rows *sql.Rows) ([]Symbol, error) {
+	var syms []Symbol
+	for rows.Next() {
+		var sym Symbol
+		var exported int
+		var pkg, sig, recv sql.NullString
+		if err := rows.Scan(&sym.ID, &sym.Name, &sym.Kind, &sym.Language, &pkg,
+			&sym.FilePath, &sym.LineStart, &sym.LineEnd, &sig, &exported, &recv); err != nil {
+			return nil, err
+		}
+		sym.Package = pkg.String
+		sym.Signature = sig.String
+		sym.Receiver = recv.String
+		sym.Exported = exported == 1
+		syms = append(syms, sym)
+	}
+	return syms, rows.Err()
+}
+
+// scanEdges scans multiple edges from rows.
+func scanEdges(rows *sql.Rows) ([]Edge, error) {
+	var edges []Edge
+	for rows.Next() {
+		var e Edge
+		var sourceLine sql.NullInt64
+		var metadata sql.NullString
+		if err := rows.Scan(&e.SourceID, &e.TargetID, &e.EdgeType, &e.Confidence, &sourceLine, &metadata); err != nil {
+			return nil, err
+		}
+		e.SourceLine = int(sourceLine.Int64)
+		e.Metadata = metadata.String
+		edges = append(edges, e)
+	}
+	return edges, rows.Err()
+}
+
 // InsertBoundarySymbols batch-inserts boundary symbols.
 func (s *GraphStore) InsertBoundarySymbols(bounds []BoundarySymbol) error {
 	tx, err := s.db.Begin()

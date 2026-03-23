@@ -102,3 +102,99 @@ func TestInsertBoundarySymbols(t *testing.T) {
 		t.Fatalf("expected 1 boundary symbol, got %d", count)
 	}
 }
+
+func TestGetSymbol(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	store.InsertSymbols([]Symbol{
+		{ID: "go:pkg:function:Foo", Name: "Foo", Kind: "function", Language: "go", Package: "pkg", FilePath: "pkg/foo.go", LineStart: 10, LineEnd: 20, Exported: true},
+	})
+
+	sym, err := store.GetSymbol("go:pkg:function:Foo")
+	if err != nil {
+		t.Fatalf("GetSymbol: %v", err)
+	}
+	if sym.Name != "Foo" {
+		t.Fatalf("expected Foo, got %s", sym.Name)
+	}
+}
+
+func TestGetSymbolsByFile(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	store.InsertSymbols([]Symbol{
+		{ID: "go:pkg:function:Foo", Name: "Foo", Kind: "function", Language: "go", Package: "pkg", FilePath: "pkg/foo.go", LineStart: 1, LineEnd: 10},
+		{ID: "go:pkg:function:Bar", Name: "Bar", Kind: "function", Language: "go", Package: "pkg", FilePath: "pkg/foo.go", LineStart: 12, LineEnd: 20},
+		{ID: "go:pkg:function:Baz", Name: "Baz", Kind: "function", Language: "go", Package: "pkg", FilePath: "pkg/other.go", LineStart: 1, LineEnd: 10},
+	})
+
+	syms, err := store.GetSymbolsByFile("pkg/foo.go")
+	if err != nil {
+		t.Fatalf("GetSymbolsByFile: %v", err)
+	}
+	if len(syms) != 2 {
+		t.Fatalf("expected 2 symbols, got %d", len(syms))
+	}
+}
+
+func TestGetSymbolsByName(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	store.InsertSymbols([]Symbol{
+		{ID: "go:a:function:Foo", Name: "Foo", Kind: "function", Language: "go", Package: "a", FilePath: "a/foo.go", LineStart: 1, LineEnd: 10},
+		{ID: "go:b:function:Foo", Name: "Foo", Kind: "function", Language: "go", Package: "b", FilePath: "b/foo.go", LineStart: 1, LineEnd: 10},
+	})
+
+	syms, err := store.GetSymbolsByName("Foo")
+	if err != nil {
+		t.Fatalf("GetSymbolsByName: %v", err)
+	}
+	if len(syms) != 2 {
+		t.Fatalf("expected 2 symbols, got %d", len(syms))
+	}
+}
+
+func TestGetEdgesFrom(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	store.InsertSymbols([]Symbol{
+		{ID: "go:pkg:function:A", Name: "A", Kind: "function", Language: "go", Package: "pkg", FilePath: "a.go", LineStart: 1, LineEnd: 10},
+		{ID: "go:pkg:function:B", Name: "B", Kind: "function", Language: "go", Package: "pkg", FilePath: "b.go", LineStart: 1, LineEnd: 10},
+	})
+	store.InsertEdges([]Edge{
+		{SourceID: "go:pkg:function:A", TargetID: "go:pkg:function:B", EdgeType: "CALLS", Confidence: 1.0},
+	})
+
+	edges, err := store.GetEdgesFrom("go:pkg:function:A")
+	if err != nil {
+		t.Fatalf("GetEdgesFrom: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+}
+
+func TestGetEdgesTo(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	store.InsertSymbols([]Symbol{
+		{ID: "go:pkg:function:A", Name: "A", Kind: "function", Language: "go", Package: "pkg", FilePath: "a.go", LineStart: 1, LineEnd: 10},
+		{ID: "go:pkg:function:B", Name: "B", Kind: "function", Language: "go", Package: "pkg", FilePath: "b.go", LineStart: 1, LineEnd: 10},
+	})
+	store.InsertEdges([]Edge{
+		{SourceID: "go:pkg:function:A", TargetID: "go:pkg:function:B", EdgeType: "CALLS", Confidence: 1.0},
+	})
+
+	edges, err := store.GetEdgesTo("go:pkg:function:B")
+	if err != nil {
+		t.Fatalf("GetEdgesTo: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+}
