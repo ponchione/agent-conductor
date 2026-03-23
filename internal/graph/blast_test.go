@@ -1,6 +1,9 @@
 package graph
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // buildTestGraph creates: A->B->C, D->B (two callers of B, B calls C)
 func buildTestGraph(t *testing.T) *GraphStore {
@@ -144,5 +147,133 @@ func TestBlastRadius_Interfaces(t *testing.T) {
 	}
 	if result.Interfaces[0].Name != "ServiceIface" {
 		t.Errorf("expected ServiceIface, got %s", result.Interfaces[0].Name)
+	}
+}
+
+func TestBlastRadius_BudgetEnforcement(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	// Create a star graph: 10 functions all call Center
+	syms := []Symbol{
+		{ID: "go:p:function:Center", Name: "Center", Kind: "function", Language: "go", Package: "p", FilePath: "center.go", LineStart: 1, LineEnd: 10},
+	}
+	var edges []Edge
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("go:p:function:Caller%d", i)
+		syms = append(syms, Symbol{ID: id, Name: fmt.Sprintf("Caller%d", i), Kind: "function", Language: "go", Package: "p", FilePath: fmt.Sprintf("caller%d.go", i), LineStart: 1, LineEnd: 10})
+		edges = append(edges, Edge{SourceID: id, TargetID: "go:p:function:Center", EdgeType: "CALLS", Confidence: 1.0})
+	}
+	store.InsertSymbols(syms)
+	store.InsertEdges(edges)
+
+	result, err := store.BlastRadius(BlastRadiusRequest{
+		TargetSymbol:  "go:p:function:Center",
+		Direction:     Upstream,
+		MaxDepth:      3,
+		Budget:        5, // only 5 of the 10 callers
+		MinConfidence: 0.5,
+	})
+	if err != nil {
+		t.Fatalf("BlastRadius: %v", err)
+	}
+	if len(result.Upstream) != 5 {
+		t.Fatalf("expected budget cap of 5, got %d", len(result.Upstream))
+	}
+}
+
+func TestBlastRadius_BoundarySymbolsTerminal(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	store.InsertSymbols([]Symbol{
+		{ID: "go:p:function:Foo", Name: "Foo", Kind: "function", Language: "go", Package: "p", FilePath: "foo.go", LineStart: 1, LineEnd: 10},
+	})
+	store.InsertBoundarySymbols([]BoundarySymbol{
+		{ID: "go:fmt:function:Println", Name: "Println", Kind: "function", Language: "go", Package: "fmt"},
+	})
+	store.InsertEdges([]Edge{
+		{SourceID: "go:p:function:Foo", TargetID: "go:fmt:function:Println", EdgeType: "CALLS", Confidence: 1.0},
+	})
+
+	result, err := store.BlastRadius(BlastRadiusRequest{
+		TargetSymbol:  "go:p:function:Foo",
+		Direction:     Downstream,
+		MaxDepth:      3,
+		Budget:        30,
+		MinConfidence: 0.5,
+	})
+	if err != nil {
+		t.Fatalf("BlastRadius: %v", err)
+	}
+
+	// Boundary symbols are excluded from downstream traversal
+	if len(result.Downstream) != 0 {
+		t.Fatalf("expected 0 downstream (boundary excluded), got %d", len(result.Downstream))
+	}
+}
+
+func TestBlastRadius_CycleDetection(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	// A->B->C->A (cycle)
+	store.InsertSymbols([]Symbol{
+		{ID: "go:p:function:A", Name: "A", Kind: "function", Language: "go", Package: "p", FilePath: "a.go", LineStart: 1, LineEnd: 10},
+		{ID: "go:p:function:B", Name: "B", Kind: "function", Language: "go", Package: "p", FilePath: "b.go", LineStart: 1, LineEnd: 10},
+		{ID: "go:p:function:C", Name: "C", Kind: "function", Language: "go", Package: "p", FilePath: "c.go", LineStart: 1, LineEnd: 10},
+	})
+	store.InsertEdges([]Edge{
+		{SourceID: "go:p:function:A", TargetID: "go:p:function:B", EdgeType: "CALLS", Confidence: 1.0},
+		{SourceID: "go:p:function:B", TargetID: "go:p:function:C", EdgeType: "CALLS", Confidence: 1.0},
+		{SourceID: "go:p:function:C", TargetID: "go:p:function:A", EdgeType: "CALLS", Confidence: 1.0},
+	})
+
+	// Should not infinite loop
+	result, err := store.BlastRadius(BlastRadiusRequest{
+		TargetSymbol:  "go:p:function:A",
+		Direction:     Downstream,
+		MaxDepth:      10,
+		Budget:        30,
+		MinConfidence: 0.5,
+	})
+	if err != nil {
+		t.Fatalf("BlastRadius with cycle: %v", err)
+	}
+
+	// Should find B and C but not revisit A
+	if len(result.Downstream) != 2 {
+		t.Fatalf("expected 2 downstream with cycle, got %d", len(result.Downstream))
+	}
+}
+
+func TestBlastRadius_MinConfidenceFilter(t *testing.T) {
+	store := newTestStore(t)
+	defer store.Close()
+
+	store.InsertSymbols([]Symbol{
+		{ID: "go:p:function:A", Name: "A", Kind: "function", Language: "go", Package: "p", FilePath: "a.go", LineStart: 1, LineEnd: 10},
+		{ID: "go:p:function:B", Name: "B", Kind: "function", Language: "go", Package: "p", FilePath: "b.go", LineStart: 1, LineEnd: 10},
+		{ID: "go:p:function:C", Name: "C", Kind: "function", Language: "go", Package: "p", FilePath: "c.go", LineStart: 1, LineEnd: 10},
+	})
+	store.InsertEdges([]Edge{
+		{SourceID: "go:p:function:A", TargetID: "go:p:function:B", EdgeType: "CALLS", Confidence: 1.0},
+		{SourceID: "go:p:function:A", TargetID: "go:p:function:C", EdgeType: "CALLS", Confidence: 0.3}, // below threshold
+	})
+
+	result, err := store.BlastRadius(BlastRadiusRequest{
+		TargetSymbol:  "go:p:function:A",
+		Direction:     Downstream,
+		MaxDepth:      3,
+		Budget:        30,
+		MinConfidence: 0.5,
+	})
+	if err != nil {
+		t.Fatalf("BlastRadius: %v", err)
+	}
+
+	// C should be excluded (confidence 0.3 < threshold 0.5)
+	if len(result.Downstream) != 1 {
+		t.Fatalf("expected 1 downstream (filtered by confidence), got %d", len(result.Downstream))
 	}
 }

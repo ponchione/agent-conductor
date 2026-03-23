@@ -99,6 +99,7 @@ func (s *GraphStore) blastUpstream(targetID string, req BlastRadiusRequest) ([]B
 			  AND e.confidence >= ?
 			  AND e.source_id NOT IN (SELECT id FROM boundary_symbols)
 			  AND instr(b.path, e.source_id) = 0
+			  AND e.source_id != ?
 			  %s
 		)
 		SELECT s.id, s.name, s.kind, s.language, s.package, s.file_path,
@@ -114,7 +115,7 @@ func (s *GraphStore) blastUpstream(targetID string, req BlastRadiusRequest) ([]B
 		edgeFilter, edgeFilter, testFilter)
 
 	rows, err := s.db.Query(query, targetID, req.MinConfidence,
-		req.MaxDepth, req.MinConfidence, req.Budget)
+		req.MaxDepth, req.MinConfidence, targetID, req.Budget)
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +151,7 @@ func (s *GraphStore) blastDownstream(targetID string, req BlastRadiusRequest) ([
 			  AND e.confidence >= ?
 			  AND e.target_id NOT IN (SELECT id FROM boundary_symbols)
 			  AND instr(b.path, e.target_id) = 0
+			  AND e.target_id != ?
 			  %s
 		)
 		SELECT s.id, s.name, s.kind, s.language, s.package, s.file_path,
@@ -165,7 +167,7 @@ func (s *GraphStore) blastDownstream(targetID string, req BlastRadiusRequest) ([
 		edgeFilter, edgeFilter, testFilter)
 
 	rows, err := s.db.Query(query, targetID, req.MinConfidence,
-		req.MaxDepth, req.MinConfidence, req.Budget)
+		req.MaxDepth, req.MinConfidence, targetID, req.Budget)
 	if err != nil {
 		return nil, err
 	}
