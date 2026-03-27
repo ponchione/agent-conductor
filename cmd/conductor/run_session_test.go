@@ -4,13 +4,18 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/ponchione/agent-conductor/internal/api"
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/models"
@@ -64,9 +69,12 @@ func TestInitializeRunSessionPersistsManagedWorkOrderHistory(t *testing.T) {
 		Constraints: []string{"keep auth middleware intact"},
 	}
 
+	repoPath := t.TempDir()
+
 	cfg := &config.ProjectConfig{
 		Project: config.Project{
 			Name:    "repo",
+			Path:    repoPath,
 			DataDir: dataDir,
 		},
 		Git: config.Git{
@@ -96,6 +104,9 @@ func TestInitializeRunSessionPersistsManagedWorkOrderHistory(t *testing.T) {
 	if workflow.OriginalFile != managedPath {
 		t.Fatalf("workflow.OriginalFile = %q, want %q", workflow.OriginalFile, managedPath)
 	}
+	if workflow.TargetRepo != repoPath {
+		t.Fatalf("workflow.TargetRepo = %q, want %q", workflow.TargetRepo, repoPath)
+	}
 
 	tasks, err := db.ListTasksByWorkflow(ctx, workflowID)
 	if err != nil {
@@ -107,6 +118,9 @@ func TestInitializeRunSessionPersistsManagedWorkOrderHistory(t *testing.T) {
 	task, err := db.GetTask(ctx, tasks[0].ID)
 	if err != nil {
 		t.Fatalf("GetTask() error: %v", err)
+	}
+	if task.TargetRepo != repoPath {
+		t.Fatalf("task.TargetRepo = %q, want %q", task.TargetRepo, repoPath)
 	}
 	if task.InputArtifact != managedPath {
 		t.Fatalf("task.InputArtifact = %q, want %q", task.InputArtifact, managedPath)
@@ -503,6 +517,147 @@ func TestWarnOnUnmetPlanDependenciesIgnoresSuccessfulRunsFromOtherManifest(t *te
 	}
 	if !strings.Contains(output, "dependency task-001 for task task-002 has no prior PASS + approved pipeline run") {
 		t.Fatalf("warning output = %q, want dependency warning for current plan", output)
+	}
+}
+
+func TestInitializeRunSessionStoresRepoPathUsedByWorkflowDiffEndpoint(t *testing.T) {
+	t.Parallel()
+
+	repoPath := initGitRepo(t)
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "db", "conductor.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		t.Fatalf("MkdirAll(db dir) error: %v", err)
+	}
+
+	db, err := database.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB() error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	sourcePath := filepath.Join(t.TempDir(), "input.yaml")
+	sourceContent := []byte("schema_version: 2\ntitle: Add logout endpoint\ntype: new_feature\ntarget_module: auth\nrequirements:\n  - id: R1\n    text: Add logout endpoint\nacceptance_criteria:\n  - id: AC1\n    description: Logout endpoint exists\n    requirement_ids: [R1]\n    required: true\n    verification:\n      kind: precheck\n      check: curl /logout\n")
+	if err := os.WriteFile(sourcePath, sourceContent, 0644); err != nil {
+		t.Fatalf("WriteFile(sourcePath) error: %v", err)
+	}
+
+	wo := models.WorkOrder{
+		SchemaVersion: models.WorkOrderSchemaVersion,
+		Title:         "Add logout endpoint",
+		Type:          "new_feature",
+		TargetModule:  "auth",
+		Requirements: []models.WorkOrderRequirement{
+			{ID: "R1", Text: "Add logout endpoint"},
+		},
+		TypedAcceptanceCriteria: []models.TypedAcceptanceCriterion{
+			{
+				ID:             "AC1",
+				Description:    "Logout endpoint exists",
+				RequirementIDs: []string{"R1"},
+				Required:       boolPtr(true),
+				Verification: models.AcceptanceVerification{
+					Kind:  "precheck",
+					Check: "curl /logout",
+				},
+			},
+		},
+	}
+
+	cfg := &config.ProjectConfig{
+		Project: config.Project{
+			Name:    "repo",
+			Path:    repoPath,
+			DataDir: dataDir,
+		},
+		Git: config.Git{
+			BranchPrefix: "feature/conducted",
+		},
+		Safety: config.Safety{
+			MaxFilesChanged: 25,
+			MaxDurationMins: 45,
+		},
+	}
+
+	ctx := context.Background()
+	_, workflowID, err := initializeRunSession(ctx, db, cfg, sourcePath, sourceContent, wo, nil)
+	if err != nil {
+		t.Fatalf("initializeRunSession() error: %v", err)
+	}
+
+	workflow, err := db.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetWorkflow() error: %v", err)
+	}
+
+	runGit(t, repoPath, "checkout", "-b", workflow.GitBranch)
+	trackedPath := filepath.Join(repoPath, "tracked.txt")
+	if err := os.WriteFile(trackedPath, []byte("base\nfeature change\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(trackedPath) error: %v", err)
+	}
+	runGit(t, repoPath, "add", "tracked.txt")
+	runGit(t, repoPath, "commit", "-m", "feature change")
+	runGit(t, repoPath, "checkout", "main")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workflows/"+workflowID+"/diff", nil)
+
+	api.NewServer(db, nil, "main", nil, "", nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var payload struct {
+		Diff           string   `json:"diff"`
+		BaseBranch     string   `json:"base_branch"`
+		WorkflowBranch string   `json:"workflow_branch"`
+		FilesChanged   []string `json:"files_changed"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.BaseBranch != "main" {
+		t.Fatalf("payload.BaseBranch = %q, want %q", payload.BaseBranch, "main")
+	}
+	if payload.WorkflowBranch != workflow.GitBranch {
+		t.Fatalf("payload.WorkflowBranch = %q, want %q", payload.WorkflowBranch, workflow.GitBranch)
+	}
+	if len(payload.FilesChanged) != 1 || payload.FilesChanged[0] != "tracked.txt" {
+		t.Fatalf("payload.FilesChanged = %v, want [tracked.txt]", payload.FilesChanged)
+	}
+	if !strings.Contains(payload.Diff, "feature change") {
+		t.Fatalf("payload.Diff missing feature change:\n%s", payload.Diff)
+	}
+}
+
+func initGitRepo(t *testing.T) string {
+	t.Helper()
+
+	repoPath := t.TempDir()
+	runGit(t, repoPath, "init")
+	runGit(t, repoPath, "config", "user.name", "Test User")
+	runGit(t, repoPath, "config", "user.email", "test@example.com")
+	runGit(t, repoPath, "branch", "-m", "main")
+
+	trackedPath := filepath.Join(repoPath, "tracked.txt")
+	if err := os.WriteFile(trackedPath, []byte("base\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(trackedPath) error: %v", err)
+	}
+	runGit(t, repoPath, "add", "tracked.txt")
+	runGit(t, repoPath, "commit", "-m", "initial commit")
+
+	return repoPath
+}
+
+func runGit(t *testing.T, repoPath string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, string(out))
 	}
 }
 
