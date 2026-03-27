@@ -355,6 +355,124 @@ func (q *Queries) GetPipelineStats(ctx context.Context) (GetPipelineStatsRow, er
 	return i, err
 }
 
+const getPlanRunByID = `-- name: GetPlanRunByID :one
+SELECT
+    id, session_id, spec_file, project, spec_fingerprint,
+    state, error_message, current_phase,
+    generation_model, epic_generation_model, task_generation_model, audit_model,
+    generation_session_id, audit_session_id,
+    work_orders_generated, epic_count, task_count,
+    pre_audit_work_order_count, post_audit_work_order_count,
+    audit_change_text,
+    audit_work_orders_added, audit_work_orders_modified, audit_work_orders_unchanged,
+    generation_cost_usd, epic_generation_cost_usd, task_generation_cost_usd, audit_cost_usd,
+    generation_duration_ms, epic_generation_duration_ms, task_generation_duration_ms, audit_duration_ms,
+    generation_retry_count,
+    generation_tokens_in, generation_tokens_out,
+    epic_generation_tokens_in, epic_generation_tokens_out,
+    task_generation_call_count, task_generation_tokens_in, task_generation_tokens_out,
+    audit_tokens_in, audit_tokens_out,
+    created_at
+FROM plan_runs
+WHERE id = ?
+LIMIT 1
+`
+
+type GetPlanRunByIDRow struct {
+	ID                       string          `json:"id"`
+	SessionID                sql.NullString  `json:"session_id"`
+	SpecFile                 string          `json:"spec_file"`
+	Project                  sql.NullString  `json:"project"`
+	SpecFingerprint          sql.NullString  `json:"spec_fingerprint"`
+	State                    string          `json:"state"`
+	ErrorMessage             sql.NullString  `json:"error_message"`
+	CurrentPhase             sql.NullString  `json:"current_phase"`
+	GenerationModel          sql.NullString  `json:"generation_model"`
+	EpicGenerationModel      sql.NullString  `json:"epic_generation_model"`
+	TaskGenerationModel      sql.NullString  `json:"task_generation_model"`
+	AuditModel               sql.NullString  `json:"audit_model"`
+	GenerationSessionID      sql.NullString  `json:"generation_session_id"`
+	AuditSessionID           sql.NullString  `json:"audit_session_id"`
+	WorkOrdersGenerated      sql.NullInt64   `json:"work_orders_generated"`
+	EpicCount                sql.NullInt64   `json:"epic_count"`
+	TaskCount                sql.NullInt64   `json:"task_count"`
+	PreAuditWorkOrderCount   sql.NullInt64   `json:"pre_audit_work_order_count"`
+	PostAuditWorkOrderCount  sql.NullInt64   `json:"post_audit_work_order_count"`
+	AuditChangeText          sql.NullString  `json:"audit_change_text"`
+	AuditWorkOrdersAdded     sql.NullInt64   `json:"audit_work_orders_added"`
+	AuditWorkOrdersModified  sql.NullInt64   `json:"audit_work_orders_modified"`
+	AuditWorkOrdersUnchanged sql.NullInt64   `json:"audit_work_orders_unchanged"`
+	GenerationCostUsd        sql.NullFloat64 `json:"generation_cost_usd"`
+	EpicGenerationCostUsd    sql.NullFloat64 `json:"epic_generation_cost_usd"`
+	TaskGenerationCostUsd    sql.NullFloat64 `json:"task_generation_cost_usd"`
+	AuditCostUsd             sql.NullFloat64 `json:"audit_cost_usd"`
+	GenerationDurationMs     sql.NullInt64   `json:"generation_duration_ms"`
+	EpicGenerationDurationMs sql.NullInt64   `json:"epic_generation_duration_ms"`
+	TaskGenerationDurationMs sql.NullInt64   `json:"task_generation_duration_ms"`
+	AuditDurationMs          sql.NullInt64   `json:"audit_duration_ms"`
+	GenerationRetryCount     int64           `json:"generation_retry_count"`
+	GenerationTokensIn       sql.NullInt64   `json:"generation_tokens_in"`
+	GenerationTokensOut      sql.NullInt64   `json:"generation_tokens_out"`
+	EpicGenerationTokensIn   sql.NullInt64   `json:"epic_generation_tokens_in"`
+	EpicGenerationTokensOut  sql.NullInt64   `json:"epic_generation_tokens_out"`
+	TaskGenerationCallCount  sql.NullInt64   `json:"task_generation_call_count"`
+	TaskGenerationTokensIn   sql.NullInt64   `json:"task_generation_tokens_in"`
+	TaskGenerationTokensOut  sql.NullInt64   `json:"task_generation_tokens_out"`
+	AuditTokensIn            sql.NullInt64   `json:"audit_tokens_in"`
+	AuditTokensOut           sql.NullInt64   `json:"audit_tokens_out"`
+	CreatedAt                string          `json:"created_at"`
+}
+
+func (q *Queries) GetPlanRunByID(ctx context.Context, id string) (GetPlanRunByIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getPlanRunByID, id)
+	var i GetPlanRunByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.SpecFile,
+		&i.Project,
+		&i.SpecFingerprint,
+		&i.State,
+		&i.ErrorMessage,
+		&i.CurrentPhase,
+		&i.GenerationModel,
+		&i.EpicGenerationModel,
+		&i.TaskGenerationModel,
+		&i.AuditModel,
+		&i.GenerationSessionID,
+		&i.AuditSessionID,
+		&i.WorkOrdersGenerated,
+		&i.EpicCount,
+		&i.TaskCount,
+		&i.PreAuditWorkOrderCount,
+		&i.PostAuditWorkOrderCount,
+		&i.AuditChangeText,
+		&i.AuditWorkOrdersAdded,
+		&i.AuditWorkOrdersModified,
+		&i.AuditWorkOrdersUnchanged,
+		&i.GenerationCostUsd,
+		&i.EpicGenerationCostUsd,
+		&i.TaskGenerationCostUsd,
+		&i.AuditCostUsd,
+		&i.GenerationDurationMs,
+		&i.EpicGenerationDurationMs,
+		&i.TaskGenerationDurationMs,
+		&i.AuditDurationMs,
+		&i.GenerationRetryCount,
+		&i.GenerationTokensIn,
+		&i.GenerationTokensOut,
+		&i.EpicGenerationTokensIn,
+		&i.EpicGenerationTokensOut,
+		&i.TaskGenerationCallCount,
+		&i.TaskGenerationTokensIn,
+		&i.TaskGenerationTokensOut,
+		&i.AuditTokensIn,
+		&i.AuditTokensOut,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getRecentPipelineRuns = `-- name: GetRecentPipelineRuns :many
 SELECT
     workflow_id,
@@ -1260,6 +1378,29 @@ type UpdatePipelineRunWorkOrderContentParams struct {
 
 func (q *Queries) UpdatePipelineRunWorkOrderContent(ctx context.Context, arg UpdatePipelineRunWorkOrderContentParams) error {
 	_, err := q.db.ExecContext(ctx, updatePipelineRunWorkOrderContent, arg.WorkOrderContent, arg.WorkflowID)
+	return err
+}
+
+const updatePlanRunState = `-- name: UpdatePlanRunState :exec
+UPDATE plan_runs
+SET state = ?, current_phase = ?, error_message = ?
+WHERE id = ?
+`
+
+type UpdatePlanRunStateParams struct {
+	State        string         `json:"state"`
+	CurrentPhase sql.NullString `json:"current_phase"`
+	ErrorMessage sql.NullString `json:"error_message"`
+	ID           string         `json:"id"`
+}
+
+func (q *Queries) UpdatePlanRunState(ctx context.Context, arg UpdatePlanRunStateParams) error {
+	_, err := q.db.ExecContext(ctx, updatePlanRunState,
+		arg.State,
+		arg.CurrentPhase,
+		arg.ErrorMessage,
+		arg.ID,
+	)
 	return err
 }
 

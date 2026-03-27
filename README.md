@@ -189,14 +189,8 @@ make build
 
 This produces `bin/conductor` with the LanceDB shared library path baked in via rpath.
 
-The React observability UI is embedded from `internal/api/static/app`. `make build` does
-not rebuild the frontend automatically; it embeds whatever assets are already present in
-that directory. If you changed anything under `web/`, rebuild the frontend first:
-
-```bash
-make web-build
-make build
-```
+The React observability UI is embedded from `internal/api/static/app`. `make build`
+rebuilds the frontend automatically before compiling the Go binary.
 
 For end-to-end observability verification, use:
 
@@ -495,8 +489,11 @@ and embedded into the Go server from `internal/api/static/app`.
 The UI currently covers:
 
 - Session dashboard and session detail
-- Plan-audit dashboard
+- Plan generation from the dashboard with live progress polling
+- Plan-audit dashboard with state badges (generating, complete, failed)
 - Live workflow monitoring over the DB-backed SSE stream at `/api/events/stream`
+- Theme system with 11 selectable dark palettes (persisted via localStorage)
+- Settings popover with theme picker and model override controls
 
 Frontend commands:
 
@@ -651,7 +648,7 @@ the current canonical schema.
 cmd/conductor/
   main.go              CLI root, cobra setup
   run.go               Synchronous pipeline execution
-  plan.go              Spec → work order decomposition via Claude Code, with audit pass
+  plan.go              Thin CLI wrapper — builds GenerateInput and calls planner.Generate()
   gate.go              Approve/reject with merge, archive, and auto-reindex
   index.go             RAG indexing entry point
   ragdump.go           RAG database inspection (stats, file, name lookup)
@@ -667,6 +664,7 @@ internal/
   context/             Context assembly — PreScope, GatherForTarget, Assemble
   database/            SQLite via sqlc — workflows, tasks, events, pipeline_runs, sub_calls, plan_runs
   errors/              Classified errors: Retryable, Fatal, NeedsHuman
+  planner/             Plan generation pipeline — Generate(), schema, context, validation, Claude invocation
   executor/            Build executors — ClaudeCodeExecutor, OpenCodeExecutor
   gate/                Human review — approve (merge + archive) / reject
   git/                 go-git operations — diff, changed files, merge, branch delete

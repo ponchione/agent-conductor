@@ -52,6 +52,7 @@ type sessionPlanRunResponse struct {
 	ID                      string   `json:"id"`
 	SpecFile                string   `json:"spec_file"`
 	Project                 *string  `json:"project,omitempty"`
+	State                   string   `json:"state"`
 	SpecFingerprint         *string  `json:"spec_fingerprint,omitempty"`
 	WorkOrdersGenerated     *int64   `json:"work_orders_generated,omitempty"`
 	PreAuditWorkOrderCount  *int64   `json:"pre_audit_work_order_count,omitempty"`
@@ -98,6 +99,7 @@ type planRunUsefulnessResponse struct {
 	SessionID               *string  `json:"session_id,omitempty"`
 	Project                 *string  `json:"project,omitempty"`
 	SpecFile                string   `json:"spec_file"`
+	State                   string   `json:"state"`
 	AuditChanged            bool     `json:"audit_changed"`
 	WorkOrdersGenerated     *int64   `json:"work_orders_generated,omitempty"`
 	PreAuditWorkOrderCount  *int64   `json:"pre_audit_work_order_count,omitempty"`
@@ -165,6 +167,7 @@ func mapSessionPlanRuns(rows []database.SessionPlanRun) []sessionPlanRunResponse
 			ID:                      row.ID,
 			SpecFile:                row.SpecFile,
 			Project:                 stringPtr(row.Project),
+			State:                   row.State,
 			SpecFingerprint:         stringPtr(row.SpecFingerprint),
 			WorkOrdersGenerated:     int64Ptr(row.WorkOrdersGenerated),
 			PreAuditWorkOrderCount:  int64Ptr(row.PreAuditWorkOrderCount),
@@ -226,6 +229,7 @@ func mapPlanRunUsefulnessRows(rows []database.PlanRunUsefulness) []planRunUseful
 			SessionID:               stringPtr(row.SessionID),
 			Project:                 stringPtr(row.Project),
 			SpecFile:                row.SpecFile,
+			State:                   row.State,
 			AuditChanged:            row.AuditChanged,
 			WorkOrdersGenerated:     int64Ptr(row.WorkOrdersGenerated),
 			PreAuditWorkOrderCount:  int64Ptr(row.PreAuditWorkOrderCount),
@@ -622,6 +626,7 @@ type planSubmitRequest struct {
 }
 
 type planSubmitResponse struct {
-	SessionID string `json:"session_id"`
-	Status    string `json:"status"`
+	PlanRunID string `json:"plan_run_id"`
+	State     string `json:"state"`
+	SessionID string `json:"session_id"` // backward compat for frontend
 }

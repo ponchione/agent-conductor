@@ -46,6 +46,7 @@ type SessionPlanRun struct {
 	ID                      string
 	SpecFile                string
 	Project                 sql.NullString
+	State                   string
 	SpecFingerprint         sql.NullString
 	WorkOrdersGenerated     sql.NullInt64
 	PreAuditWorkOrderCount  sql.NullInt64
@@ -215,6 +216,7 @@ func (db *DB) ListPlanRunsBySession(ctx context.Context, sessionID string) ([]Se
 			id,
 			spec_file,
 			project,
+			state,
 			spec_fingerprint,
 			work_orders_generated,
 			pre_audit_work_order_count,
@@ -237,6 +239,7 @@ func (db *DB) ListPlanRunsBySession(ctx context.Context, sessionID string) ([]Se
 			&run.ID,
 			&run.SpecFile,
 			&run.Project,
+			&run.State,
 			&run.SpecFingerprint,
 			&run.WorkOrdersGenerated,
 			&run.PreAuditWorkOrderCount,

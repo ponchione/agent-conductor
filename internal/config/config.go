@@ -22,6 +22,47 @@ type ProjectConfig struct {
 	Executor    Executor    `yaml:"executor"`
 	Models      Models      `yaml:"models"`
 	Guardrails  Guardrails  `yaml:"guardrails"`
+	Graph       GraphConfig `yaml:"graph"`
+}
+
+// GraphConfig configures the structural intelligence layer.
+type GraphConfig struct {
+	Enabled     bool              `yaml:"enabled"`
+	DBPath      string            `yaml:"db_path"`
+	BlastRadius BlastRadiusConfig `yaml:"blast_radius"`
+	Analyzers   AnalyzerConfigs   `yaml:"analyzers"`
+}
+
+// BlastRadiusConfig sets defaults for blast radius queries.
+type BlastRadiusConfig struct {
+	MaxDepth      int     `yaml:"max_depth"`
+	Budget        int     `yaml:"budget"`
+	MinConfidence float64 `yaml:"min_confidence"`
+	IncludeTests  bool    `yaml:"include_tests"`
+}
+
+// AnalyzerConfigs holds per-language analyzer configuration.
+type AnalyzerConfigs struct {
+	Go         GoAnalyzerConfig     `yaml:"go"`
+	TypeScript TSAnalyzerConfig     `yaml:"typescript"`
+	Python     PythonAnalyzerConfig `yaml:"python"`
+}
+
+// GoAnalyzerConfig configures the Go analyzer.
+type GoAnalyzerConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// TSAnalyzerConfig configures the TypeScript analyzer.
+type TSAnalyzerConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	TsconfigPath string `yaml:"tsconfig_path"`
+}
+
+// PythonAnalyzerConfig configures the Python analyzer.
+type PythonAnalyzerConfig struct {
+	Enabled       bool    `yaml:"enabled"`
+	MinConfidence float64 `yaml:"min_confidence"`
 }
 
 type Project struct {
@@ -199,6 +240,22 @@ func Load(projectPath string) (*ProjectConfig, error) {
 		cfg.Index.MaxTotalFileSizeBytes = 512 * 1024 // 512 KiB
 	}
 
+	if cfg.Graph.BlastRadius.MaxDepth == 0 {
+		cfg.Graph.BlastRadius.MaxDepth = 3
+	}
+	if cfg.Graph.BlastRadius.Budget == 0 {
+		cfg.Graph.BlastRadius.Budget = 30
+	}
+	if cfg.Graph.BlastRadius.MinConfidence == 0 {
+		cfg.Graph.BlastRadius.MinConfidence = 0.5
+	}
+	if cfg.Graph.Analyzers.Python.MinConfidence == 0 {
+		cfg.Graph.Analyzers.Python.MinConfidence = 0.7
+	}
+	if cfg.Graph.Analyzers.TypeScript.TsconfigPath == "" {
+		cfg.Graph.Analyzers.TypeScript.TsconfigPath = "tsconfig.json"
+	}
+
 	if cfg.Guardrails.MaxInvestigationTargets == 0 {
 		cfg.Guardrails.MaxInvestigationTargets = 6
 	}
@@ -218,6 +275,32 @@ func Load(projectPath string) (*ProjectConfig, error) {
 	expandProviderEnvVars(&cfg.Models)
 
 	cfg.Project.DataDir = filepath.Join(home, "source", ".conductor", "projects", cfg.Project.Name)
+
+	// Auto-detect analyzers based on project contents.
+	if cfg.Graph.Enabled {
+		projectPath := cfg.Project.Path
+		if projectPath == "" {
+			projectPath = "."
+		}
+
+		// Auto-enable Go analyzer if go.mod exists and not explicitly set.
+		if !cfg.Graph.Analyzers.Go.Enabled {
+			if _, err := os.Stat(filepath.Join(projectPath, "go.mod")); err == nil {
+				cfg.Graph.Analyzers.Go.Enabled = true
+			}
+		}
+
+		// Auto-enable TS analyzer if tsconfig.json exists and not explicitly set.
+		if !cfg.Graph.Analyzers.TypeScript.Enabled {
+			tsconfig := cfg.Graph.Analyzers.TypeScript.TsconfigPath
+			if tsconfig == "" {
+				tsconfig = "tsconfig.json"
+			}
+			if _, err := os.Stat(filepath.Join(projectPath, tsconfig)); err == nil {
+				cfg.Graph.Analyzers.TypeScript.Enabled = true
+			}
+		}
+	}
 
 	return cfg, nil
 }

@@ -8,7 +8,6 @@ export default function NewPlan() {
   const navigate = useNavigate();
   const [specContent, setSpecContent] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -34,21 +33,16 @@ export default function NewPlan() {
     if (!specContent.trim()) return;
 
     setSubmitting(true);
-    setProgress("Submitting spec...");
     setError(null);
 
     try {
-      setProgress("Generating plan... this may take a moment.");
       const result = await submitPlan({ spec_content: specContent });
-      setProgress("Plan generated successfully!");
-      // Navigate to the new plan run detail after a brief delay
-      setTimeout(() => {
-        navigate(`/plan/${encodeURIComponent(result.session_id)}`);
-      }, 500);
+      // Use plan_run_id if available, fall back to session_id for backward compatibility
+      const id = result.plan_run_id || result.session_id;
+      navigate(`/plan/${encodeURIComponent(id)}`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to generate plan";
+      const message = err instanceof Error ? err.message : "Failed to submit plan";
       setError(message);
-      setProgress(null);
     } finally {
       setSubmitting(false);
     }
@@ -78,7 +72,7 @@ export default function NewPlan() {
             {submitting ? (
               <span className="flex items-center gap-2">
                 <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                Generating...
+                Submitting...
               </span>
             ) : (
               "Generate Plan"
@@ -95,9 +89,6 @@ export default function NewPlan() {
         placeholder="Paste your feature spec here..."
       />
 
-      {progress && (
-        <p className="text-sm text-muted-foreground">{progress}</p>
-      )}
       {error && (
         <p className="text-sm text-red-400">{error}</p>
       )}

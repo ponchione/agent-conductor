@@ -9,12 +9,14 @@ type Querier = dbgen.Querier
 
 // Model types
 type Event = dbgen.Event
+type PlanRun = dbgen.PlanRun
 type PipelineRun = dbgen.PipelineRun
 type SubCall = dbgen.SubCall
 type Task = dbgen.Task
 type Workflow = dbgen.Workflow
 
 // Params types
+type UpdatePlanRunStateParams = dbgen.UpdatePlanRunStateParams
 type ClaimTaskParams = dbgen.ClaimTaskParams
 type CompleteTaskParams = dbgen.CompleteTaskParams
 type CountSuccessfulApprovedRunsByPlanTaskIDParams = dbgen.CountSuccessfulApprovedRunsByPlanTaskIDParams
@@ -37,6 +39,7 @@ type UpdateWorkflowStateParams = dbgen.UpdateWorkflowStateParams
 type UpdateWorkflowVerificationParams = dbgen.UpdateWorkflowVerificationParams
 
 // Row types
+type GetPlanRunByIDRow = dbgen.GetPlanRunByIDRow
 type GetPipelineRunByWorkflowIDRow = dbgen.GetPipelineRunByWorkflowIDRow
 type GetPipelineStatsRow = dbgen.GetPipelineStatsRow
 type GetRecentPipelineRunsRow = dbgen.GetRecentPipelineRunsRow

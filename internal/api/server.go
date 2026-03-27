@@ -18,6 +18,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/git"
+	"github.com/ponchione/agent-conductor/internal/planner"
 )
 
 const (
@@ -29,6 +30,10 @@ const (
 //go:embed static/*
 var staticFiles embed.FS
 
+// GenerateFunc is the signature of the plan generation function.
+// It matches planner.Generate and can be replaced in tests.
+type GenerateFunc func(ctx context.Context, input planner.GenerateInput) (*planner.GenerateResult, error)
+
 // Server exposes read-only observability endpoints backed by the conductor DB.
 type Server struct {
 	db            *database.DB
@@ -38,6 +43,7 @@ type Server struct {
 	workOrderDir  string
 	cfg           *config.ProjectConfig
 	overrideStore *OverrideStore
+	generateFunc  GenerateFunc // defaults to planner.Generate; override for tests
 }
 
 // NewServer builds the HTTP handler tree for observability reads.
@@ -46,6 +52,7 @@ func NewServer(db *database.DB, gitMgr *git.GitManager, baseBranch string, runQu
 		db: db, gitMgr: gitMgr, baseBranch: baseBranch,
 		runQueue: runQueue, workOrderDir: workOrderDir,
 		cfg: cfg, overrideStore: NewOverrideStore(),
+		generateFunc: planner.Generate,
 	}
 	r := chi.NewRouter()
 	r.Mount("/assets/", s.staticAssetsHandler())
@@ -71,6 +78,7 @@ func NewServer(db *database.DB, gitMgr *git.GitManager, baseBranch string, runQu
 	r.Get("/api/work-orders/{filename}", s.handleGetWorkOrder)
 	r.Put("/api/work-orders/{filename}", s.handleUpdateWorkOrder)
 	r.Post("/api/plan", s.handleSubmitPlan)
+	r.Get("/api/plan-runs/{id}", s.handleGetPlanRun)
 	r.Get("/api/config/roles", s.handleGetConfigRoles)
 	r.Get("/api/config/overrides", s.handleGetConfigOverrides)
 	r.Put("/api/config/overrides", s.handlePutConfigOverrides)

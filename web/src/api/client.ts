@@ -5,6 +5,7 @@ import type {
   EventStreamEnvelope,
   ModelOverride,
   PlanAuditStatsResponse,
+  PlanRunDetailResponse,
   PlanSubmitResponse,
   QueueAddItem,
   QueueState,
@@ -69,6 +70,10 @@ export async function getSession(id: string): Promise<SessionDetailResponse> {
 
 export async function getPlanAuditStats(limit = 6): Promise<PlanAuditStatsResponse> {
   return fetchJSON<PlanAuditStatsResponse>(`/api/stats/plan-audit?limit=${limit}`);
+}
+
+export async function getPlanRun(id: string): Promise<PlanRunDetailResponse> {
+  return fetchJSON<PlanRunDetailResponse>(`/api/plan-runs/${encodeURIComponent(id)}`);
 }
 
 export function openEventStream(options: OpenEventStreamOptions): EventSource {

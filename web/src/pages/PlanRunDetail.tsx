@@ -1,13 +1,14 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
-  getPlanAuditStats,
   listWorkOrders,
   getWorkOrder,
   updateWorkOrder,
   addQueueItems,
 } from "@/api/client";
-import type { PlanAuditRun, WorkOrderFile } from "@/types/api";
+import type { WorkOrderFile } from "@/types/api";
+import { usePlanRunPolling } from "@/hooks/usePlanRunPolling";
+import { getProgressText, isTerminalState } from "@/lib/planRunState";
 import { MetricCard } from "@/components/MetricCard";
 import { CopyableID } from "@/components/CopyableID";
 import { TimeAgo } from "@/components/TimeAgo";
@@ -28,10 +29,10 @@ interface WorkOrderCardState {
 
 export default function PlanRunDetail() {
   const { planRunId } = useParams<{ planRunId: string }>();
-  const [run, setRun] = useState<PlanAuditRun | null>(null);
+  const { run, loading, error } = usePlanRunPolling(planRunId);
   const [workOrders, setWorkOrders] = useState<WorkOrderFile[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [woLoading, setWoLoading] = useState(false);
+  const [woFetched, setWoFetched] = useState(false);
 
   // Per-card state keyed by filename
   const [cardStates, setCardStates] = useState<Record<string, WorkOrderCardState>>({});
@@ -44,28 +45,23 @@ export default function PlanRunDetail() {
   // Cache fetched WO content so we don't refetch
   const contentCacheRef = useRef<Record<string, string>>({});
 
+  // Fetch work orders only when state reaches "complete"
   useEffect(() => {
-    if (!planRunId) return;
+    if (!run || run.state !== "complete" || woFetched) return;
 
-    setLoading(true);
-    setError(null);
-
-    Promise.all([getPlanAuditStats(100), listWorkOrders()])
-      .then(([statsResponse, woResponse]) => {
-        const found = statsResponse.recent_runs?.find((r) => r.id === planRunId);
-        setRun(found ?? null);
+    setWoLoading(true);
+    listWorkOrders()
+      .then((woResponse) => {
         setWorkOrders(woResponse.work_orders ?? []);
-        if (!found) {
-          setError("Plan run not found");
-        }
       })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to load plan run");
+      .catch(() => {
+        setWorkOrders([]);
       })
       .finally(() => {
-        setLoading(false);
+        setWoLoading(false);
+        setWoFetched(true);
       });
-  }, [planRunId]);
+  }, [run, woFetched]);
 
   const getCardState = useCallback(
     (filename: string): WorkOrderCardState => {
@@ -224,6 +220,7 @@ export default function PlanRunDetail() {
     }
   }, [selectedFiles]);
 
+  // Loading state
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center p-6">
@@ -232,15 +229,93 @@ export default function PlanRunDetail() {
     );
   }
 
-  if (error || !run) {
+  // Error state (network/polling error with no data)
+  if (error && !run) {
     return (
       <div className="flex h-full items-center justify-center p-6">
-        <p className="text-sm text-red-400">{error ?? "Plan run not found"}</p>
+        <p className="text-sm text-red-400">{error}</p>
       </div>
     );
   }
 
+  if (!run) {
+    return (
+      <div className="flex h-full items-center justify-center p-6">
+        <p className="text-sm text-red-400">Plan run not found</p>
+      </div>
+    );
+  }
+
+  // Failed state
+  if (run.state === "failed") {
+    return (
+      <div className="flex flex-col gap-6 p-6">
+        {/* Header */}
+        <div>
+          <h2 className="text-lg font-semibold">{run.spec_file}</h2>
+          <div className="mt-1 flex items-center gap-3 text-sm text-muted-foreground">
+            <CopyableID id={run.id} />
+            <TimeAgo timestamp={run.created_at} />
+          </div>
+        </div>
+
+        {/* Error banner */}
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-sm font-semibold text-red-400">Plan Generation Failed</span>
+          </div>
+          <p className="text-sm text-red-400">
+            {run.error_message || "An unknown error occurred during plan generation."}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Progress state (non-terminal, non-failed)
+  if (!isTerminalState(run.state)) {
+    const progressText = getProgressText(run.state, run.current_phase);
+
+    return (
+      <div className="flex flex-col gap-6 p-6">
+        {/* Header */}
+        <div>
+          <h2 className="text-lg font-semibold">{run.spec_file}</h2>
+          <div className="mt-1 flex items-center gap-3 text-sm text-muted-foreground">
+            <CopyableID id={run.id} />
+            <TimeAgo timestamp={run.created_at} />
+          </div>
+        </div>
+
+        {/* Progress indicator */}
+        <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-6">
+          <div className="flex items-center gap-3">
+            <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" />
+            <span className="text-sm font-medium text-blue-400">{progressText}</span>
+          </div>
+        </div>
+
+        {/* Partial metrics (shown when available during generation) */}
+        {(run.epic_count != null || run.task_count != null) && (
+          <div className="grid grid-cols-4 gap-4">
+            <MetricCard label="Epics" value={run.epic_count ?? "-"} />
+            <MetricCard label="Tasks" value={run.task_count ?? "-"} />
+            <MetricCard label="Pre-Audit" value={run.pre_audit_work_order_count ?? "-"} />
+            <MetricCard label="WOs Generated" value={run.work_orders_generated ?? "-"} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Complete state — render full metrics + work orders
   const auditChanges = run.audit_changes ?? [];
+  // If audit_changes is empty but audit_change_text exists, parse it
+  const displayAuditChanges = auditChanges.length > 0
+    ? auditChanges
+    : run.audit_change_text
+      ? run.audit_change_text.split("\n").filter((line) => line.trim() !== "")
+      : [];
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -279,14 +354,30 @@ export default function PlanRunDetail() {
         />
       </div>
 
+      {/* Generation stats */}
+      {(run.epic_count != null || run.task_count != null || run.generation_cost_usd != null) && (
+        <div className="grid grid-cols-4 gap-4">
+          <MetricCard label="Epics" value={run.epic_count ?? "-"} />
+          <MetricCard label="Tasks" value={run.task_count ?? "-"} />
+          <MetricCard
+            label="Gen. Cost"
+            value={run.generation_cost_usd != null ? `$${run.generation_cost_usd.toFixed(4)}` : "-"}
+          />
+          <MetricCard
+            label="Gen. Duration"
+            value={run.generation_duration_ms != null ? `${(run.generation_duration_ms / 1000).toFixed(1)}s` : "-"}
+          />
+        </div>
+      )}
+
       {/* Audit changes */}
-      {auditChanges.length > 0 && (
+      {displayAuditChanges.length > 0 && (
         <div>
           <h3 className="mb-2 text-sm font-medium text-muted-foreground uppercase tracking-wider">
             Audit Changes
           </h3>
           <div className="flex flex-wrap gap-2">
-            {auditChanges.map((change, i) => {
+            {displayAuditChanges.map((change, i) => {
               const isAdded = change.toLowerCase().includes("added");
               const isRemoved = change.toLowerCase().includes("removed");
               return (
@@ -314,7 +405,9 @@ export default function PlanRunDetail() {
         <h3 className="mb-3 text-sm font-medium text-muted-foreground uppercase tracking-wider">
           Work Orders
         </h3>
-        {workOrders.length === 0 ? (
+        {woLoading ? (
+          <p className="text-sm text-muted-foreground">Loading work orders...</p>
+        ) : workOrders.length === 0 ? (
           <p className="text-sm text-muted-foreground">No work orders found</p>
         ) : (
           <div className="flex flex-col gap-3">
@@ -323,7 +416,7 @@ export default function PlanRunDetail() {
               const isSelected = selectedFiles.has(wo.filename);
 
               // Determine audit annotation
-              const matchedChange = auditChanges.find((c) =>
+              const matchedChange = displayAuditChanges.find((c) =>
                 c.toLowerCase().includes(wo.filename.toLowerCase().replace(".yaml", "").replace(".yml", ""))
               );
               const isAddedByAudit = matchedChange?.toLowerCase().includes("added");

@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Outlet, useParams, useNavigate, useLocation } from "react-router-dom";
 import { getPlanAuditStats } from "@/api/client";
 import type { PlanAuditRun } from "@/types/api";
+import { STATE_DISPLAY, isTerminalState } from "@/lib/planRunState";
 import { TimeAgo } from "@/components/TimeAgo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,32 @@ function DeltaBadge({ delta }: { delta: number | undefined }) {
   );
 }
 
+function PlanRunStateBadge({ state }: { state: PlanAuditRun["state"] }) {
+  // No badge for complete or undefined (legacy data)
+  if (!state || state === "complete") return null;
+
+  const display = STATE_DISPLAY[state];
+  if (!display) return null;
+
+  if (display.variant === "error") {
+    return (
+      <Badge variant="outline" className="bg-red-500/20 text-red-400 border-red-500/30 text-xs">
+        {display.label}
+      </Badge>
+    );
+  }
+
+  // Progress states: blue badge with spinner
+  return (
+    <Badge variant="outline" className="bg-blue-500/20 text-blue-400 border-blue-500/30 text-xs">
+      <span className="mr-1 inline-block h-2.5 w-2.5 animate-spin rounded-full border border-blue-400 border-t-transparent" />
+      {display.label}
+    </Badge>
+  );
+}
+
+const SIDEBAR_POLL_INTERVAL_MS = 10000;
+
 export default function PlanSpace() {
   const { planRunId } = useParams();
   const navigate = useNavigate();
@@ -39,22 +66,63 @@ export default function PlanSpace() {
   const hasChildRoute = planRunId != null || location.pathname.endsWith("/new");
   const [runs, setRuns] = useState<PlanAuditRun[]>([]);
   const [loading, setLoading] = useState(true);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);
 
-  const fetchRuns = useCallback(async () => {
-    setLoading(true);
+  const fetchRuns = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoading(true);
     try {
       const response = await getPlanAuditStats(50);
-      setRuns(response.recent_runs ?? []);
+      if (mountedRef.current) {
+        setRuns(response.recent_runs ?? []);
+      }
     } catch {
-      setRuns([]);
+      if (mountedRef.current) {
+        setRuns([]);
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && showLoading) {
+        setLoading(false);
+      }
     }
   }, []);
 
+  // Initial fetch
   useEffect(() => {
-    fetchRuns();
+    mountedRef.current = true;
+    fetchRuns(true).finally(() => {
+      if (mountedRef.current) setLoading(false);
+    });
+    return () => {
+      mountedRef.current = false;
+    };
   }, [fetchRuns]);
+
+  // Slow polling for sidebar: poll every 10s if any run is in-progress
+  useEffect(() => {
+    const hasInProgress = runs.some(
+      (r) => r.state != null && !isTerminalState(r.state)
+    );
+
+    // Clear any existing interval
+    if (pollIntervalRef.current !== null) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+
+    if (hasInProgress) {
+      pollIntervalRef.current = setInterval(() => {
+        fetchRuns(false);
+      }, SIDEBAR_POLL_INTERVAL_MS);
+    }
+
+    return () => {
+      if (pollIntervalRef.current !== null) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, [runs, fetchRuns]);
 
   const handleRunClick = useCallback(
     (id: string) => {
@@ -116,6 +184,7 @@ export default function PlanSpace() {
                       <DeltaBadge delta={run.work_order_delta} />
                     </div>
                     <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                      <PlanRunStateBadge state={run.state} />
                       {run.work_orders_generated != null && (
                         <span>{run.work_orders_generated} WOs</span>
                       )}

@@ -111,6 +111,9 @@ type PlanRun struct {
 	TaskGenerationCallCount  sql.NullInt64   `json:"task_generation_call_count"`
 	TaskGenerationTokensIn   sql.NullInt64   `json:"task_generation_tokens_in"`
 	TaskGenerationTokensOut  sql.NullInt64   `json:"task_generation_tokens_out"`
+	State                    string          `json:"state"`
+	ErrorMessage             sql.NullString  `json:"error_message"`
+	CurrentPhase             sql.NullString  `json:"current_phase"`
 	CreatedAt                string          `json:"created_at"`
 }
 

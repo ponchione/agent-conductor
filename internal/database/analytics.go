@@ -313,8 +313,8 @@ type ModelStat struct {
 	RunCount           int64
 	AvgCostUSD         float64
 	AvgDurationSeconds float64
-	AvgTokensIn        int64
-	AvgTokensOut       int64
+	AvgTokensIn        float64
+	AvgTokensOut       float64
 	PassRate           sql.NullFloat64
 }
 

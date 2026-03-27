@@ -13,10 +13,12 @@ import (
 	"github.com/ponchione/agent-conductor/internal/config"
 	condctx "github.com/ponchione/agent-conductor/internal/context"
 	"github.com/ponchione/agent-conductor/internal/database"
-	"github.com/ponchione/agent-conductor/internal/lock"
 	"github.com/ponchione/agent-conductor/internal/executor"
 	"github.com/ponchione/agent-conductor/internal/git"
+	"github.com/ponchione/agent-conductor/internal/graph"
+	"github.com/ponchione/agent-conductor/internal/lock"
 	"github.com/ponchione/agent-conductor/internal/models"
+	"github.com/ponchione/agent-conductor/internal/planner"
 	"github.com/ponchione/agent-conductor/internal/queue"
 	"github.com/ponchione/agent-conductor/internal/rag"
 	"github.com/ponchione/agent-conductor/internal/templates"
@@ -115,7 +117,25 @@ var runCmd = &cobra.Command{
 				ragSearcher = rag.NewSearcher(store, embedder)
 			}
 		}
-		assembler := condctx.NewAssembler(cfg, ragSearcher)
+		// Open graph store if available
+		var graphQuerier condctx.GraphQuerier
+		if cfg.Graph.Enabled {
+			dbPath := cfg.Graph.DBPath
+			if dbPath == "" {
+				dbPath = filepath.Join(cfg.Project.DataDir, "graph.db")
+			}
+			if _, statErr := os.Stat(dbPath); statErr == nil {
+				graphStore, graphErr := graph.NewGraphStore(dbPath)
+				if graphErr != nil {
+					slog.Warn("graph store unavailable, continuing without structural context", "error", graphErr)
+				} else {
+					defer graphStore.Close()
+					graphQuerier = newGraphQuerierAdapter(graphStore, &cfg.Graph)
+				}
+			}
+		}
+
+		assembler := condctx.NewAssembler(cfg, ragSearcher, graphQuerier)
 
 		w := worker.New("worker-1", q, db, cfg, assembler, resolver, &cfg.Guardrails, runner, gitMgr, prompts)
 
@@ -157,17 +177,17 @@ func loadRunInput(absPath string, data []byte, taskID string) (runInput, error) 
 		}, nil
 	}
 
-	planDoc, err := parsePlanManifestYAML(data)
+	planDoc, err := planner.ParsePlanManifestYAML(data)
 	if err != nil {
 		return runInput{}, fmt.Errorf("invalid plan manifest YAML: %w", err)
 	}
 
-	selected, err := selectPlanTask(planDoc, taskID)
+	selected, err := planner.SelectPlanTask(planDoc, taskID)
 	if err != nil {
 		return runInput{}, err
 	}
 
-	wo, err := selected.Task.toWorkOrder()
+	wo, err := selected.Task.ToWorkOrder()
 	if err != nil {
 		return runInput{}, fmt.Errorf("task %q: %w", selected.Task.ID, err)
 	}

@@ -1,8 +1,17 @@
 import { useState, useEffect } from "react";
 
+function parseAsUTC(timestamp: string): number {
+  // SQLite datetime('now') produces "2026-03-21 18:48:57" (UTC but no Z suffix).
+  // Without the Z, JavaScript Date() parses it as local time, skewing the diff.
+  const ts = timestamp.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(timestamp)
+    ? timestamp
+    : timestamp + "Z";
+  return new Date(ts).getTime();
+}
+
 function formatRelativeTime(timestamp: string): string {
   const now = Date.now();
-  const then = new Date(timestamp).getTime();
+  const then = parseAsUTC(timestamp);
   const diffMs = now - then;
   const diffSeconds = Math.floor(diffMs / 1000);
 

@@ -83,8 +83,8 @@ type modelStatResponse struct {
 	RunCount           int64    `json:"run_count"`
 	AvgCostUSD         float64  `json:"avg_cost_usd"`
 	AvgDurationSeconds float64  `json:"avg_duration_seconds"`
-	AvgTokensIn        int64    `json:"avg_tokens_in"`
-	AvgTokensOut       int64    `json:"avg_tokens_out"`
+	AvgTokensIn        float64  `json:"avg_tokens_in"`
+	AvgTokensOut       float64  `json:"avg_tokens_out"`
 	PassRate           *float64 `json:"pass_rate"`
 }
 

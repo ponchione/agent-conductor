@@ -39,6 +39,17 @@ git:
 prompts:
   build: templates/build-prompt.md
 
+verify:
+  commands:
+    build:
+      argv: ["make", "build"]
+      workdir: "."
+      timeout_seconds: 120
+    test:
+      argv: ["make", "test"]
+      workdir: "."
+      timeout_seconds: 300
+
 safety:
   max_files_changed: 50
   max_duration_mins: 60

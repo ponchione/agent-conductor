@@ -26,22 +26,24 @@ export function FilterBar({ filters, values, onChange }: FilterBarProps) {
   return (
     <div className="flex flex-row gap-2">
       {filters.map((filter) => (
-        <Select
-          key={filter.key}
-          value={values[filter.key] ?? ""}
-          onValueChange={(value) => onChange(filter.key, value)}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder={filter.label} />
-          </SelectTrigger>
-          <SelectContent>
-            {filter.options.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div key={filter.key} className="flex flex-col gap-1">
+          <label className="text-xs text-muted-foreground">{filter.label}</label>
+          <Select
+            value={values[filter.key] ?? ""}
+            onValueChange={(value) => onChange(filter.key, value)}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder={filter.label} />
+            </SelectTrigger>
+            <SelectContent>
+              {filter.options.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       ))}
     </div>
   );

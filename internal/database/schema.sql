@@ -229,8 +229,12 @@ CREATE TABLE IF NOT EXISTS plan_runs (
     task_generation_call_count  INTEGER,
     task_generation_tokens_in   INTEGER,
     task_generation_tokens_out  INTEGER,
+    state                       TEXT NOT NULL DEFAULT 'pending',
+    error_message               TEXT,
+    current_phase               TEXT,
     created_at                  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_plan_runs_created_at ON plan_runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_plan_runs_session_id ON plan_runs(session_id);
+

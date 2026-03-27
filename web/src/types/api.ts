@@ -96,6 +96,53 @@ export interface PlanAuditSummary {
   total_runs: number;
 }
 
+export type PlanRunState =
+  | "pending"
+  | "generating_epics"
+  | "generating_tasks"
+  | "auditing"
+  | "persisting"
+  | "complete"
+  | "failed";
+
+export const TERMINAL_STATES: PlanRunState[] = ["complete", "failed"];
+
+export interface PlanRunDetailResponse {
+  id: string;
+  state: PlanRunState;
+  current_phase: string | null;
+  error_message: string | null;
+  session_id?: string;
+  project?: string;
+  spec_file: string;
+  spec_fingerprint?: string;
+  epic_count?: number;
+  task_count?: number;
+  work_orders_generated?: number;
+  pre_audit_work_order_count?: number;
+  post_audit_work_order_count?: number;
+  work_order_delta?: number;
+  audit_changes?: string[];
+  audit_change_text?: string;
+  audit_work_orders_added?: number;
+  audit_work_orders_modified?: number;
+  audit_work_orders_unchanged?: number;
+  generation_cost_usd?: number;
+  generation_duration_ms?: number;
+  epic_generation_cost_usd?: number;
+  epic_generation_duration_ms?: number;
+  task_generation_cost_usd?: number;
+  task_generation_duration_ms?: number;
+  audit_cost_usd?: number;
+  audit_duration_ms?: number;
+  generation_model?: string;
+  epic_generation_model?: string;
+  task_generation_model?: string;
+  audit_model?: string;
+  generation_retry_count?: number;
+  created_at: string;
+}
+
 export interface PlanAuditRun {
   id: string;
   session_id?: string;
@@ -107,6 +154,7 @@ export interface PlanAuditRun {
   post_audit_work_order_count?: number;
   work_order_delta?: number;
   audit_changes?: string[];
+  state?: PlanRunState;
   created_at: string;
 }
 
@@ -298,7 +346,9 @@ export interface WorkOrderUpdateResponse {
 }
 
 export interface PlanSubmitResponse {
+  plan_run_id?: string;
   session_id: string;
+  state?: PlanRunState;
   status: string;
 }
 

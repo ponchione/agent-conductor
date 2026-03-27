@@ -22,6 +22,7 @@ type Querier interface {
 	GetPipelineRunByWorkflowID(ctx context.Context, workflowID string) (GetPipelineRunByWorkflowIDRow, error)
 	GetPipelineRunIDByWorkflowID(ctx context.Context, workflowID string) (string, error)
 	GetPipelineStats(ctx context.Context) (GetPipelineStatsRow, error)
+	GetPlanRunByID(ctx context.Context, id string) (GetPlanRunByIDRow, error)
 	GetRecentPipelineRuns(ctx context.Context) ([]GetRecentPipelineRunsRow, error)
 	GetScopeQualityStats(ctx context.Context) (GetScopeQualityStatsRow, error)
 	GetStatsByWorkOrderType(ctx context.Context) ([]GetStatsByWorkOrderTypeRow, error)
@@ -44,6 +45,7 @@ type Querier interface {
 	UpdatePipelineRunScope(ctx context.Context, arg UpdatePipelineRunScopeParams) error
 	UpdatePipelineRunVerify(ctx context.Context, arg UpdatePipelineRunVerifyParams) error
 	UpdatePipelineRunWorkOrderContent(ctx context.Context, arg UpdatePipelineRunWorkOrderContentParams) error
+	UpdatePlanRunState(ctx context.Context, arg UpdatePlanRunStateParams) error
 	UpdateWorkflowBudget(ctx context.Context, arg UpdateWorkflowBudgetParams) error
 	UpdateWorkflowContext(ctx context.Context, arg UpdateWorkflowContextParams) error
 	UpdateWorkflowState(ctx context.Context, arg UpdateWorkflowStateParams) error

@@ -19,6 +19,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/models"
+	"github.com/ponchione/agent-conductor/internal/planner"
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite"
 )
@@ -189,20 +190,20 @@ func TestLoadRunInputStandaloneWorkOrder(t *testing.T) {
 func TestLoadRunInputPlanManifestAndInitializeRunSession(t *testing.T) {
 	t.Parallel()
 
-	planDoc := &planDocument{
+	planDoc := &planner.PlanDocument{
 		Version:  1,
 		SpecFile: "spec.md",
-		Requirements: []planRequirement{
+		Requirements: []planner.PlanRequirement{
 			{ID: "REQ-1", Text: "Implement endpoint"},
 		},
-		Epics: []planEpic{
+		Epics: []planner.PlanEpic{
 			{
 				ID:          "epic-001",
 				EpicRef:     "auth",
 				Title:       "Auth work",
 				Description: "Auth work description",
 				Covers:      []string{"REQ-1"},
-				Tasks: []planTask{
+				Tasks: []planner.PlanTask{
 					{
 						ID:            "task-001",
 						TaskRef:       "create-session",

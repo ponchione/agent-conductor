@@ -13,6 +13,7 @@ import (
 	"github.com/ponchione/agent-conductor/internal/llm"
 	"github.com/ponchione/agent-conductor/internal/logging"
 	"github.com/ponchione/agent-conductor/internal/models"
+	"github.com/ponchione/agent-conductor/internal/planner"
 	"github.com/ponchione/agent-conductor/internal/templates"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -96,7 +97,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	timeout := time.Duration(initTimeout) * time.Second
 
 	slog.Info("invoking Claude for init", "timeout", timeout)
-	raw, err := invokeClaude(claudePath, templates.DefaultInitPrompt, userMsg, timeout, "")
+	raw, err := planner.InvokeClaude(claudePath, templates.DefaultInitPrompt, userMsg, timeout, "")
 	if err != nil {
 		return fmt.Errorf("claude invocation failed: %w", err)
 	}
@@ -110,7 +111,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 			userMsg, parseErr.Error(), raw,
 		)
 
-		raw, err = invokeClaude(claudePath, templates.DefaultInitPrompt, correctionMsg, timeout, "")
+		raw, err = planner.InvokeClaude(claudePath, templates.DefaultInitPrompt, correctionMsg, timeout, "")
 		if err != nil {
 			return fmt.Errorf("claude retry invocation failed: %w", err)
 		}

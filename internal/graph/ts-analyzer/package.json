@@ -1,0 +1,9 @@
+{
+  "name": "conductor-ts-analyzer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "typescript": "^5.4.0"
+  }
+}

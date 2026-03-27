@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/ponchione/agent-conductor/internal/database"
+	"github.com/ponchione/agent-conductor/internal/planner"
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +26,7 @@ var planStatusCmd = &cobra.Command{
 			return fmt.Errorf("plan manifest not found: %w", err)
 		}
 
-		planDoc, err := parsePlanManifestYAML(data)
+		planDoc, err := planner.ParsePlanManifestYAML(data)
 		if err != nil {
 			return fmt.Errorf("invalid plan manifest YAML: %w", err)
 		}
@@ -57,13 +58,13 @@ const (
 )
 
 type planStatusTaskView struct {
-	Task       planTask
+	Task       planner.PlanTask
 	Status     planTaskExecutionStatus
 	WorkflowID string
 }
 
 type planStatusEpicView struct {
-	Epic  planEpic
+	Epic  planner.PlanEpic
 	Tasks []planStatusTaskView
 }
 
@@ -82,7 +83,7 @@ type planStatusReport struct {
 	Epics    []planStatusEpicView
 }
 
-func buildPlanStatusReport(ctx context.Context, db *database.DB, planPath string, doc *planDocument) (*planStatusReport, error) {
+func buildPlanStatusReport(ctx context.Context, db *database.DB, planPath string, doc *planner.PlanDocument) (*planStatusReport, error) {
 	if doc == nil {
 		return nil, fmt.Errorf("plan document is required")
 	}
@@ -129,7 +130,7 @@ func buildPlanStatusReport(ctx context.Context, db *database.DB, planPath string
 	return report, nil
 }
 
-func resolvePlanTaskStatus(task planTask, row database.ListLatestPipelineRunsByPlanFileRow, statusByTaskID map[string]planTaskExecutionStatus) (planTaskExecutionStatus, string) {
+func resolvePlanTaskStatus(task planner.PlanTask, row database.ListLatestPipelineRunsByPlanFileRow, statusByTaskID map[string]planTaskExecutionStatus) (planTaskExecutionStatus, string) {
 	if row.PlanTaskID.Valid {
 		switch {
 		case row.VerifyResult.Valid && row.VerifyResult.String == "PASS" && row.HumanResult.Valid && row.HumanResult.String == "approved":

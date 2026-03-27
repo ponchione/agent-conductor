@@ -317,6 +317,33 @@ SELECT
 FROM sub_calls
 GROUP BY phase;
 
+-- name: UpdatePlanRunState :exec
+UPDATE plan_runs
+SET state = ?, current_phase = ?, error_message = ?
+WHERE id = ?;
+
+-- name: GetPlanRunByID :one
+SELECT
+    id, session_id, spec_file, project, spec_fingerprint,
+    state, error_message, current_phase,
+    generation_model, epic_generation_model, task_generation_model, audit_model,
+    generation_session_id, audit_session_id,
+    work_orders_generated, epic_count, task_count,
+    pre_audit_work_order_count, post_audit_work_order_count,
+    audit_change_text,
+    audit_work_orders_added, audit_work_orders_modified, audit_work_orders_unchanged,
+    generation_cost_usd, epic_generation_cost_usd, task_generation_cost_usd, audit_cost_usd,
+    generation_duration_ms, epic_generation_duration_ms, task_generation_duration_ms, audit_duration_ms,
+    generation_retry_count,
+    generation_tokens_in, generation_tokens_out,
+    epic_generation_tokens_in, epic_generation_tokens_out,
+    task_generation_call_count, task_generation_tokens_in, task_generation_tokens_out,
+    audit_tokens_in, audit_tokens_out,
+    created_at
+FROM plan_runs
+WHERE id = ?
+LIMIT 1;
+
 -- name: InsertPlanRun :exec
 INSERT INTO plan_runs (
     id, spec_file, project, spec_fingerprint,

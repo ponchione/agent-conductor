@@ -150,7 +150,9 @@ export function PhaseProgressStrip({ pipelineRun, workflowState, errorMessage }:
   const phases = derivePhases(pipelineRun, workflowState, errorMessage);
 
   return (
-    <div className="flex items-center gap-0">
+    <div className="flex flex-col gap-2">
+      <span className="text-xs text-muted-foreground">Phases</span>
+      <div className="flex items-center gap-0">
       {phases.map((phase, i) => (
         <div key={phase.label} className="flex items-center">
           {/* Phase node */}
@@ -182,6 +184,7 @@ export function PhaseProgressStrip({ pipelineRun, workflowState, errorMessage }:
           )}
         </div>
       ))}
+    </div>
     </div>
   );
 }

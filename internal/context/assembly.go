@@ -50,17 +50,61 @@ type RAGWorkOrderSearcher interface {
 	SearchForWorkOrder(ctx context.Context, wo *models.WorkOrder, maxResults int) ([]EnrichedRAGResult, error)
 }
 
-// Assembler gathers and formats context for the LLM.
-type Assembler struct {
-	cfg      *config.ProjectConfig
-	searcher RAGSearcher // nil if RAG not configured
+// GraphQuerier queries the structural graph for blast radius information.
+// Defined here to avoid importing internal/graph directly (keeps context
+// package free of SQLite dependencies).
+type GraphQuerier interface {
+	BlastRadius(targetSymbol string, direction int, maxDepth, budget int, minConfidence float64, includeTests bool) (BlastRadiusFormatted, error)
+	GetSymbolsForFile(filePath string) ([]SymbolInfo, error)
 }
 
-// NewAssembler creates a new context assembler. searcher may be nil.
-func NewAssembler(cfg *config.ProjectConfig, searcher RAGSearcher) *Assembler {
+// BlastRadiusFormatted is a simplified representation for the context package.
+type BlastRadiusFormatted struct {
+	TargetName  string
+	TargetKind  string
+	TargetFile  string
+	TargetLines [2]int
+	TargetSig   string
+	Upstream    []NodeInfo
+	Downstream  []NodeInfo
+	Interfaces  []SymbolInfo
+}
+
+// NodeInfo represents a node in the blast radius result.
+type NodeInfo struct {
+	Name       string
+	Kind       string
+	FilePath   string
+	LineStart  int
+	Signature  string
+	Depth      int
+	EdgeType   string
+	Confidence float64
+}
+
+// SymbolInfo represents a minimal symbol reference.
+type SymbolInfo struct {
+	Name      string
+	Kind      string
+	FilePath  string
+	LineStart int
+	Signature string
+}
+
+// Assembler gathers and formats context for the LLM.
+type Assembler struct {
+	cfg          *config.ProjectConfig
+	searcher     RAGSearcher  // nil if RAG not configured
+	graphQuerier GraphQuerier // nil if graph not available
+}
+
+// NewAssembler creates a new context assembler.
+// searcher and graphQuerier may be nil.
+func NewAssembler(cfg *config.ProjectConfig, searcher RAGSearcher, graphQuerier GraphQuerier) *Assembler {
 	return &Assembler{
-		cfg:      cfg,
-		searcher: searcher,
+		cfg:          cfg,
+		searcher:     searcher,
+		graphQuerier: graphQuerier,
 	}
 }
 
@@ -146,6 +190,12 @@ func (a *Assembler) AssembleScopePrompt(ctx context.Context, wo *models.WorkOrde
 		}
 	}
 	sb.WriteString("\n")
+
+	// Structural context (call graph) — between work order and conventions
+	if structCtx := a.gatherStructuralContext(wo); structCtx != "" {
+		sb.WriteString(structCtx)
+		sb.WriteString("\n")
+	}
 
 	if convSection := buildConventions(a.cfg.Conventions); convSection != "" {
 		sb.WriteString("=== PROJECT CONVENTIONS ===\n")
@@ -429,9 +479,10 @@ type PreScopeBundle struct {
 // TargetBundle holds context gathered for a specific investigation target.
 // Used as input to the analyze step.
 type TargetBundle struct {
-	Files      []FileContent `json:"files"`
-	RAGChunks  []RAGResult   `json:"rag_chunks"`
-	Signatures []string      `json:"signatures"`
+	Files             []FileContent `json:"files"`
+	RAGChunks         []RAGResult   `json:"rag_chunks"`
+	Signatures        []string      `json:"signatures"`
+	StructuralContext string        `json:"structural_context,omitempty"`
 }
 
 // FileContent pairs a file path with its content.
@@ -459,10 +510,36 @@ func (a *Assembler) GatherForTarget(ctx context.Context, wo *models.WorkOrder, t
 	signatures := extractSignatures(files)
 	chunks := a.searchForTarget(ctx, target)
 
+	// Structural context for the target path
+	var structCtx string
+	if a.graphQuerier != nil {
+		symbols, err := a.graphQuerier.GetSymbolsForFile(target.Path)
+		if err == nil {
+			var results []BlastRadiusFormatted
+			for _, sym := range symbols {
+				if sym.Kind != "function" && sym.Kind != "method" {
+					continue
+				}
+				br, err := a.graphQuerier.BlastRadius(sym.Name, 2,
+					a.cfg.Graph.BlastRadius.MaxDepth,
+					a.cfg.Graph.BlastRadius.Budget,
+					a.cfg.Graph.BlastRadius.MinConfidence,
+					a.cfg.Graph.BlastRadius.IncludeTests)
+				if err == nil {
+					results = append(results, br)
+				}
+			}
+			if len(results) > 0 {
+				structCtx = formatStructuralContext(results)
+			}
+		}
+	}
+
 	return &TargetBundle{
-		Files:      files,
-		RAGChunks:  chunks,
-		Signatures: signatures,
+		Files:             files,
+		RAGChunks:         chunks,
+		Signatures:        signatures,
+		StructuralContext: structCtx,
 	}, nil
 }
 
@@ -579,6 +656,102 @@ func (a *Assembler) searchForTarget(ctx context.Context, target Target) []RAGRes
 		}
 	}
 	return filtered
+}
+
+// gatherStructuralContext queries blast radius for symbols in known files.
+func (a *Assembler) gatherStructuralContext(wo *models.WorkOrder) string {
+	if a.graphQuerier == nil {
+		return ""
+	}
+
+	var results []BlastRadiusFormatted
+
+	for _, filePath := range wo.KnownFiles {
+		symbols, err := a.graphQuerier.GetSymbolsForFile(filePath)
+		if err != nil {
+			slog.Debug("graph: failed to get symbols for file", "path", filePath, "error", err)
+			continue
+		}
+
+		for _, sym := range symbols {
+			if sym.Kind != "function" && sym.Kind != "method" {
+				continue
+			}
+
+			br, err := a.graphQuerier.BlastRadius(
+				sym.Name,
+				2, // Both directions
+				a.cfg.Graph.BlastRadius.MaxDepth,
+				a.cfg.Graph.BlastRadius.Budget,
+				a.cfg.Graph.BlastRadius.MinConfidence,
+				a.cfg.Graph.BlastRadius.IncludeTests,
+			)
+			if err != nil {
+				slog.Debug("graph: blast radius failed", "symbol", sym.Name, "error", err)
+				continue
+			}
+
+			results = append(results, br)
+		}
+	}
+
+	if len(results) == 0 {
+		return ""
+	}
+
+	return formatStructuralContext(results)
+}
+
+// formatStructuralContext renders blast radius results as a context block.
+func formatStructuralContext(results []BlastRadiusFormatted) string {
+	var sb strings.Builder
+	sb.WriteString("=== STRUCTURAL CONTEXT (call graph) ===\n\n")
+
+	for _, br := range results {
+		fmt.Fprintf(&sb, "Target: %s (%s)\n", br.TargetName, br.TargetKind)
+		fmt.Fprintf(&sb, "  File: %s:%d-%d\n", br.TargetFile, br.TargetLines[0], br.TargetLines[1])
+		if br.TargetSig != "" {
+			fmt.Fprintf(&sb, "  Signature: %s\n", br.TargetSig)
+		}
+		sb.WriteString("\n")
+
+		if len(br.Upstream) > 0 {
+			sb.WriteString("  UPSTREAM (callers — changes here may require updates to these):\n")
+			for _, n := range br.Upstream {
+				fmt.Fprintf(&sb, "    [depth %d, confidence %.1f, %s] %s\n",
+					n.Depth, n.Confidence, n.EdgeType, n.Name)
+				fmt.Fprintf(&sb, "      File: %s:%d\n", n.FilePath, n.LineStart)
+				if n.Signature != "" {
+					fmt.Fprintf(&sb, "      Signature: %s\n", n.Signature)
+				}
+			}
+			sb.WriteString("\n")
+		}
+
+		if len(br.Downstream) > 0 {
+			sb.WriteString("  DOWNSTREAM (callees — this function depends on these):\n")
+			for _, n := range br.Downstream {
+				fmt.Fprintf(&sb, "    [depth %d, confidence %.1f, %s] %s\n",
+					n.Depth, n.Confidence, n.EdgeType, n.Name)
+				fmt.Fprintf(&sb, "      File: %s:%d\n", n.FilePath, n.LineStart)
+				if n.Signature != "" {
+					fmt.Fprintf(&sb, "      Signature: %s\n", n.Signature)
+				}
+			}
+			sb.WriteString("\n")
+		}
+
+		if len(br.Interfaces) > 0 {
+			sb.WriteString("  IMPLEMENTS:\n")
+			for _, iface := range br.Interfaces {
+				fmt.Fprintf(&sb, "    %s (%s)\n", iface.Name, iface.Kind)
+				fmt.Fprintf(&sb, "      File: %s:%d\n", iface.FilePath, iface.LineStart)
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String()
 }
 
 // buildConventions formats the project conventions into labeled lines.

@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,332 +17,8 @@ import (
 	"github.com/ponchione/agent-conductor/internal/config"
 	"github.com/ponchione/agent-conductor/internal/database"
 	"github.com/ponchione/agent-conductor/internal/models"
-	"github.com/ponchione/agent-conductor/internal/templates"
+	"github.com/ponchione/agent-conductor/internal/planner"
 )
-
-func TestMergeInvokeClaudeResults(t *testing.T) {
-	base := &invokeClaudeResult{
-		Content:   "first",
-		TokensIn:  10,
-		TokensOut: 5,
-		Model:     "model-a",
-		CostUSD:   0.10,
-		Duration:  2 * time.Second,
-		SessionID: "sess-a",
-		ToolCalls: map[string]int{"Read": 1},
-	}
-	retry := &invokeClaudeResult{
-		Content:   "second",
-		TokensIn:  20,
-		TokensOut: 8,
-		Model:     "model-b",
-		CostUSD:   0.15,
-		Duration:  3 * time.Second,
-		SessionID: "sess-b",
-		ToolCalls: map[string]int{"Read": 2, "Bash": 1},
-	}
-
-	mergeInvokeClaudeResults(base, retry)
-
-	if base.Content != "second" {
-		t.Fatalf("Content = %q, want %q", base.Content, "second")
-	}
-	if base.TokensIn != 30 {
-		t.Fatalf("TokensIn = %d, want 30", base.TokensIn)
-	}
-	if base.TokensOut != 13 {
-		t.Fatalf("TokensOut = %d, want 13", base.TokensOut)
-	}
-	if base.CostUSD != 0.25 {
-		t.Fatalf("CostUSD = %f, want 0.25", base.CostUSD)
-	}
-	if base.Duration != 5*time.Second {
-		t.Fatalf("Duration = %s, want 5s", base.Duration)
-	}
-	if base.Model != "model-b" {
-		t.Fatalf("Model = %q, want %q", base.Model, "model-b")
-	}
-	if base.SessionID != "sess-b" {
-		t.Fatalf("SessionID = %q, want %q", base.SessionID, "sess-b")
-	}
-	if base.ToolCalls["Read"] != 3 {
-		t.Fatalf("ToolCalls[Read] = %d, want 3", base.ToolCalls["Read"])
-	}
-	if base.ToolCalls["Bash"] != 1 {
-		t.Fatalf("ToolCalls[Bash] = %d, want 1", base.ToolCalls["Bash"])
-	}
-}
-
-func TestGeneratePlanDocumentAssemblesHierarchicalManifest(t *testing.T) {
-	projectDir := t.TempDir()
-	for _, relPath := range []string{
-		"cmd/conductor/plan.go",
-		"internal/templates/prompts.go",
-	} {
-		absPath := filepath.Join(projectDir, relPath)
-		if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
-			t.Fatalf("MkdirAll(%q) error: %v", absPath, err)
-		}
-		if err := os.WriteFile(absPath, []byte("package stub\n"), 0644); err != nil {
-			t.Fatalf("WriteFile(%q) error: %v", absPath, err)
-		}
-	}
-
-	cfg := &config.ProjectConfig{
-		Project: config.Project{Path: projectDir},
-		Index: config.Index{
-			Include: []string{"**/*.go", "**/*.md", "**/*.yaml"},
-		},
-	}
-	prompts := &templates.LoadedPrompts{
-		PlanEpic: "epic prompt",
-		PlanTask: "task prompt",
-	}
-
-	var phases []string
-	invoker := func(phase, systemPrompt, userMsg string) (*invokeClaudeResult, error) {
-		phases = append(phases, phase)
-		switch phase {
-		case "planning_epic":
-			return &invokeClaudeResult{
-				Content: `{
-					"requirements": [
-						{"id": "REQ-1", "text": "Configurable planner prompts"},
-						{"id": "REQ-2", "text": "Persist plan metadata"}
-					],
-					"epics": [
-						{
-							"epic_ref": "planner-prompts",
-							"title": "Planner prompt plumbing",
-							"description": "Load and route prompt templates through the planner.",
-							"covers": ["REQ-1"],
-							"depends_on_epics": []
-						},
-						{
-							"epic_ref": "plan-metadata",
-							"title": "Plan metadata persistence",
-							"description": "Persist plan metadata and related artifacts.",
-							"covers": ["REQ-2"],
-							"depends_on_epics": ["planner-prompts"]
-						}
-					]
-				}`,
-				TokensIn:  100,
-				TokensOut: 25,
-				Model:     "claude-sonnet",
-				CostUSD:   0.25,
-				Duration:  2 * time.Second,
-			}, nil
-		case "planning_task_epic-001":
-			if !strings.Contains(userMsg, `"epic_ref": "planner-prompts"`) {
-				t.Fatalf("epic-001 user message missing target epic context:\n%s", userMsg)
-			}
-			return &invokeClaudeResult{
-				Content: `{
-					"tasks": [
-						{
-							"task_ref": "wire-planner-prompts",
-							"schema_version": 2,
-							"title": "Wire planner prompts",
-							"type": "refactor",
-							"target_module": "cmd/conductor",
-							"reference_module": "internal/templates",
-							"known_files": ["cmd/conductor/plan.go", "internal/templates/prompts.go"],
-							"requirements": [
-								{"id": "REQ-1", "text": "Configurable planner prompts"}
-							],
-							"acceptance_criteria": [
-								{
-									"id": "AC-1",
-									"description": "Configured planner prompts load successfully",
-									"requirement_ids": ["REQ-1"],
-									"required": true,
-									"verification": {"kind": "diff_review", "focus": ["cmd/conductor/plan.go"]}
-								}
-							],
-							"constraints": ["Keep current YAML output"],
-							"depends_on": [],
-							"size": "S"
-						}
-					]
-				}`,
-				TokensIn:  50,
-				TokensOut: 20,
-				Model:     "claude-sonnet",
-				CostUSD:   0.10,
-				Duration:  time.Second,
-			}, nil
-		case "planning_task_epic-002":
-			if !strings.Contains(userMsg, `"task_ref": "wire-planner-prompts"`) {
-				t.Fatalf("epic-002 user message missing prior task context:\n%s", userMsg)
-			}
-			if !strings.Contains(userMsg, `"id": "task-001"`) {
-				t.Fatalf("epic-002 user message missing canonical prior task id:\n%s", userMsg)
-			}
-			return &invokeClaudeResult{
-				Content: `{
-					"tasks": [
-						{
-							"task_ref": "persist-plan-metadata",
-							"schema_version": 2,
-							"title": "Persist plan metadata artifacts",
-							"type": "new_feature",
-							"target_module": "cmd/conductor",
-							"reference_module": "cmd/conductor/plan.go",
-							"known_files": ["cmd/conductor/plan.go"],
-							"requirements": [
-								{"id": "REQ-2", "text": "Persist plan metadata"}
-							],
-							"acceptance_criteria": [
-								{
-									"id": "AC-2",
-									"description": "Structured plan artifacts are written",
-									"requirement_ids": ["REQ-2"],
-									"required": true,
-									"verification": {"kind": "diff_review", "focus": ["cmd/conductor/plan.go"]}
-								}
-							],
-							"constraints": ["Keep generated YAML compatible with current pipeline"],
-							"depends_on": ["wire-planner-prompts"],
-							"size": "M"
-						}
-					]
-				}`,
-				TokensIn:  60,
-				TokensOut: 30,
-				Model:     "claude-sonnet",
-				CostUSD:   0.12,
-				Duration:  1500 * time.Millisecond,
-			}, nil
-		default:
-			t.Fatalf("unexpected phase %q", phase)
-			return nil, nil
-		}
-	}
-
-	doc, trace, retryCount, err := generatePlanDocument("spec.md", []byte("spec body"), "session-123", cfg, prompts, invoker)
-	if err != nil {
-		t.Fatalf("generatePlanDocument() error = %v", err)
-	}
-	if retryCount != 0 {
-		t.Fatalf("retryCount = %d, want 0", retryCount)
-	}
-	if got, want := phases, []string{"planning_epic", "planning_task_epic-001", "planning_task_epic-002"}; len(got) != len(want) || strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("phases = %v, want %v", got, want)
-	}
-	if trace == nil {
-		t.Fatal("trace = nil, want planning trace")
-	}
-	if !strings.Contains(trace.AggregateRaw, "=== EPIC GENERATION ===") || !strings.Contains(trace.AggregateRaw, "=== TASK GENERATION epic-002 ===") {
-		t.Fatalf("trace.AggregateRaw missing expected sections:\n%s", trace.AggregateRaw)
-	}
-	if trace.AggregateResult == nil {
-		t.Fatal("trace.AggregateResult = nil, want aggregate result")
-	}
-	if trace.AggregateResult.TokensIn != 210 || trace.AggregateResult.TokensOut != 75 {
-		t.Fatalf("aggregate tokens = (%d,%d), want (210,75)", trace.AggregateResult.TokensIn, trace.AggregateResult.TokensOut)
-	}
-	if len(trace.TaskTraces) != 2 {
-		t.Fatalf("len(trace.TaskTraces) = %d, want 2", len(trace.TaskTraces))
-	}
-	if doc.Version != 1 || doc.SpecFile != "spec.md" || doc.SessionID != "session-123" {
-		t.Fatalf("doc metadata = %#v, want version/spec/session set", doc)
-	}
-	if len(doc.Epics) != 2 {
-		t.Fatalf("len(Epics) = %d, want 2", len(doc.Epics))
-	}
-	if doc.Epics[0].ID != "epic-001" || doc.Epics[1].ID != "epic-002" {
-		t.Fatalf("epic IDs = (%q,%q), want (epic-001, epic-002)", doc.Epics[0].ID, doc.Epics[1].ID)
-	}
-	if got := doc.Epics[1].DependsOnEpics; len(got) != 1 || got[0] != "epic-001" {
-		t.Fatalf("DependsOnEpics = %v, want [epic-001]", got)
-	}
-	if doc.Epics[0].Tasks[0].ID != "task-001" || doc.Epics[1].Tasks[0].ID != "task-002" {
-		t.Fatalf("task IDs = (%q,%q), want (task-001, task-002)", doc.Epics[0].Tasks[0].ID, doc.Epics[1].Tasks[0].ID)
-	}
-	if got := doc.Epics[1].Tasks[0].DependsOn; len(got) != 1 || got[0] != "task-001" {
-		t.Fatalf("task DependsOn = %v, want [task-001]", got)
-	}
-}
-
-func TestGeneratePlanDocumentFailsBeforeAuditOnInvalidAssembledManifest(t *testing.T) {
-	projectDir := t.TempDir()
-	absPath := filepath.Join(projectDir, "cmd", "conductor", "plan.go")
-	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
-		t.Fatalf("MkdirAll(%q) error: %v", absPath, err)
-	}
-	if err := os.WriteFile(absPath, []byte("package stub\n"), 0644); err != nil {
-		t.Fatalf("WriteFile(%q) error: %v", absPath, err)
-	}
-
-	cfg := &config.ProjectConfig{
-		Project: config.Project{Path: projectDir},
-		Index: config.Index{
-			Include: []string{"**/*.go", "**/*.md", "**/*.yaml"},
-		},
-	}
-	prompts := &templates.LoadedPrompts{
-		PlanEpic: "epic prompt",
-		PlanTask: "task prompt",
-	}
-
-	invoker := func(phase, systemPrompt, userMsg string) (*invokeClaudeResult, error) {
-		switch phase {
-		case "planning_epic":
-			return &invokeClaudeResult{
-				Content: `{
-					"requirements": [{"id": "REQ-1", "text": "Configurable planner prompts"}],
-					"epics": [
-						{
-							"epic_ref": "planner-prompts",
-							"title": "Planner prompt plumbing",
-							"description": "Load and route prompt templates through the planner.",
-							"covers": ["REQ-1"],
-							"depends_on_epics": []
-						}
-					]
-				}`,
-			}, nil
-		case "planning_task_epic-001":
-			return &invokeClaudeResult{
-				Content: `{
-					"tasks": [
-						{
-							"task_ref": "wire-planner-prompts",
-							"schema_version": 2,
-							"title": "Wire planner prompts",
-							"type": "refactor",
-							"target_module": "cmd/conductor",
-							"reference_module": "internal/templates",
-							"known_files": ["does/not/exist.go"],
-							"requirements": [{"id": "REQ-1", "text": "Configurable planner prompts"}],
-							"acceptance_criteria": [
-								{
-									"id": "AC-1",
-									"description": "Configured planner prompts load successfully",
-									"requirement_ids": ["REQ-1"],
-									"required": true,
-									"verification": {"kind": "diff_review", "focus": ["cmd/conductor/plan.go"]}
-								}
-							],
-							"constraints": ["Keep current YAML output"],
-							"depends_on": [],
-							"size": "S"
-						}
-					]
-				}`,
-			}, nil
-		default:
-			t.Fatalf("unexpected phase %q", phase)
-			return nil, nil
-		}
-	}
-
-	_, _, _, err := generatePlanDocument("spec.md", []byte("spec body"), "session-123", cfg, prompts, invoker)
-	if err == nil || !strings.Contains(err.Error(), "planner output validation failed") {
-		t.Fatalf("generatePlanDocument() error = %v, want pre-audit validation failure", err)
-	}
-}
 
 func TestRecordPlanRunPersistsObservabilityFields(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -353,6 +28,7 @@ func TestRecordPlanRunPersistsObservabilityFields(t *testing.T) {
 
 	cfg := &config.ProjectConfig{}
 	cfg.Project.DataDir = tmpDir
+	_ = cfg // cfg is used by the test setup context
 
 	dbPath := filepath.Join(tmpDir, "db", "conductor.db")
 	conductorDB, err := database.NewDB(dbPath)
@@ -366,65 +42,76 @@ func TestRecordPlanRunPersistsObservabilityFields(t *testing.T) {
 		t.Fatalf("StartSession() error: %v", err)
 	}
 
-	generationTrace := &planGenerationTrace{
-		EpicResult: &invokeClaudeResult{
-			Model:     "claude-sonnet-4-6",
-			TokensIn:  100,
-			TokensOut: 25,
-			CostUSD:   0.42,
-			Duration:  1500 * time.Millisecond,
-		},
-		TaskTraces: []planTaskGenerationTrace{
-			{
-				EpicID: "epic-001",
-				Result: &invokeClaudeResult{
-					Model:     "claude-sonnet-4-6",
-					TokensIn:  30,
-					TokensOut: 10,
-					CostUSD:   0.11,
-					Duration:  600 * time.Millisecond,
+	result := &planner.GenerateResult{
+		PlanDoc: &planner.PlanDocument{Version: 1},
+		GenerationTrace: &planner.PlanGenerationTrace{
+			EpicResult: &planner.InvokeClaudeResult{
+				Model:     "claude-sonnet-4-6",
+				TokensIn:  100,
+				TokensOut: 25,
+				CostUSD:   0.42,
+				Duration:  1500 * time.Millisecond,
+			},
+			TaskTraces: []planner.PlanTaskGenerationTrace{
+				{
+					EpicID: "epic-001",
+					Result: &planner.InvokeClaudeResult{
+						Model:     "claude-sonnet-4-6",
+						TokensIn:  30,
+						TokensOut: 10,
+						CostUSD:   0.11,
+						Duration:  600 * time.Millisecond,
+					},
+				},
+				{
+					EpicID: "epic-002",
+					Result: &planner.InvokeClaudeResult{
+						Model:     "claude-sonnet-4-6",
+						TokensIn:  20,
+						TokensOut: 5,
+						CostUSD:   0.07,
+						Duration:  400 * time.Millisecond,
+					},
 				},
 			},
-			{
-				EpicID: "epic-002",
-				Result: &invokeClaudeResult{
-					Model:     "claude-sonnet-4-6",
-					TokensIn:  20,
-					TokensOut: 5,
-					CostUSD:   0.07,
-					Duration:  400 * time.Millisecond,
-				},
+			AggregateResult: &planner.InvokeClaudeResult{
+				Model:     "claude-sonnet-4-6",
+				TokensIn:  150,
+				TokensOut: 40,
+				CostUSD:   0.60,
+				Duration:  2500 * time.Millisecond,
+				SessionID: "sess-plan",
 			},
 		},
-		AggregateResult: &invokeClaudeResult{
+		AuditResult: &planner.InvokeClaudeResult{
 			Model:     "claude-sonnet-4-6",
-			TokensIn:  150,
-			TokensOut: 40,
-			CostUSD:   0.60,
-			Duration:  2500 * time.Millisecond,
-			SessionID: "sess-plan",
+			TokensIn:  80,
+			TokensOut: 15,
+			CostUSD:   0.18,
+			Duration:  900 * time.Millisecond,
+			SessionID: "sess-audit",
 		},
-	}
-	auditResult := &invokeClaudeResult{
-		Model:     "claude-sonnet-4-6",
-		TokensIn:  80,
-		TokensOut: 15,
-		CostUSD:   0.18,
-		Duration:  900 * time.Millisecond,
-		SessionID: "sess-audit",
-	}
-	summary := &auditSummary{
-		Added:     1,
-		Modified:  2,
-		Unchanged: 3,
-		Changes: []string{
-			"Added missing migration work order",
-			"Clarified test expectations",
+		AuditSummary: &planner.AuditSummary{
+			Added:     1,
+			Modified:  2,
+			Unchanged: 3,
+			Changes: []string{
+				"Added missing migration work order",
+				"Clarified test expectations",
+			},
+		},
+		Metrics: planner.PlanRunMetrics{
+			EpicCount:               2,
+			TaskCount:               6,
+			WorkOrdersGenerated:     6,
+			PreAuditWorkOrderCount:  4,
+			PostAuditWorkOrderCount: 6,
+			GenerationRetryCount:    1,
 		},
 	}
 
 	specData := []byte("spec body")
-	if err := recordPlanRun(conductorDB, sessionID, "repo", "spec.md", specData, generationTrace, auditResult, 2, 4, 6, summary, 1); err != nil {
+	if err := recordPlanRun(conductorDB, sessionID, "repo", "spec.md", specData, result); err != nil {
 		t.Fatalf("recordPlanRun: %v", err)
 	}
 
@@ -659,263 +346,6 @@ func TestRecordPlanRunPersistsObservabilityFields(t *testing.T) {
 	}
 }
 
-func TestPersistPlanningArtifactsWritesHierarchicalOutputs(t *testing.T) {
-	tmpDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(tmpDir, "db"), 0755); err != nil {
-		t.Fatalf("mkdir db: %v", err)
-	}
-
-	dbPath := filepath.Join(tmpDir, "db", "conductor.db")
-	conductorDB, err := database.NewDB(dbPath)
-	if err != nil {
-		t.Fatalf("database.NewDB() error: %v", err)
-	}
-	defer conductorDB.Close()
-
-	sessionID, err := conductorDB.StartSession(t.Context(), database.SessionKindPlanOnly, "repo", "spec.md")
-	if err != nil {
-		t.Fatalf("StartSession() error: %v", err)
-	}
-
-	planDoc := &planDocument{
-		Version:   1,
-		SpecFile:  "spec.md",
-		SessionID: sessionID,
-		Requirements: []planRequirement{
-			{ID: "REQ-1", Text: "Keep audit manifest-based"},
-		},
-		Epics: []planEpic{
-			{
-				ID:          "epic-001",
-				EpicRef:     "planner-observability",
-				Title:       "Planner observability",
-				Description: "Persist artifacts and metrics for hierarchical planning",
-				Covers:      []string{"REQ-1"},
-				Tasks: []planTask{
-					{
-						ID:            "task-001",
-						TaskRef:       "persist-artifacts",
-						SchemaVersion: 2,
-						Title:         "Persist hierarchical artifacts",
-						Type:          "new_feature",
-						TargetModule:  "cmd/conductor",
-						Requirements: []models.WorkOrderRequirement{
-							{ID: "REQ-1", Text: "Keep audit manifest-based"},
-						},
-						AcceptanceCriteria: []models.TypedAcceptanceCriterion{
-							{
-								ID:             "AC-1",
-								Description:    "Artifacts are persisted per phase",
-								RequirementIDs: []string{"REQ-1"},
-								Required:       testBoolPtr(true),
-								Verification: models.AcceptanceVerification{
-									Kind:  "diff_review",
-									Focus: []string{"cmd/conductor/plan.go"},
-								},
-							},
-						},
-						Size: "S",
-					},
-				},
-			},
-		},
-	}
-
-	manifestDir := filepath.Join(tmpDir, "output")
-	manifestPath, err := writePlanManifest(planDoc, manifestDir)
-	if err != nil {
-		t.Fatalf("writePlanManifest() error: %v", err)
-	}
-
-	trace := &planGenerationTrace{
-		EpicRaw: `{"requirements":[{"id":"REQ-1","text":"Keep audit manifest-based"}],"epics":[{"epic_ref":"planner-observability","title":"Planner observability","description":"Persist artifacts and metrics for hierarchical planning","covers":["REQ-1"],"depends_on_epics":[]}]}`,
-		EpicResponse: &rawEpicPlanResponse{
-			Requirements: []planRequirement{
-				{ID: "REQ-1", Text: "Keep audit manifest-based"},
-			},
-			Epics: []rawPlanEpic{
-				{
-					EpicRef:        "planner-observability",
-					Title:          "Planner observability",
-					Description:    "Persist artifacts and metrics for hierarchical planning",
-					Covers:         []string{"REQ-1"},
-					DependsOnEpics: []string{},
-				},
-			},
-		},
-		TaskTraces: []planTaskGenerationTrace{
-			{
-				EpicID:  "epic-001",
-				EpicRef: "planner-observability",
-				Raw:     `{"tasks":[{"task_ref":"persist-artifacts","schema_version":2,"title":"Persist hierarchical artifacts","type":"new_feature","target_module":"cmd/conductor","requirements":[{"id":"REQ-1","text":"Keep audit manifest-based"}],"acceptance_criteria":[],"depends_on":[],"size":"S"}]}`,
-				Response: &rawTaskPlanResponse{
-					Tasks: []rawPlanTask{
-						{
-							TaskRef:       "persist-artifacts",
-							SchemaVersion: 2,
-							Title:         "Persist hierarchical artifacts",
-							Type:          "new_feature",
-							TargetModule:  "cmd/conductor",
-							Requirements: []models.WorkOrderRequirement{
-								{ID: "REQ-1", Text: "Keep audit manifest-based"},
-							},
-							AcceptanceCriteria: []models.TypedAcceptanceCriterion{
-								{
-									ID:             "AC-1",
-									Description:    "Artifacts are persisted per phase",
-									RequirementIDs: []string{"REQ-1"},
-									Required:       testBoolPtr(true),
-									Verification: models.AcceptanceVerification{
-										Kind:  "diff_review",
-										Focus: []string{"cmd/conductor/plan.go"},
-									},
-								},
-							},
-							DependsOn: []string{},
-							Size:      "S",
-						},
-					},
-				},
-			},
-		},
-	}
-	auditResult := &invokeClaudeResult{Content: `{"audit_summary":{"added":0,"modified":1,"unchanged":0},"epics":[]}`}
-	summary := &auditSummary{Modified: 1}
-
-	if err := persistPlanningArtifacts(t.Context(), conductorDB, sessionID, tmpDir, trace, auditResult, summary, planDoc, manifestPath); err != nil {
-		t.Fatalf("persistPlanningArtifacts() error = %v", err)
-	}
-
-	artifacts, err := conductorDB.ListArtifactsBySession(t.Context(), sessionID)
-	if err != nil {
-		t.Fatalf("ListArtifactsBySession() error = %v", err)
-	}
-
-	counts := make(map[string]int)
-	var manifestArtifact database.Artifact
-	for _, artifact := range artifacts {
-		counts[artifact.ArtifactType]++
-		if artifact.ArtifactType == database.ArtifactTypePlanManifest {
-			manifestArtifact = artifact
-		}
-	}
-
-	if counts[database.ArtifactTypePlanRawEpicGeneration] != 1 {
-		t.Fatalf("raw epic artifacts = %d, want 1", counts[database.ArtifactTypePlanRawEpicGeneration])
-	}
-	if counts[database.ArtifactTypePlanStructuredEpicGeneration] != 1 {
-		t.Fatalf("structured epic artifacts = %d, want 1", counts[database.ArtifactTypePlanStructuredEpicGeneration])
-	}
-	if counts[database.ArtifactTypePlanRawTaskGeneration] != 1 {
-		t.Fatalf("raw task artifacts = %d, want 1", counts[database.ArtifactTypePlanRawTaskGeneration])
-	}
-	if counts[database.ArtifactTypePlanStructuredTaskGeneration] != 1 {
-		t.Fatalf("structured task artifacts = %d, want 1", counts[database.ArtifactTypePlanStructuredTaskGeneration])
-	}
-	if counts[database.ArtifactTypePlanRawAudit] != 1 {
-		t.Fatalf("raw audit artifacts = %d, want 1", counts[database.ArtifactTypePlanRawAudit])
-	}
-	if counts[database.ArtifactTypePlanStructuredAudit] != 1 {
-		t.Fatalf("structured audit artifacts = %d, want 1", counts[database.ArtifactTypePlanStructuredAudit])
-	}
-	if counts[database.ArtifactTypePlanManifest] != 1 {
-		t.Fatalf("manifest artifacts = %d, want 1", counts[database.ArtifactTypePlanManifest])
-	}
-	if manifestArtifact.Path != manifestPath {
-		t.Fatalf("manifest artifact path = %q, want %q", manifestArtifact.Path, manifestPath)
-	}
-
-	var metadata map[string]any
-	if err := json.Unmarshal([]byte(manifestArtifact.MetadataJSON.String), &metadata); err != nil {
-		t.Fatalf("json.Unmarshal(manifest metadata) error = %v", err)
-	}
-	if metadata["phase"] != "manifest" {
-		t.Fatalf("manifest metadata phase = %v, want %q", metadata["phase"], "manifest")
-	}
-	if metadata["epic_count"] != float64(1) || metadata["task_count"] != float64(1) {
-		t.Fatalf("manifest metadata counts = %#v, want epic/task count of 1", metadata)
-	}
-}
-
-func TestBuildAuditUserMessageUsesGeneratedManifest(t *testing.T) {
-	projectDir := t.TempDir()
-	for _, relPath := range []string{
-		"cmd/conductor/plan.go",
-		"internal/templates/prompts.go",
-	} {
-		absPath := filepath.Join(projectDir, relPath)
-		if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
-			t.Fatalf("MkdirAll(%q) error: %v", absPath, err)
-		}
-		if err := os.WriteFile(absPath, []byte("package stub\n"), 0644); err != nil {
-			t.Fatalf("WriteFile(%q) error: %v", absPath, err)
-		}
-	}
-
-	cfg := &config.ProjectConfig{
-		Project: config.Project{Path: projectDir},
-		Index: config.Index{
-			Include: []string{"**/*.go", "**/*.md", "**/*.yaml"},
-		},
-	}
-	planDoc := &planDocument{
-		Version:  1,
-		SpecFile: "spec.md",
-		Epics: []planEpic{
-			{
-				ID:          "epic-001",
-				EpicRef:     "planner-observability",
-				Title:       "Planner observability",
-				Description: "Persist artifacts and metrics for hierarchical planning",
-				Tasks: []planTask{
-					{
-						ID:            "task-001",
-						TaskRef:       "persist-artifacts",
-						SchemaVersion: 2,
-						Title:         "Persist hierarchical artifacts",
-						Type:          "new_feature",
-						TargetModule:  "cmd/conductor",
-						AcceptanceCriteria: []models.TypedAcceptanceCriterion{
-							{
-								ID:             "AC-1",
-								Description:    "Audit uses the manifest",
-								RequirementIDs: []string{"REQ-1"},
-								Required:       testBoolPtr(true),
-								Verification: models.AcceptanceVerification{
-									Kind:  "diff_review",
-									Focus: []string{"cmd/conductor/plan.go"},
-								},
-							},
-						},
-						Requirements: []models.WorkOrderRequirement{
-							{ID: "REQ-1", Text: "Keep audit manifest-based"},
-						},
-						Size: "S",
-					},
-				},
-			},
-		},
-	}
-
-	userMsg, err := buildAuditUserMessage("spec body", planDoc, cfg)
-	if err != nil {
-		t.Fatalf("buildAuditUserMessage() error = %v", err)
-	}
-
-	if !strings.Contains(userMsg, "=== GENERATED PLAN ===") {
-		t.Fatalf("audit user message missing generated plan section:\n%s", userMsg)
-	}
-	if !strings.Contains(userMsg, `"id": "epic-001"`) {
-		t.Fatalf("audit user message missing canonical epic id:\n%s", userMsg)
-	}
-	if !strings.Contains(userMsg, `"id": "task-001"`) {
-		t.Fatalf("audit user message missing canonical task id:\n%s", userMsg)
-	}
-	if !strings.Contains(userMsg, "spec body") {
-		t.Fatalf("audit user message missing spec body:\n%s", userMsg)
-	}
-}
-
 func TestBuildPlanStatusReportResolvesLatestRunsAndBlockedState(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmpDir, "db"), 0755); err != nil {
@@ -931,20 +361,20 @@ func TestBuildPlanStatusReportResolvesLatestRunsAndBlockedState(t *testing.T) {
 
 	ctx := context.Background()
 	planPath := filepath.Join(tmpDir, "plan.yaml")
-	planDoc := &planDocument{
+	planDoc := &planner.PlanDocument{
 		Version:  1,
 		SpecFile: "spec.md",
-		Requirements: []planRequirement{
+		Requirements: []planner.PlanRequirement{
 			{ID: "REQ-1", Text: "Status should be derived from latest runs and dependencies"},
 		},
-		Epics: []planEpic{
+		Epics: []planner.PlanEpic{
 			{
 				ID:          "epic-001",
 				EpicRef:     "first-epic",
 				Title:       "First epic",
 				Description: "First group of tasks",
 				Covers:      []string{"REQ-1"},
-				Tasks: []planTask{
+				Tasks: []planner.PlanTask{
 					newStatusTestTask("task-001", "bootstrap-foundation", "epic-001", nil),
 					newStatusTestTask("task-002", "failing-task", "epic-001", nil),
 					newStatusTestTask("task-003", "review-task", "epic-001", nil),
@@ -956,7 +386,7 @@ func TestBuildPlanStatusReportResolvesLatestRunsAndBlockedState(t *testing.T) {
 				Title:       "Second epic",
 				Description: "Second group of tasks",
 				Covers:      []string{"REQ-1"},
-				Tasks: []planTask{
+				Tasks: []planner.PlanTask{
 					newStatusTestTask("task-004", "running-task", "epic-002", nil),
 					newStatusTestTask("task-005", "ready-task", "epic-002", []string{"task-001"}),
 					newStatusTestTask("task-006", "blocked-task", "epic-002", []string{"task-005"}),
@@ -1026,8 +456,8 @@ func TestBuildPlanStatusReportResolvesLatestRunsAndBlockedState(t *testing.T) {
 	}
 }
 
-func newStatusTestTask(taskID, taskRef, epicID string, dependsOn []string) planTask {
-	return planTask{
+func newStatusTestTask(taskID, taskRef, epicID string, dependsOn []string) planner.PlanTask {
+	return planner.PlanTask{
 		ID:            taskID,
 		TaskRef:       taskRef,
 		SchemaVersion: 2,

@@ -42,7 +42,7 @@ func TestAssemble_FullContextPackage(t *testing.T) {
 	searcher := &stubSearcher{results: []RAGResult{
 		{Function: "Login", File: "internal/auth/service.go", Description: "Handles user login"},
 	}}
-	assembler := NewAssembler(cfg, searcher)
+	assembler := NewAssembler(cfg, searcher, nil)
 
 	wo := &models.WorkOrder{
 		Title:              "Add logout endpoint",
@@ -109,7 +109,7 @@ func TestAssemble_NilSearcher(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Project: config.Project{Path: "/tmp/test", DataDir: "/tmp/test/data"},
 	}
-	assembler := NewAssembler(cfg, nil)
+	assembler := NewAssembler(cfg, nil, nil)
 
 	wo := &models.WorkOrder{
 		Title:        "Test feature",
@@ -135,7 +135,7 @@ func TestAssemble_NoReferenceModuleNote(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Project: config.Project{Path: "/tmp/test", DataDir: "/tmp/test/data"},
 	}
-	assembler := NewAssembler(cfg, nil)
+	assembler := NewAssembler(cfg, nil, nil)
 
 	wo := &models.WorkOrder{
 		Title:        "Test feature",
@@ -190,7 +190,7 @@ func TestAssemble_WithEnrichedSearcher(t *testing.T) {
 			},
 		},
 	}
-	assembler := NewAssembler(cfg, searcher)
+	assembler := NewAssembler(cfg, searcher, nil)
 
 	wo := &models.WorkOrder{
 		Title:        "Add logout endpoint",
@@ -254,7 +254,7 @@ func TestAssemble_FallbackToBasicSearcher(t *testing.T) {
 	searcher := &stubSearcher{results: []RAGResult{
 		{Function: "Login", File: "internal/auth/service.go", Description: "Handles login"},
 	}}
-	assembler := NewAssembler(cfg, searcher)
+	assembler := NewAssembler(cfg, searcher, nil)
 
 	wo := &models.WorkOrder{
 		Title:        "Add logout",
@@ -304,7 +304,7 @@ func TestAssembleScopePrompt_DependencyHopAnnotation(t *testing.T) {
 			},
 		},
 	}
-	assembler := NewAssembler(cfg, searcher)
+	assembler := NewAssembler(cfg, searcher, nil)
 
 	wo := &models.WorkOrder{
 		Title:        "Add logout endpoint",
@@ -348,7 +348,7 @@ func TestGatherPreScope_ReturnsFileTreeAndConventions(t *testing.T) {
 			ModulePath: "github.com/example/project",
 		},
 	}
-	assembler := NewAssembler(cfg, nil)
+	assembler := NewAssembler(cfg, nil, nil)
 
 	bundle, err := assembler.GatherPreScope(context.Background(), &models.WorkOrder{
 		Title: "test", Type: "new_feature", TargetModule: "auth",
@@ -372,7 +372,7 @@ func TestGatherPreScope_EmptyConventions(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Project: config.Project{Path: t.TempDir(), DataDir: t.TempDir()},
 	}
-	assembler := NewAssembler(cfg, nil)
+	assembler := NewAssembler(cfg, nil, nil)
 
 	bundle, err := assembler.GatherPreScope(context.Background(), &models.WorkOrder{
 		Title: "test", Type: "new_feature", TargetModule: "auth",
@@ -395,7 +395,7 @@ func TestGatherForTarget_RAGFiltering(t *testing.T) {
 		{Function: "ListUsers", File: "internal/users/service.go", Description: "lists users"},
 		{Function: "Middleware", File: "internal/auth/middleware.go", Description: "auth middleware"},
 	}}
-	assembler := NewAssembler(cfg, searcher)
+	assembler := NewAssembler(cfg, searcher, nil)
 
 	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "auth"}
 	target := Target{Path: "internal/auth", Rationale: "auth changes"}
@@ -419,7 +419,7 @@ func TestGatherForTarget_NilSearcher(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Project: config.Project{Path: t.TempDir(), DataDir: t.TempDir()},
 	}
-	assembler := NewAssembler(cfg, nil)
+	assembler := NewAssembler(cfg, nil, nil)
 
 	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "auth"}
 	target := Target{Path: "internal/auth", Rationale: "auth changes"}
@@ -465,7 +465,7 @@ func (s *Service) Logout() error {
 			Include: []string{"**/*.go"},
 		},
 	}
-	assembler := NewAssembler(cfg, nil)
+	assembler := NewAssembler(cfg, nil, nil)
 
 	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "auth"}
 	target := Target{Path: "internal/auth", Rationale: "auth changes"}
@@ -533,7 +533,7 @@ func TestAssemble_FileContentsPopulated(t *testing.T) {
 			MaxTotalFileSizeBytes: 512 * 1024,
 		},
 	}
-	assembler := NewAssembler(cfg, nil)
+	assembler := NewAssembler(cfg, nil, nil)
 
 	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "auth"}
 	scopePkg := &models.ContextPackage{
@@ -565,7 +565,7 @@ func TestAssemble_FileContents_MissingFileSkipped(t *testing.T) {
 			MaxTotalFileSizeBytes: 512 * 1024,
 		},
 	}
-	assembler := NewAssembler(cfg, nil)
+	assembler := NewAssembler(cfg, nil, nil)
 
 	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "auth"}
 	scopePkg := &models.ContextPackage{
@@ -596,7 +596,7 @@ func TestAssemble_FileContents_PerFileTruncation(t *testing.T) {
 			MaxTotalFileSizeBytes: 512 * 1024,
 		},
 	}
-	assembler := NewAssembler(cfg, nil)
+	assembler := NewAssembler(cfg, nil, nil)
 
 	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "x"}
 	scopePkg := &models.ContextPackage{
@@ -633,7 +633,7 @@ func TestAssemble_FileContents_TotalBudgetExhausted(t *testing.T) {
 			MaxTotalFileSizeBytes: 80, // exactly enough for one file, exhausted after
 		},
 	}
-	assembler := NewAssembler(cfg, nil)
+	assembler := NewAssembler(cfg, nil, nil)
 
 	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "x"}
 	scopePkg := &models.ContextPackage{
@@ -665,7 +665,7 @@ func TestAssemble_PassThroughFields(t *testing.T) {
 			MaxTotalFileSizeBytes: 512 * 1024,
 		},
 	}
-	assembler := NewAssembler(cfg, nil)
+	assembler := NewAssembler(cfg, nil, nil)
 
 	wo := &models.WorkOrder{Title: "test", Type: "new_feature", TargetModule: "auth"}
 	scopePkg := &models.ContextPackage{
@@ -696,5 +696,91 @@ func TestAssemble_PassThroughFields(t *testing.T) {
 	}
 	if len(full.Scope.Dependencies) != 1 || full.Scope.Dependencies[0] != "github.com/go-chi/chi/v5" {
 		t.Errorf("expected Dependencies with chi, got %v", full.Scope.Dependencies)
+	}
+}
+
+// mockGraphQuerier is a test double for GraphQuerier.
+type mockGraphQuerier struct{}
+
+func (m *mockGraphQuerier) BlastRadius(targetSymbol string, direction int, maxDepth, budget int, minConfidence float64, includeTests bool) (BlastRadiusFormatted, error) {
+	return BlastRadiusFormatted{
+		TargetName:  "CreateSession",
+		TargetKind:  "method",
+		TargetFile:  "internal/auth/service.go",
+		TargetLines: [2]int{45, 82},
+		TargetSig:   "func (s *Service) CreateSession(ctx context.Context)",
+		Upstream: []NodeInfo{
+			{Name: "HandleLogin", Kind: "function", FilePath: "internal/api/auth.go", LineStart: 45, Depth: 1, EdgeType: "CALLS", Confidence: 1.0},
+		},
+		Downstream: []NodeInfo{
+			{Name: "FindUserByEmail", Kind: "method", FilePath: "internal/auth/repo.go", LineStart: 31, Depth: 1, EdgeType: "CALLS", Confidence: 1.0},
+		},
+	}, nil
+}
+
+func (m *mockGraphQuerier) GetSymbolsForFile(filePath string) ([]SymbolInfo, error) {
+	return []SymbolInfo{
+		{Name: "CreateSession", Kind: "method", FilePath: filePath, LineStart: 45},
+	}, nil
+}
+
+func TestAssembleScopePrompt_WithStructuralContext(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Name: "test", Path: t.TempDir()},
+		Graph: config.GraphConfig{
+			Enabled: true,
+			BlastRadius: config.BlastRadiusConfig{
+				MaxDepth: 3, Budget: 30, MinConfidence: 0.5,
+			},
+		},
+	}
+
+	assembler := NewAssembler(cfg, nil, &mockGraphQuerier{})
+
+	wo := &models.WorkOrder{
+		Title:      "Test work order",
+		Type:       "new_feature",
+		KnownFiles: []string{"internal/auth/service.go"},
+	}
+
+	prompt, err := assembler.AssembleScopePrompt(context.Background(), wo)
+	if err != nil {
+		t.Fatalf("AssembleScopePrompt: %v", err)
+	}
+
+	if !strings.Contains(prompt, "STRUCTURAL CONTEXT") {
+		t.Error("expected structural context section")
+	}
+	if !strings.Contains(prompt, "CreateSession") {
+		t.Error("expected CreateSession in structural context")
+	}
+	if !strings.Contains(prompt, "HandleLogin") {
+		t.Error("expected upstream caller HandleLogin")
+	}
+	if !strings.Contains(prompt, "FindUserByEmail") {
+		t.Error("expected downstream callee FindUserByEmail")
+	}
+}
+
+func TestAssembleScopePrompt_WithoutGraph(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		Project: config.Project{Name: "test", Path: t.TempDir()},
+	}
+
+	// nil graph querier — should work without structural context
+	assembler := NewAssembler(cfg, nil, nil)
+
+	wo := &models.WorkOrder{
+		Title: "Test work order",
+		Type:  "new_feature",
+	}
+
+	prompt, err := assembler.AssembleScopePrompt(context.Background(), wo)
+	if err != nil {
+		t.Fatalf("AssembleScopePrompt: %v", err)
+	}
+
+	if strings.Contains(prompt, "STRUCTURAL CONTEXT") {
+		t.Error("should not contain structural context when graph is nil")
 	}
 }

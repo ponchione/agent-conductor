@@ -22,6 +22,7 @@ export default function App() {
             <Route path=":workflowId/:tab" element={<WorkflowDetail />} />
           </Route>
           <Route path="analytics" element={<AnalyticsSpace />} />
+          <Route path="*" element={<Navigate to="/pipeline" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>
