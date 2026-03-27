@@ -119,36 +119,8 @@ func TestAtomicClaimTask_ConcurrentClaimSingleWinner(t *testing.T) {
 	workflowID := "wf-1"
 	taskID := "task-1"
 
-	if err := db.CreateWorkflow(ctx, CreateWorkflowParams{
-		ID:                     workflowID,
-		OriginalIntent:         "test",
-		OriginalFile:           "/tmp/work-order.yaml",
-		CurrentState:           "pending",
-		TargetRepo:             "repo",
-		GitBranch:              "feature/test",
-		ContextPackagePath:     sql.NullString{},
-		VerificationReportPath: sql.NullString{},
-		MaxDepth:               5,
-		MaxFilesChanged:        50,
-		MaxDurationMins:        60,
-	}); err != nil {
-		t.Fatalf("CreateWorkflow() error: %v", err)
-	}
-
-	if err := db.CreateTask(ctx, CreateTaskParams{
-		ID:            taskID,
-		WorkflowID:    workflowID,
-		SequenceNum:   1,
-		TaskType:      "execution",
-		AgentType:     "claude-code",
-		TargetRepo:    "repo",
-		Phase:         "scope",
-		InputArtifact: "/tmp/work-order.yaml",
-		State:         "pending",
-		MaxAttempts:   2,
-	}); err != nil {
-		t.Fatalf("CreateTask() error: %v", err)
-	}
+	createWorkflowForTaskTests(t, db, workflowID, "pending")
+	createTaskForWorkflowTests(t, db, taskID, workflowID)
 
 	var wg sync.WaitGroup
 	results := make(chan *Task, 2)
@@ -187,5 +159,95 @@ func TestAtomicClaimTask_ConcurrentClaimSingleWinner(t *testing.T) {
 	}
 	if claimed[0].ID != taskID {
 		t.Fatalf("claimed task ID = %q, want %q", claimed[0].ID, taskID)
+	}
+}
+
+func TestAtomicClaimTask_SkipsBlockedWorkflowTasks(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "conductor.db")
+	db, err := NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB() error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	ctx := context.Background()
+	createWorkflowForTaskTests(t, db, "wf-blocked", "human_review")
+	createTaskForWorkflowTests(t, db, "task-blocked", "wf-blocked")
+
+	task, err := db.AtomicClaimTask(ctx, "worker-1")
+	if err != nil {
+		t.Fatalf("AtomicClaimTask() error: %v", err)
+	}
+	if task != nil {
+		t.Fatalf("AtomicClaimTask() = %#v, want nil", task)
+	}
+}
+
+func TestAtomicClaimTask_ClaimsRunnableTaskWhenBlockedTaskExists(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "conductor.db")
+	db, err := NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB() error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	ctx := context.Background()
+	createWorkflowForTaskTests(t, db, "wf-blocked", "human_review")
+	createTaskForWorkflowTests(t, db, "task-blocked", "wf-blocked")
+	createWorkflowForTaskTests(t, db, "wf-runnable", "pending")
+	createTaskForWorkflowTests(t, db, "task-runnable", "wf-runnable")
+
+	task, err := db.AtomicClaimTask(ctx, "worker-1")
+	if err != nil {
+		t.Fatalf("AtomicClaimTask() error: %v", err)
+	}
+	if task == nil {
+		t.Fatal("expected claimed task, got nil")
+	}
+	if task.ID != "task-runnable" {
+		t.Fatalf("claimed task ID = %q, want %q", task.ID, "task-runnable")
+	}
+}
+
+func createWorkflowForTaskTests(t *testing.T, db *DB, workflowID, state string) {
+	t.Helper()
+
+	if err := db.CreateWorkflow(context.Background(), CreateWorkflowParams{
+		ID:                     workflowID,
+		OriginalIntent:         "test",
+		OriginalFile:           "/tmp/work-order.yaml",
+		CurrentState:           state,
+		TargetRepo:             "repo",
+		GitBranch:              "feature/" + workflowID,
+		ContextPackagePath:     sql.NullString{},
+		VerificationReportPath: sql.NullString{},
+		MaxDepth:               5,
+		MaxFilesChanged:        50,
+		MaxDurationMins:        60,
+	}); err != nil {
+		t.Fatalf("CreateWorkflow(%s) error: %v", workflowID, err)
+	}
+}
+
+func createTaskForWorkflowTests(t *testing.T, db *DB, taskID, workflowID string) {
+	t.Helper()
+
+	if err := db.CreateTask(context.Background(), CreateTaskParams{
+		ID:            taskID,
+		WorkflowID:    workflowID,
+		SequenceNum:   1,
+		TaskType:      "execution",
+		AgentType:     "claude-code",
+		TargetRepo:    "repo",
+		Phase:         "scope",
+		InputArtifact: "/tmp/work-order.yaml",
+		State:         "pending",
+		MaxAttempts:   2,
+	}); err != nil {
+		t.Fatalf("CreateTask(%s) error: %v", taskID, err)
 	}
 }

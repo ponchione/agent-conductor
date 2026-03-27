@@ -38,9 +38,11 @@ SET state = 'failed',
 WHERE id = ?;
 
 -- name: GetPendingTask :one
-SELECT id FROM tasks
-WHERE state = 'pending'
-ORDER BY created_at ASC LIMIT 1;
+SELECT t.id FROM tasks t
+JOIN workflows w ON w.id = t.workflow_id
+WHERE t.state = 'pending'
+  AND w.current_state NOT IN ('paused', 'human_review', 'awaiting_review', 'review_needed', 'completed', 'failed')
+ORDER BY t.created_at ASC LIMIT 1;
 
 -- name: GetTask :one
 SELECT id, workflow_id, sequence_num, task_type, agent_type, target_repo, phase, input_artifact, output_artifact, state, claimed_by, claimed_at, attempts, max_attempts, exit_code, stdout_log, stderr_log, files_changed, created_at, started_at, completed_at, error_message FROM tasks WHERE id = ? LIMIT 1;

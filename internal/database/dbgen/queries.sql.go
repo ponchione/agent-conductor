@@ -226,9 +226,11 @@ func (q *Queries) FailTask(ctx context.Context, arg FailTaskParams) error {
 }
 
 const getPendingTask = `-- name: GetPendingTask :one
-SELECT id FROM tasks
-WHERE state = 'pending'
-ORDER BY created_at ASC LIMIT 1
+SELECT t.id FROM tasks t
+JOIN workflows w ON w.id = t.workflow_id
+WHERE t.state = 'pending'
+  AND w.current_state NOT IN ('paused', 'human_review', 'awaiting_review', 'review_needed', 'completed', 'failed')
+ORDER BY t.created_at ASC LIMIT 1
 `
 
 func (q *Queries) GetPendingTask(ctx context.Context) (string, error) {

@@ -23,8 +23,7 @@ const (
 )
 
 var (
-	ErrNoTasks        = goerrors.New("no tasks available")
-	ErrWorkflowPaused = goerrors.New("workflow is paused")
+	ErrNoTasks = goerrors.New("no tasks available")
 )
 
 type Queue struct {
@@ -67,13 +66,13 @@ func (q *Queue) ClaimNextTask(workerID string) (*database.Task, error) {
 	if wf.CurrentState == StatePaused || wf.CurrentState == StateReviewNeeded ||
 		wf.CurrentState == StateCompleted || wf.CurrentState == StateFailed {
 		q.ReleaseTask(task.ID)
-		return nil, ErrWorkflowPaused
+		return nil, ErrNoTasks
 	}
 
 	if q.checkBudgetExceeded(&wf) {
 		q.triggerGate(wf.ID, "budget_exceeded", "Workflow limits exceeded")
 		q.ReleaseTask(task.ID)
-		return nil, ErrWorkflowPaused
+		return nil, ErrNoTasks
 	}
 
 	return task, nil
