@@ -83,7 +83,9 @@ func TestRemoveExecutingReturnsError(t *testing.T) {
 			<-block
 			return "wf-1", nil
 		},
-		nil,
+		func(workflowID string) (string, error) {
+			return "completed", nil
+		},
 	)
 
 	item := rq.Add(QueueItem{WorkOrderFile: "wo1.yaml", Title: "Blocked"})
@@ -161,17 +163,36 @@ func TestStartRequiresReady(t *testing.T) {
 	}
 }
 
+func TestStartRequiresConfiguredCallbacks(t *testing.T) {
+	t.Parallel()
+
+	rq := NewRunQueue()
+	rq.Add(QueueItem{WorkOrderFile: "wo1.yaml", Title: "First"})
+
+	err := rq.Start()
+	if err != ErrQueueNotConfigured {
+		t.Fatalf("Start() error = %v, want ErrQueueNotConfigured", err)
+	}
+}
+
 func TestStartTransitionsToRunning(t *testing.T) {
 	t.Parallel()
 
 	rq := NewRunQueue()
+	rq.SetCallbacks(
+		func(item QueueItem) (string, error) {
+			return "wf-1", nil
+		},
+		func(workflowID string) (string, error) {
+			return "completed", nil
+		},
+	)
 	rq.Add(QueueItem{WorkOrderFile: "wo1.yaml", Title: "First"})
 
 	if err := rq.Start(); err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}
 
-	// No executeFn → item treated as no-op, completes → queue completes.
 	snap := waitForState(t, rq, QueueStateCompleted)
 	if snap.State != QueueStateCompleted {
 		t.Fatalf("state = %q, want %q", snap.State, QueueStateCompleted)

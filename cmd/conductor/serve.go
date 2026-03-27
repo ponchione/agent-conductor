@@ -86,6 +86,8 @@ var serveCmd = &cobra.Command{
 		workOrderDir := ""
 		if cfg != nil {
 			workOrderDir = filepath.Join(cfg.Project.DataDir, "work-orders")
+			executeFn, monitorFn := buildServeQueueCallbacks(db, cfg, gitMgr, workOrderDir)
+			rq.SetCallbacks(executeFn, monitorFn)
 		}
 
 		handler := api.NewServer(db, gitMgr, baseBranch, rq, workOrderDir, cfg)

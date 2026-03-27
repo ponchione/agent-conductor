@@ -125,6 +125,10 @@ func (s *Server) handleStartQueue(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "queue is not in ready state")
 			return
 		}
+		if errors.Is(err, ErrQueueNotConfigured) {
+			writeError(w, http.StatusServiceUnavailable, "queue execution is not configured")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

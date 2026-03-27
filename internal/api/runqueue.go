@@ -63,10 +63,11 @@ type QueueEvent struct {
 }
 
 var (
-	ErrQueueInvalidState = errors.New("invalid queue state for operation")
-	ErrItemNotFound      = errors.New("queue item not found")
-	ErrItemExecuting     = errors.New("cannot remove executing item")
-	ErrInvalidItemIDs    = errors.New("invalid item IDs")
+	ErrQueueInvalidState  = errors.New("invalid queue state for operation")
+	ErrQueueNotConfigured = errors.New("queue execution is not configured")
+	ErrItemNotFound       = errors.New("queue item not found")
+	ErrItemExecuting      = errors.New("cannot remove executing item")
+	ErrInvalidItemIDs     = errors.New("invalid item IDs")
 )
 
 // RunQueue is an in-memory queue that manages sequential execution of work orders.
@@ -205,6 +206,10 @@ func (rq *RunQueue) Start() error {
 	if rq.state != QueueStateReady {
 		rq.mu.Unlock()
 		return ErrQueueInvalidState
+	}
+	if rq.executeFn == nil || rq.monitorFn == nil {
+		rq.mu.Unlock()
+		return ErrQueueNotConfigured
 	}
 	rq.state = QueueStateRunning
 	rq.pauseReason = ""

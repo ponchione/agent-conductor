@@ -989,6 +989,23 @@ func TestStartQueueEndpointInvalidState(t *testing.T) {
 	}
 }
 
+func TestStartQueueEndpointRequiresConfiguredCallbacks(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	rq := NewRunQueue()
+	rq.Add(QueueItem{WorkOrderFile: "wo1.yaml", Title: "First"})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/queue/start", nil)
+
+	NewServer(db, nil, "main", rq, "", nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+}
+
 func TestListWorkOrdersEndpointEmpty(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)
